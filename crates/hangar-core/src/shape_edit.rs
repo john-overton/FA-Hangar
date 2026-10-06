@@ -202,6 +202,11 @@ pub fn texture_panel(
         .faces
         .get(face_index)
         .ok_or("Select a model face")?;
+    if face.sub & 4 != 0 && !face.texture.is_empty() && !face.uv.is_empty() {
+        return Err(invalid(
+            "Panel already has a named texture; load or copy its PIC before painting",
+        ));
+    }
     if face.sub & !0x67 != 0 {
         return Err(invalid(
             "This polygon shading subtype is not supported for automatic texturing",
@@ -369,6 +374,9 @@ mod tests {
         assert!(result.writable);
         assert_eq!(result.faces[0].texture, "PANEL.PIC");
         assert_eq!(result.faces[0].uv.len(), 3);
+        assert!(texture_panel(&panel.shape, 0, "OTHER.PIC", 64, &palette)
+            .unwrap_err()
+            .contains("already has a named texture"));
         assert_eq!(
             model.vertices.iter().map(|v| v.point).collect::<Vec<_>>(),
             result.vertices.iter().map(|v| v.point).collect::<Vec<_>>()

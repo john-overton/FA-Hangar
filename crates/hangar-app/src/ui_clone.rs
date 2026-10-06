@@ -63,14 +63,14 @@ impl App {
         self.prompt = Some(Prompt {
             kind: PromptKind::CloneId,
             title: format!(
-                "New aircraft from {} / step 1: new ID (1..6 letters/digits)",
+                "Export object from {} / step 1: new ID (1..6 letters/digits)",
                 self.name()
             ),
             value: format!("{prefix}V1"),
             axis: 0,
         });
         self.status =
-            "The selected PT and its resource graph will be copied into a separate LIB".into();
+            "The selected object and its resource graph will be copied into a separate LIB".into();
     }
     pub(super) fn add_clone_source(&mut self, path: &str) -> Result<()> {
         if index(path)?.is_none() {
@@ -81,7 +81,7 @@ impl App {
         self.clone_sources.push(path.into());
         self.prompt = Some(Prompt {
             kind: PromptKind::CloneTitle,
-            title: "New aircraft / step 2: display name".into(),
+            title: "Export object / step 2: display name".into(),
             value: self.clone_title.clone(),
             axis: 0,
         });
@@ -229,8 +229,10 @@ impl App {
             y + 22,
             w - 28,
             &format!(
-                "New aircraft / review: {} -> {}.PT",
-                package.donor, package.id
+                "Export object / review: {} -> {}.{}",
+                package.donor,
+                package.id,
+                extension(&package.donor)
             ),
             c::INK,
         );
@@ -378,7 +380,11 @@ impl App {
         title: &str,
         output: &str,
     ) -> Result<()> {
-        let at = self.doc.archive.find(donor).ok_or("Donor PT not found")?;
+        let at = self
+            .doc
+            .archive
+            .find(donor)
+            .ok_or("Source object not found")?;
         self.select_entry(at);
         let before = self.doc.archive.bytes()?;
         self.file_prompt(FileAction::Variant);
@@ -414,10 +420,10 @@ impl App {
         if self
             .doc
             .archive
-            .find(&format!("{}.PT", id.to_ascii_uppercase()))
+            .find(&format!("{}.{}", id.to_ascii_uppercase(), extension(donor)))
             .is_none()
         {
-            return Err("Exported aircraft identity missing".into());
+            return Err("Exported object identity missing".into());
         }
         Ok(())
     }

@@ -16,6 +16,9 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
+Version 0.7 adds an editable envelope table, automatic textures for supported
+flat-color panels, visible base-color controls, export of weapons and other
+objects with their resources, and initial SH vertex edit mode.
 Version 0.6 adds viewport hardpoint tools, palette/UV editing, family texture
 cloning, and previewed PNG/text/national/squadron decals baked into PIC textures.
 Version 0.5 adds structured characteristic grafts, source-aware package reports,
@@ -60,10 +63,11 @@ read-only, history still works for the current session.
 - Edit PT/JT/OT/SEE/ECM textual BRF operands. Recognized schemas get named
   fields; other blocks retain their indexed labels. Comments, whitespace,
   line endings, labels, scaling markers and untouched values survive edits.
-- Duplicate the selected PT into a separate LIB with a new ID/display name.
-  Resolve its resource graph recursively, copy and rename the damage/shadow
-  family, textures, cockpit/HUD, equipment, weapons, sounds and private palette,
-  then rewrite references. Review every old-to-new filename before exporting.
+- Export the selected object into a separate LIB with a new ID/display name.
+  Aircraft, weapons, equipment, shapes and individual resources use the same
+  reviewed dependency graph and filename map. Aircraft retain the reviewed
+  damage/shadow family. Unknown binary objects copy unchanged and report that
+  their dependencies cannot be discovered.
 - Keep loose-SH authoring available separately under Lib > From loose SH file.
 - Filter recognized definition values by envelope, propulsion, handling,
   weights, damage, hardpoints, systems, seeker, motor or warhead. Linked station
@@ -76,7 +80,9 @@ read-only, history still works for the current session.
 - Keep single-field donor copying under Tools > Copy one donor field.
 - View a bounded static pose from SH data, orbit/pan/zoom, use front/side/top
   views, and export geometry-only OBJ files.
-- Move, rotate and scale the supported straight-line SH subset. Shapes with
+- Move, rotate and scale the supported static SH subset. Tab opens vertex edit
+  mode; click a vertex, drag in an orthographic view, or use G for numeric offsets.
+  A selects all vertices. Shapes with
   unhandled spatial records, bounds, visibility logic or animation remain
   read-only. The synthetic demo exercises transforms without retail data.
 - Entry-level undo/redo, dirty state and explicit discard on close. Retail LIB
@@ -87,13 +93,19 @@ to knots, pounds or Mach. A `^` marker is retained, not silently reinterpreted.
 Changing a field is not a guarantee of how the original game consumes it.
 Opaque binary definitions can be exported or replaced but are not guessed.
 
+Flight opens recognized envelopes as a table. Use the G-row arrows to choose
+the envelope, then edit its point count, stall lift, maximum speed, and the
+Speed/Altitude cells. Unused point slots are dimmed; changed cells are amber.
+Wheel scrolls the table. The All group and Raw fields dock retain the underlying
+BRF view and saved-value comparisons.
+
 ## Protected LIBs and saving
 
 Retail names are reserved case-insensitively in **every folder**, in both the
-GUI and CLI. You can open, inspect, extract, clone aircraft and edit in memory;
+GUI and CLI. You can open, inspect, extract, export objects and edit in memory;
 save those changes to a different LIB name. Ctrl+S suggests `HANGAR.LIB` for a
-retail source and the current filename for a custom LIB. The aircraft wizard
-continues to suggest its new aircraft ID. The browser lets you choose another
+retail source and the current filename for a custom LIB. The object export wizard
+continues to suggest its new object ID. The browser lets you choose another
 name or destination on every save.
 
 The exact list comes from the supplied installer and discs:
@@ -167,7 +179,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently
-about 530–625 KiB. Copy it to a writable location and run it. No installer or runtime
+under 750 KiB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -180,23 +192,22 @@ The legacy executable's smoke test runs on the modern Windows runner, not on
 Windows 98. Source and notices are included in the repository; packages carry
 the license and notices alongside the executable.
 
-## Duplicate an aircraft into its own LIB
+## Export an object and its resources
 
-1. Open the source LIB and select an aircraft PT, such as `A10.PT`.
-2. Click **New aircraft**. Enter a new ID, for example `A10V1`, then its display
-   name. This workflow uses the selected aircraft; it does **not** ask for a
-   loose SH path.
+1. Open the source LIB and select an object, such as `A10.PT` or `AIM9M.JT`.
+2. Click **Export object**. Enter a new ID, for example `A10V1` or `MYAIM9`,
+   then its display name. The selected entry supplies the source object.
 3. Review the filename map. Hangar copies the resolved resource graph and
    assigns private names that do not collide with any scanned source entry.
    Use Back to change names, or Add source LIB when dependencies are elsewhere.
 4. Click **Export new LIB**, choose a destination, and save the suggested
-   `A10V1.LIB` or another new filename. The exported aircraft opens for editing.
+   `A10V1.LIB` or another new filename. The exported object opens for editing.
 5. Reopen the LIB, inspect its model/fields, and test it in Fighters Anthology.
 
 The source document and original files are preserved. Before export, the review
 is a draft; cancelling it keeps the source open. Cancelling the final output
-picker leaves the new unsaved LIB open for later packaging. Save source edits
-before beginning the workflow.
+picker leaves the new unsaved LIB open for later packaging. Current in-memory
+source edits are included, while the original document retains its own history.
 
 The current document has first priority, followed by explicit source choices
 and unambiguous open documents (including their in-memory edits). Other LIBs
@@ -205,7 +216,7 @@ payloads are read. Conflicting external copies require an explicit source
 choice. New entries are written in name order, and the donor stays open.
 
 The clone includes explicit BRF resource references, catalog-resolved filename
-literals in module data/code sections, the shadow-derived A/B/C/D/S family,
+literals in module data/code sections, an aircraft's shadow-derived A/B/C/D/S family,
 known cockpit picture families, available store-icon companions and an editor
 palette copy. It inspects whole module sections, so it is not limited to the
 currently displayed shape pose. It preserves imported game symbols, compiled
@@ -216,16 +227,20 @@ This is a private **resource** package, not proof of complete original-game
 runtime behavior. Game procedures and dynamically generated names remain
 outside the file graph. Unresolved HUD name candidates are shown in the review
 and preserved; required missing resource filenames block export. The tool
-supports one aircraft and the reviewed `_S.SH` damage-family convention.
+supports the reviewed `_S.SH` aircraft damage-family convention. Other recognized
+objects follow their stored references and known companion-file conventions.
+Opaque binary resources can be copied, but their unknown references are not
+renamed or invented. Display names change only in recognized identity records.
 
 For an externally authored shape, use **Lib > From loose SH file**. That older
 workflow requires a real SH file and retains shared stock dependencies. It is
-separate from **New aircraft**, which clones the selected aircraft and assets.
+separate from **Export object**, which clones the selected object and assets.
 
 The CLI equivalent accepts additional source LIBs explicitly:
 
 ```sh
-cargo run --locked -- clone-aircraft FA_2.LIB A10.PT A10V1 "My A-10" A10V1.LIB FA_1.LIB
+cargo run --locked -- export-object FA_2.LIB A10.PT A10V1 "My A-10" A10V1.LIB FA_1.LIB
+cargo run --locked -- export-object FA_2.LIB AIM9M.JT MYAIM9 "My missile" MYAIM9.LIB FA_1.LIB
 ```
 
 See [the Windows test checklist](docs/WINDOWS-TEST.md).
@@ -245,7 +260,7 @@ See [the Windows test checklist](docs/WINDOWS-TEST.md).
 4. **Entry > Rename resource** previews changes to decoded stored references in
    the active LIB. Compiled filename capacity is checked before applying. Known
    implicit-family bindings and users in other open LIBs can block a rename;
-   use **New aircraft** for private aircraft families. **Ctrl+D** duplicates one
+   use **Export object** for private aircraft families. **Ctrl+D** duplicates one
    resource under a new name, retaining its shared dependencies.
 5. Pin a definition with **Entry > Use as graft donor**, switch LIBs and select
    a target. Graft's selectable groups work across library boundaries. Dragging
@@ -264,9 +279,27 @@ higher. No automatic writes occur when switching libraries or preparing copies.
 
 ## Paint a livery
 
+**Base color** is in the Model inspector and Paint > Materials. Its palette
+picker replaces the most common flat color in the decoded pose, including all
+faces using that index. **Panel color** changes only the selected untextured
+face. Both are one undo step. Textured surfaces get their color from their PIC;
+the UI points to Materials when no flat-color faces are present.
+
+For a supported panel without a texture, enable **Paint panel / auto-create
+texture** and brush on the model. Hangar stages a private 64x64 PIC filled with
+the panel's original color and maps the polygon onto it. Release commits the
+sheet, SH mapping and first stroke together; Esc cancels, and Ctrl+Z removes
+the entire change. The base palette must be loaded. **Create paintable panel
+texture** also performs this step explicitly, before adding a decal.
+
+Automatic mapping supports ordinary opaque polygons with a known material
+state. Special shading, unresolved state, insufficient CODE space or jump
+reach produce a diagnostic without changing the document. Other decoded faces
+retain their material and UVs. This is planar panel mapping, not full UV unwrap.
+
 1. Select a PT/SH and choose **Textured** (or View > Textured / wireframe).
 2. Click a visible panel. The inspector identifies its face and named PIC.
-3. **New aircraft** now creates private copies of the discovered textures,
+3. **Export object** now creates private copies of the discovered textures,
    including the damage family. Paint those copies for a separate livery.
    **Clone texture for this shape** remains available for individual changes;
    that narrower command only retargets references in the decoded pose.
@@ -320,7 +353,7 @@ sections, including hidden texture names, rather than only the displayed pose.
 Palette edits affect all palette users; shared SH records and UVs remain shared.
 The cloned aircraft-ID PAL is an editor preview palette, not an override of FA's
 global PALETTE.PAL. Materials identifies that case explicitly. Use the intended
-game palette when judging a livery, and New aircraft when you need private assets.
+game palette when judging a livery, and Export object when you need private assets.
 
 To add a marking:
 
@@ -370,6 +403,7 @@ those effects. PNG parsing follows the [PNG format specification](https://www.w3
 | Orbit / pan | Middle-drag / Shift+middle-drag |
 | Zoom / frame | Wheel over viewport / Home or period |
 | Front / side / top / projection | 1 / 3 / 7 / 5, including numpad |
+| Vertex edit mode | Tab; click vertex, A selects all, G numeric offsets, orthographic drag |
 | Transform supported static shape | G / R / S, X/Y/Z, numeric value, Enter |
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
@@ -383,7 +417,7 @@ in memory and displays its cause. The app writes only when explicitly asked.
 
 ## Scope still ahead
 
-A complete animated SH writer, geometric vertex/face editing, topology changes,
+A complete animated SH writer, general aircraft vertex/face editing, topology changes,
 topology-aware UV unwrapping, animation playback, complete runtime dependency
 closure, geometric grafting, verified gameplay-unit conversions,
 resizable editor splits and bitmap fonts.

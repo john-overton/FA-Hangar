@@ -12,7 +12,7 @@ pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -44,6 +44,17 @@ pub fn run() -> Result<()> {
             app.smoke_save_policy();
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
+        Some("--panel-check")=>{
+            let bytes=platform::read(argument(&args,1)?)?;let model=Model::parse(&bytes)?;
+            let summary=model.faces.iter().filter(|f|f.sub&4==0).count();let known=model.faces.iter().filter(|f|f.sub&4==0&&!f.material_selector.is_empty()).count();
+            println!("{} vertices / {} faces / {summary} flat faces / {known} known material states / {} decoded records",model.vertices.len(),model.faces.len(),model.records.len());
+            let mut types=std::collections::BTreeMap::new();for f in &model.faces{*types.entry(f.sub).or_insert(0)+=1;}println!("Face subtypes: {types:?}");
+            let face:usize=if argument(&args,2)?=="auto"{model.faces.iter().position(|f|f.sub&4==0&&f.sub&!0x67==0&&(!f.material_selector.is_empty()||model.writable)).ok_or("No supported panel")?}else{argument(&args,2)?.parse().map_err(|_|"Face index")?};
+            let palette=core::array::from_fn(|i|[i as u8;3]);
+            let result=hangar_core::shape_edit::texture_panel(&bytes,face,argument(&args,3)?,64,&palette)?;
+            platform::write_new(argument(&args,4)?,&result.shape)?;platform::write_new(argument(&args,5)?,&result.picture)?;
+            println!("Generated panel {} / geometry retained / texture mapped",result.face);
+        },
         Some("--decal-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("PIC not found")?;app.select_entry(at);println!("{}",app.check_decal_import(argument(&args,3)?,argument(&args,4)?)?);},
         Some("--paint-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Shape not found")?;app.select_entry(at);println!("{}",app.check_real_paint()?);},
         Some(cmd @ ("export-png"|"export-wav"))=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Entry not found")?;app.select_entry(at);app.file_prompt(if cmd=="export-png"{FileAction::Png}else{FileAction::Wav});app.key(Key::Char('a'),true,false);for c in argument(&args,3)?.chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);if app.status.starts_with("Error:"){return Err(app.status);}println!("{}",app.status);},
@@ -62,8 +73,8 @@ pub fn run() -> Result<()> {
             fn escape(s:&str)->String{s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;")}
             for d in app.draw().commands{match d{Draw::Bitmap(x,y,w,h,pixels)=>{for yy in 0..h {let mut xx=0;while xx<w {let color=pixels[yy*w+xx];let mut end=xx+1;while end<w&&pixels[yy*w+end]==color{end+=1;}s.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"1\" fill=\"#{color:06x}\"/>",x+xx as i32,y+yy as i32,end-xx));xx=end;}}},Draw::Rect(x,y,w,h,c)=>s.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>")),Draw::Line(x,y,a,b,c)=>s.push_str(&format!("<path d=\"M{x} {y} L{a} {b}\" stroke=\"#{c:06x}\"/>")),Draw::Label(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t))),Draw::Text(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"monospace\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t)))}}s.push_str("</svg>");platform::write_new(argument(&args,1)?,s.as_bytes())?;
         },
-        Some("--clone-check")=>{app.open(argument(&args,1)?)?;app.clone_export_check(argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,argument(&args,5)?)?;println!("PASS selected-PT wizard, automatic sources, review, named LIB export and reopen");},
-        Some("clone-aircraft") => {
+        Some("--clone-check")=>{app.open(argument(&args,1)?)?;app.clone_export_check(argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,argument(&args,5)?)?;println!("PASS selected-object wizard, automatic sources, review, named LIB export and reopen");},
+        Some("clone-aircraft"|"export-object") => {
             let mut sources=vec![Archive::parse(platform::read(argument(&args,1)?)?)?];
             for path in args.iter().skip(6){sources.push(Archive::parse(platform::read(path)?)?);}
             let refs:Vec<_>=sources.iter().collect();let package=hangar_core::clone_aircraft::build(&refs,argument(&args,2)?,argument(&args,3)?,argument(&args,4)?)?;

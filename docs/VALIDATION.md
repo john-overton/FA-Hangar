@@ -72,8 +72,8 @@ file offset, checks its bytes, and removes that newly created fixture.
 
 Remaining acceptance: the [manual Windows checklist](WINDOWS-TEST.md), actual
 Windows 98/ME operation, and loading/flying the new variant in original FA.
-General SH part grafting, generic object creation and complete animation/LOD
-texture dependency closure are not implemented.
+General SH part grafting and complete animation/LOD texture dependency closure
+remain pending. The 0.7 pass below adds generic object export.
 
 
 The 0.4.1 save-policy pass adds five portable tests: all 17 reserved filenames
@@ -157,3 +157,40 @@ Original-game behavior and Windows 98/ME runtime operation remain manual
 acceptance checks. National presets are compact editor artwork; exact variants
 and authentic squadron logos are supplied as PNG. The private aircraft-ID PAL
 is an editor preview palette and does not override FA's game-global palette.
+
+## Version 0.7 envelope, object export and SH tools
+
+54 core tests pass. New coverage includes weapon identities and implicit icon
+pairs, unchanged numeric operands, leaf/opaque exports, generated panel UVs and
+palette pixels, byte-identical SH no-op writes, follow-up vertex movement,
+coordinate limits, exhausted virtual space/jump reach and face-relocation
+refusals. A panel with an existing named texture is never silently replaced
+when its PIC is unavailable.
+
+Shared UI smoke edits an envelope table cell and undoes it, changes base color,
+stages/cancels/commits an automatically textured stroke, reopens the resulting
+archive, and restores the original SH while removing the generated PIC in one
+undo step. It tests numeric vertex movement, drag preview/commit/cancellation,
+mode-switch painting guards and control bounds at 800x600 and 1280x800. Native
+Linux envelope, palette, mesh and generated-texture layouts were inspected.
+
+Local read-only retail checks converted one supported flat panel in F18.SH
+(357 decoded vertices / 287 faces) and A10.SH (373 / 299). The independent
+Fighters tore-formats Shape::with_export_state reader confirmed that every
+decoded face position and normal stayed equal and exactly one face's texture
+and UVs changed. A separate section comparison confirmed unchanged RVAs and
+byte-identical non-CODE payloads. These checks cover the selected static pose,
+not every original-game branch, camera or damage state.
+
+AIM9M.JT exported into a seven-resource private weapon package with its shape,
+icon, texture, two sounds and editor palette. Every non-string BRF operand
+matched the source. The generic GUI wizard also completed ID/name entry,
+automatic source resolution, review, export and reopen for this weapon.
+Temporary game-derived outputs stayed outside the repository.
+
+Formatting, strict Linux/Windows Clippy, Linux smoke, both Windows cross-builds
+and PE audits pass with 59 reviewed imports and no new runtime dependencies.
+Core milestone 9c7280a passed both Windows CI jobs; the final UI is checked by
+its pushed workflow. Actual Windows 98/ME operation and original-game loading
+of generated panel textures remain manual acceptance checks. Full animated SH
+geometry and topology editing are not enabled by this milestone.

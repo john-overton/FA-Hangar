@@ -8,7 +8,7 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
 
 - `hangar-core/archive.rs`: bounded EALIB directory, shared source storage,
   lossless unedited archive serialization, raw DCL decoding and stored writes.
-- `clone_aircraft.rs`: selected-PT dependency graph, private names and reference
+- `clone_aircraft.rs`: selected-object dependency graph, private names and reference
   rewriting. `ui_clone.rs` indexes sibling/additional source LIBs, reads only
   requested payloads, and presents the export review.
 - `dependencies.rs`: shared inert BRF/module reference scanner and incremental
@@ -136,10 +136,10 @@ and does not add a new save gate. Existing archive/destination checks still run
 on every save.
 
 The loose-SH workflow in authoring.rs remains separate. It retains its original
-shared-dependency contract and is not the default New aircraft action.
+shared-dependency contract and is not the default Export object action.
 
-SH writing only accepts the understood straight-line subset of vertex buffers,
-faces, texture/fog selection and source strings. A spatial header, control-flow,
+SH vertex writing accepts the understood static subset of vertex buffers,
+faces, texture/fog selection, relative jumps and source strings. A spatial header, other control-flow,
 vertex-normal record or any other skipped record marks the pose read-only.
 The writer preserves record sizes, rejects coordinate/byte-center overflow,
 and updates face centers/normals where present. General aircraft do not qualify.
@@ -147,9 +147,9 @@ The synthetic demo is an editor fixture, not a proven game-loadable aircraft.
 
 A complete SH writer must preserve every branch, LOD, state switch, local
 transform, contact box, visibility plane, normal, relocation, and reference.
-The next milestone is an editable intermediate representation with original
-record provenance and byte-identical no-op round trips, before opening up
-writes to real aircraft. Test general writes against the independent OpenFA
+Decoded records now retain source spans; vertex writes check provenance and
+topology and preserve bytes for a no-op. A complete editable intermediate
+representation covering every branch remains future work. Test general writes against independent OpenFA
 round-trip tools and then the original game. Unsupported records must never
 be silently flattened or discarded.
 
@@ -238,8 +238,44 @@ Rename plans rewrite recognized BRF and module literals only, preserving fixed
 compiled slots and unknown bytes. They refuse known damage/HUD/store/palette
 conventions that need family-wide identity changes, and known external users
 without a local resource in another open LIB. Unknown runtime names remain
-unverified. Aircraft-family creation stays in the dedicated New aircraft wizard.
+unverified. Aircraft-family creation stays in the dedicated Export object wizard.
 
+
+## Object export and initial SH authoring (0.7)
+
+The existing clone API now accepts any resource root. Recognized BRF objects
+follow the same recursive scanner, including weapon identity blocks and
+store/icon stem pairs. PT roots retain the reviewed damage-family rules.
+Opaque bytes stay unchanged with a dependency-discovery note. Leaf media is
+copied without inventing references; only recognized identity text is renamed.
+
+`shape_edit.rs` adds a bounded panel continuation writer. It replaces a reviewed
+opaque FC polygon site with a relative jump to an appended E2/FC sequence,
+restores its known E0/E2 material selector, and returns to the old successor.
+All original instruction RVAs remain stable. New byte UVs use dominant-axis
+planar projection. The private 64x64 PIC embeds the loaded palette and starts
+filled with the old polygon color. Special shading and unresolved inherited
+material state are refused, as are overlapping relocations, exhausted virtual
+space and out-of-range relative jumps.
+
+Zero raw CODE padding is reused when possible; otherwise an aligned CODE copy
+is appended and only its raw-file pointer/size and relevant module size headers
+change. Other section payloads and RVAs are retained. The writer reparses and
+compares geometry plus other faces' texture/UV state before returning. This
+supports selected panels on real aircraft without enabling their unsupported
+geometry writers. It is not a complete branch/animation/layout writer, and
+original-game loading remains a separate acceptance check.
+
+The UI stages the new SH and PIC during the first brush stroke. Release commits
+both resources in one document transaction; cancellation keeps source bytes
+unchanged. Edit mode exposes vertex provenance and numeric/view-plane movement
+only on the supported static subset, updating source face normals/centers.
+Base color remaps the most frequent flat-color index in the decoded pose;
+selected-panel color patches one reviewed palette word.
+
+The envelope table is a view of recognized 44-operand records. Cells call the
+existing field editor and history system; source scaling and raw fields remain
+available. No gameplay-unit conversions are inferred.
 
 ## Hardpoint and material tools
 

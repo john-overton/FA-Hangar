@@ -24,7 +24,7 @@ The synthetic demo is only an editor test; do not install it in the game.
 ## Protected sources
 
 1. Open a disposable copy named `FA_2.LIB`; check the Protected label/status.
-   Export an entry and start New aircraft: reading and extraction must work.
+   Export an entry and start Export object: reading and extraction must work.
 2. Edit a field. Ctrl+S should suggest `HANGAR.LIB`. Enter `FA_2.LIB`, then
    `fa_2.lib` in another folder: both must report a protected retail name.
    The document should remain Modified and the original file unchanged.
@@ -37,7 +37,7 @@ The synthetic demo is only an editor test; do not install it in the game.
 Use a copy of your own game installation for the game check.
 
 1. Open FA_1.LIB and confirm its 2,001 entries load. Then open FA_2.LIB,
-   filter/select `A10.PT`, and click **New aircraft**.
+   filter/select `A10.PT`, and click **Export object**.
 2. The first field must request a **new aircraft ID**, not a file path. Use
    `A10V1`, then a display name such as `My A-10`.
 3. Review the copied resources and new filenames. The tested retail A-10
@@ -151,6 +151,36 @@ separately. No retail data is included in the test package.
    path must not delete its PNG. Test missing paths and a read-only EXE folder.
    Interlaced/animated PNGs and missing target palettes should explain the limit.
 8. Check all three livery tabs and the hardpoint inspector at 800x600 and 1280x800.
+
+## Envelope, object export and initial SH tools (0.7)
+
+1. Open an aircraft PT and switch to Flight. Check the G-row arrows, point
+   count and Speed/Altitude table. Edit a cell, confirm amber feedback and
+   undo to its saved value. Scroll at 800x600 and compare the Raw fields view.
+2. Click Base color in the Model inspector. Pick a swatch, apply and undo.
+   Only matching flat-color faces should change. Select another plain panel
+   and use Panel color to change that face alone. Fully textured models should
+   direct you to Materials. Verify loaded game palettes, not grayscale fallback.
+3. On a private aircraft copy with its palette loaded, select a supported
+   untextured panel and enable Paint panel / auto-create texture. Brush on it:
+   the new mapping should preview immediately. Esc must discard the sheet and
+   stroke; release must add the PIC and SH edit together. One undo must restore
+   the original SH and remove the sheet. Save/reopen and inspect the mapping.
+   Unsupported material state or CODE limits must explain the refusal.
+4. Use Create paintable panel texture, then place a PNG/text decal on the new
+   sheet. Check neighboring panels keep their original materials.
+5. Select AIM9M.JT and click Export object. Review the private weapon, shape,
+   icon and sound filenames. Export/reopen; compare its numeric characteristics
+   with the donor. Repeat with a standalone PIC and an opaque resource: opaque
+   dependency-discovery limits must appear in review. The source stays open.
+6. Select a supported static SH and press Tab. Click a vertex, drag in an
+   orthographic view, then undo. Test G with X/Y/Z offsets and A for all vertices.
+   Esc or Ctrl+Z during a drag must cancel without committing. Check the selected
+   source coordinates and mode labels. Unsupported retail geometry must remain
+   inspection-only. Switch LIBs and verify no stale vertex selection survives.
+7. Load the generated panel package in original Fighters Anthology. Verify
+   visibility, materials, damage variants and camera angles independently of
+   editor preview; record original-game acceptance separately.
 
 ## Please report
 

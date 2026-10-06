@@ -39,6 +39,7 @@ pub(super) enum Action {
     GraftGroup(usize),
     ApplyGraft,
     FieldGroup(usize),
+    EnvelopeStep(i32),
     Apply,
     Cancel,
     CloneBack,
@@ -54,6 +55,12 @@ pub(super) enum Action {
     Radius(usize),
     OpenTexture(usize),
     Recolor,
+    BaseColor(bool),
+    PanelTexture,
+    MeshMode,
+    MeshVertex(usize),
+    MeshAll,
+    MeshMove,
     Textured,
     ModelPaint,
     Isolate,
@@ -469,6 +476,32 @@ impl App {
                     axis: 0,
                 });
             }
+            Action::PanelTexture => {
+                let result = self.create_panel_texture();
+                self.result(result);
+            }
+            Action::MeshMode => {
+                self.finish_stroke();
+                self.mesh_edit = !self.mesh_edit;
+                self.mesh_drag = None;
+                self.model_paint = false;
+                self.paint_enabled = false;
+                self.decal_draft = None;
+                self.preview = None;
+                self.hp_tool = false;
+                self.hp_visible = false;
+                self.decal_active = false;
+                self.mode = Mode::Model;
+                self.media_tab = 0;
+                self.selected_face = None;
+            }
+            Action::MeshVertex(i) => self.mesh_select(i, false),
+            Action::MeshAll => {
+                self.mesh_vertices =
+                    (0..self.model.as_ref().map_or(0, |m| m.vertices.len())).collect()
+            }
+            Action::MeshMove => self.mesh_move_prompt(),
+            Action::BaseColor(face) => self.base_color_prompt(face),
             Action::Recolor => {
                 self.prompt = Some(Prompt {
                     kind: PromptKind::Recolor,
@@ -493,7 +526,7 @@ impl App {
                     self.clone_draft = None;
                     self.prompt = Some(Prompt {
                         kind: PromptKind::CloneTitle,
-                        title: "New aircraft / step 2: display name".into(),
+                        title: "Export object / step 2: display name".into(),
                         value: self.clone_title.clone(),
                         axis: 0,
                     });
@@ -503,7 +536,7 @@ impl App {
                     }
                     self.prompt = Some(Prompt {
                         kind: PromptKind::CloneId,
-                        title: "New aircraft / step 1: new aircraft ID".into(),
+                        title: "Export object / step 1: new object ID".into(),
                         value: self.variant_id.clone(),
                         axis: 0,
                     });
@@ -537,6 +570,12 @@ impl App {
                     }
                 }
                 self.mode = m;
+                if m == Mode::Properties
+                    && self.field_group.is_none()
+                    && !self.envelope_rows().is_empty()
+                {
+                    self.field_group = Some(hangar_core::definition::Aspect::Envelope);
+                }
             }
             Action::File(f) => self.file_prompt(f),
             Action::Demo => self.demo(),
@@ -846,7 +885,17 @@ impl App {
                 let result = self.apply_graft();
                 self.result(result);
             }
+            Action::EnvelopeStep(delta) => {
+                let n = self.envelope_rows().len();
+                if n > 0 {
+                    self.envelope_selected =
+                        (self.envelope_selected as i32 + delta).rem_euclid(n as i32) as usize;
+                    self.envelope_scroll = 0;
+                }
+            }
             Action::FieldGroup(i) => {
+                self.envelope_selected = 0;
+                self.envelope_scroll = 0;
                 self.field_group = hangar_core::definition::ASPECTS.get(i).copied();
                 self.field_scroll = 0;
                 self.mode = Mode::Properties;
@@ -857,6 +906,33 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "envelope" {
+            self.select_entry(1);
+            self.act(Action::Mode(Mode::Properties));
+            return Ok(());
+        }
+        if name == "mesh" || name == "base-color" || name == "auto-texture" {
+            self.doc.replace(0, model::demo_shape())?;
+            self.doc.mark_saved();
+            self.palette_override = Some(Box::new(
+                Pic::parse(&picture::demo())?.colors(&[[0; 3]; 256]),
+            ));
+            self.select_entry(0);
+            self.mode = Mode::Model;
+            self.textured = true;
+            if name == "mesh" {
+                self.mesh_edit = true;
+                self.mesh_vertices = vec![0];
+            }
+            if name == "base-color" {
+                self.base_color_prompt(false);
+            }
+            if name == "auto-texture" {
+                self.selected_face = Some(0);
+                self.create_panel_texture()?;
+            }
+            return Ok(());
+        }
         if name == "hardpoints" {
             self.select_entry(1);
             self.mode = Mode::Model;
@@ -972,7 +1048,7 @@ impl App {
         if name == "clone-review" {
             self.begin_clone();
             self.variant_id = "NEWJET".into();
-            self.clone_title = "New aircraft".into();
+            self.clone_title = "Export object".into();
             self.clone_draft = Some(self.build_clone()?);
             self.prompt = Some(Prompt {
                 kind: PromptKind::CloneReview,
@@ -1188,7 +1264,9 @@ impl App {
             } else {
                 self.graft_layout(&mut out);
             }
-            if self.mode == Mode::Model && self.hp_tool {
+            if self.mode == Mode::Model && self.mesh_edit {
+                self.mesh_inspector(&mut out);
+            } else if self.mode == Mode::Model && self.hp_tool {
                 self.hardpoint_inspector(&mut out);
             } else if self.mode == Mode::Graft {
                 self.graft_inspector(&mut out);
@@ -1283,6 +1361,12 @@ impl App {
                 .is_some_and(|p| matches!(p.kind, PromptKind::DecalLibrary))
             {
                 self.decal_library_layout(&mut out);
+            } else if self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::BaseColor(_)))
+            {
+                self.color_dialog(&mut out);
             } else {
                 self.prompt_layout(&mut out);
             }
@@ -1469,14 +1553,14 @@ impl App {
         }
         o.canvas.line(0, h - 51, l, h - 51, c::GM_1000);
         o.button(
-            [8, h - 46, 94, 20],
+            [8, h - 46, 76, 20],
             "Open LIB",
             Action::File(FileAction::Open),
             false,
         );
         o.button(
-            [110, h - 46, l - 118, 20],
-            "New aircraft",
+            [92, h - 46, l - 100, 20],
+            "Export object",
             Action::File(FileAction::Variant),
             false,
         );
@@ -1489,7 +1573,16 @@ impl App {
         let d = &mut o.canvas;
         d.rect(l + 1, 26, width - 2, 28, c::GM_800);
         icon(d, l + 8, 32, Icon::Select, c::INK_MUTED);
-        label_fit(d, l + 30, 44, 112, "Object Mode", c::INK);
+        o.button(
+            [l + 27, 29, 92, 22],
+            if self.mesh_edit {
+                "Edit mesh"
+            } else {
+                "Object mode"
+            },
+            Action::MeshMode,
+            self.mesh_edit,
+        );
         o.button(
             [l + 125, 29, 105, 22],
             "Hardpoints",
@@ -1614,7 +1707,13 @@ impl App {
             l + 51,
             dock - 12,
             width - 150,
-            if writable {
+            if self.mesh_edit {
+                if writable {
+                    "Edit mode / vertices"
+                } else {
+                    "Edit mode / inspect only"
+                }
+            } else if writable {
                 "Object mode / editable static mesh"
             } else {
                 "Object mode / static preview"
@@ -1622,7 +1721,11 @@ impl App {
             c::INK_MUTED,
         );
         d.text(r - 65, dock - 12, &format!("{}%", self.zoom), c::INK_FAINT);
-        self.hardpoint_overlay(o);
+        if self.mesh_edit {
+            self.mesh_overlay(o);
+        } else {
+            self.hardpoint_overlay(o);
+        }
     }
     fn browse_layout(&self, o: &mut Layout) {
         let l = self.left();
@@ -1776,8 +1879,17 @@ impl App {
             self.model.is_some(),
             false,
         );
-        o.canvas
-            .label(r + 12, 103, "Values in original source units", c::INK_FAINT);
+        let base = self
+            .dominant_color()
+            .map_or("Base color: textured / Materials".into(), |c| {
+                format!("Base color / palette {c}")
+            });
+        o.button(
+            [r + 12, 89, w - 24, 22],
+            &base,
+            Action::BaseColor(false),
+            false,
+        );
         let rows = self.property_rows();
         if !rows.is_empty() {
             let mut y = 116 - self.inspector_scroll * 24;
@@ -1968,6 +2080,13 @@ impl App {
         }
     }
     fn fields_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32, full: bool) {
+        if full
+            && self.field_group == Some(hangar_core::definition::Aspect::Envelope)
+            && !self.envelope_rows().is_empty()
+        {
+            self.envelope_layout(o, x, y, w, h);
+            return;
+        }
         o.canvas.rect(x, y, w, h, c::GM_800);
         let mut top = y;
         if full {
@@ -2200,7 +2319,10 @@ impl App {
             ],
             2 => vec![
                 ("Add entry       Ctrl+I", Action::File(FileAction::Import)),
-                ("Duplicate aircraft", Action::File(FileAction::Variant)),
+                (
+                    "Export object + resources",
+                    Action::File(FileAction::Variant),
+                ),
                 ("From loose SH file...", Action::File(FileAction::VariantSh)),
                 ("Validate package", Action::Validate),
             ],
@@ -2218,7 +2340,9 @@ impl App {
                 ("Preview / Paint media", Action::Mode(Mode::Media)),
                 ("Hardpoint tools", Action::Hardpoints),
                 ("Decals / markings", Action::MediaTab(2)),
-                ("Recolor face palette", Action::Recolor),
+                ("Base color", Action::BaseColor(false)),
+                ("Panel color", Action::BaseColor(true)),
+                ("Remap color indices", Action::Recolor),
             ],
             4 => vec![
                 ("Frame all        Home", Action::View(0)),
@@ -2229,7 +2353,10 @@ impl App {
                 ("Textured / wireframe", Action::Textured),
             ],
             5 => vec![
-                ("Duplicate aircraft", Action::File(FileAction::Variant)),
+                (
+                    "Export object + resources",
+                    Action::File(FileAction::Variant),
+                ),
                 ("From loose SH file...", Action::File(FileAction::VariantSh)),
                 ("Graft characteristics", Action::Mode(Mode::Graft)),
                 ("Copy one donor field", Action::File(FileAction::Graft)),
@@ -2364,6 +2491,7 @@ impl App {
         self.smoke_graft();
         self.smoke_libraries();
         self.smoke_material_tools();
+        self.smoke_object_tools();
         self.demo();
         self.width = 1280;
         self.height = 800;

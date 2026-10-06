@@ -90,6 +90,8 @@ enum PromptKind {
     CloneTitle,
     CloneReview,
     Recolor,
+    BaseColor(bool),
+    MeshMove,
     Isolate,
     CloseLibrary,
     ResourceName(bool),
@@ -133,6 +135,8 @@ pub struct FileItem {
 }
 struct Stroke {
     entry: usize,
+    name: String,
+    generated: Option<Box<mesh_ui::PanelPlan>>,
     bytes: Vec<u8>,
     pic: Pic,
     last: Option<(usize, usize)>,
@@ -152,6 +156,9 @@ pub struct App {
     hp_context: Option<Box<hardpoint_ui::Context>>,
     hp_selected: usize,
     hp_tool: bool,
+    mesh_edit: bool,
+    mesh_vertices: Vec<usize>,
+    mesh_drag: Option<Box<mesh_ui::MeshDrag>>,
     hp_visible: bool,
     hp_drag: Option<hardpoint_ui::Drag>,
     media_tab: u8,
@@ -182,6 +189,8 @@ pub struct App {
     field_scroll: usize,
     field_selected: usize,
     field_group: Option<hangar_core::definition::Aspect>,
+    envelope_selected: usize,
+    envelope_scroll: usize,
     graft_donor: Option<grafting_ui::Donor>,
     graft_library: Option<(String, Archive)>,
     graft_mask: u16,
@@ -238,6 +247,7 @@ pub struct App {
     image_pan: [i32; 2],
     image_drag: bool,
     brush: u8,
+    base_color_from: u8,
     brush_radius: usize,
     painting: bool,
     last_paint: Option<(usize, usize)>,
@@ -274,6 +284,9 @@ impl App {
             hp_context: None,
             hp_selected: 0,
             hp_tool: false,
+            mesh_edit: false,
+            mesh_vertices: Vec::new(),
+            mesh_drag: None,
             hp_visible: false,
             hp_drag: None,
             media_tab: 0,
@@ -310,6 +323,8 @@ impl App {
             field_scroll: 0,
             field_selected: 0,
             field_group: None,
+            envelope_selected: 0,
+            envelope_scroll: 0,
             graft_donor: None,
             graft_library: None,
             graft_mask: 0,
@@ -366,6 +381,7 @@ impl App {
             image_pan: [0, 0],
             image_drag: false,
             brush: 150,
+            base_color_from: 0,
             brush_radius: 1,
             painting: false,
             last_paint: None,
@@ -480,7 +496,11 @@ impl App {
         self.model_paint = false;
 
         self.field_group = None;
+        self.envelope_selected = 0;
+        self.envelope_scroll = 0;
         self.hp_tool = false;
+        self.mesh_edit = false;
+        self.mesh_vertices.clear();
         self.decal_active = false;
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
         self.collapsed[view::category_of(self.name())] = false;
@@ -528,6 +548,7 @@ impl App {
     }
     fn refresh_data(&mut self) {
         self.hp_drag = None;
+        self.mesh_drag = None;
         self.decal_draft = None;
         self.decal_dragging = false;
         crate::platform::stop_audio();
@@ -762,16 +783,23 @@ impl App {
         }
     }
     pub fn file_prompt(&mut self, a: FileAction) {
+        if self.mesh_drag.take().is_some() {
+            self.preview = None;
+        }
         self.hp_drag = None;
         self.decal_dragging = false;
-        if matches!(a, FileAction::Variant | FileAction::VariantSh)
-            && (self.doc.dirty() || !self.name().ends_with(".PT"))
+        if matches!(a, FileAction::VariantSh) && (self.doc.dirty() || !self.name().ends_with(".PT"))
         {
             self.status = "Select a PT donor in a saved LIB before creating a new aircraft".into();
             return;
         }
         if matches!(a, FileAction::Open) && self.doc.dirty() {
             self.status = "Save your changes before opening another LIB".into();
+            return;
+        }
+        if matches!(a, FileAction::Variant) && self.doc.archive.entries.get(self.selected).is_none()
+        {
+            self.status = "Select an object to export with its resources".into();
             return;
         }
         if matches!(a, FileAction::Variant) {
@@ -794,9 +822,9 @@ impl App {
             FileAction::Wav => "Export sound as WAV",
             FileAction::Palette => "Load display palette (.PAL or a LIB containing PALETTE.PAL)",
             FileAction::Open => "Open LIB",
-            FileAction::Variant => "New aircraft",
+            FileAction::Variant => "Export object",
             FileAction::VariantSh => "New aircraft from loose SH / step 1: select SH file",
-            FileAction::CloneSource => "Additional source LIB for aircraft dependencies",
+            FileAction::CloneSource => "Additional source LIB for object dependencies",
             FileAction::Save => "Save LIB / retail names protected / custom LIBs saved with backup",
             FileAction::Import => "Add entry: path to a resource file",
             FileAction::Replace => "Replace selected entry: resource file path",
@@ -931,7 +959,7 @@ impl App {
                     "Display palette loaded; original resource palettes remain unchanged".into();
                 Ok(())
             }
-            FileAction::Variant => Err("Start New aircraft from a selected PT".into()),
+            FileAction::Variant => Err("Start Export object from a selected resource".into()),
             FileAction::CloneSource => self.add_clone_source(path),
             FileAction::VariantSh => {
                 let shape = crate::platform::read(path)?;
@@ -1108,6 +1136,14 @@ impl App {
         }
     }
     pub fn key(&mut self, key: Key, ctrl: bool, shift: bool) {
+        if self.mesh_drag.is_some()
+            && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
+        {
+            self.mesh_drag = None;
+            self.preview = None;
+            self.status = "Vertex drag cancelled".into();
+            return;
+        }
         if self.hp_drag.is_some()
             && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
         {
@@ -1151,7 +1187,7 @@ impl App {
                         self.browser = None;
                         self.prompt = Some(Prompt {
                             kind: PromptKind::CloneTitle,
-                            title: "New aircraft / step 2: display name".into(),
+                            title: "Export object / step 2: display name".into(),
                             value: self.clone_title.clone(),
                             axis: 0,
                         });
@@ -1268,6 +1304,8 @@ impl App {
                             self.status=format!("Cloned {to}; {n} decoded references updated. Other LOD/damage references retain original textures.");
                             Ok(())
                         })(),
+                        PromptKind::MeshMove => self.mesh_move(&p.value),
+                        PromptKind::BaseColor(face) => self.apply_base_color(face),
                         PromptKind::Recolor => {
                             let r = (|| {
                                 let (from, to) = p
@@ -1295,13 +1333,18 @@ impl App {
                         }
                         PromptKind::CloneId => match authoring::validate_id(p.value.trim()) {
                             Ok(id) => {
-                                if self.doc.archive.find(&format!("{id}.PT")).is_some() {
-                                    Err("That aircraft ID already exists; choose a new ID".into())
+                                if self
+                                    .doc
+                                    .archive
+                                    .find(&format!("{id}.{}", extension(self.name())))
+                                    .is_some()
+                                {
+                                    Err("That object ID already exists; choose a new ID".into())
                                 } else {
                                     self.variant_id = id;
                                     self.prompt = Some(Prompt {
                                         kind: PromptKind::CloneTitle,
-                                        title: "New aircraft / step 2: display name".into(),
+                                        title: "Export object / step 2: display name".into(),
                                         value: self.clone_title.clone(),
                                         axis: 0,
                                     });
@@ -1318,7 +1361,7 @@ impl App {
                                     self.clone_scroll = 0;
                                     self.prompt = Some(Prompt {
                                         kind: PromptKind::CloneReview,
-                                        title: "New aircraft / review private resources".into(),
+                                        title: "Export object / review private resources".into(),
                                         value: String::new(),
                                         axis: 0,
                                     });
@@ -1343,7 +1386,7 @@ impl App {
                                 self.selected = self
                                     .doc
                                     .archive
-                                    .find(&format!("{}.PT", package.id))
+                                    .find(&format!("{}.{}", package.id, extension(&package.donor)))
                                     .unwrap_or(0);
                                 self.scroll = 0;
                                 self.table_scroll = 0;
@@ -1527,6 +1570,9 @@ impl App {
         match key {
             Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'c'=>{let r=self.copy_resource();self.result(r);},'v'=>{let r=self.paste_resources();self.result(r);},'d'=>self.rename_prompt(true),'w'=>{let r=self.close_library();self.result(r);},'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
             Key::Char('h')|Key::Char('H')=>{let r=self.station_add(false,true);self.result(r);},
+            Key::Char('a')|Key::Char('A') if self.mesh_edit&&self.mode==Mode::Model=>{self.mesh_vertices=(0..self.model.as_ref().map_or(0,|m|m.vertices.len())).collect();},
+            Key::Char('g')|Key::Char('G') if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_move_prompt(),
+            Key::Tab if self.mode==Mode::Model=>self.act(view::Action::MeshMode),
             Key::Char('g')|Key::Char('G') if self.hp_tool&&self.mode==Mode::Model => {self.prompt=Some(Prompt{kind:PromptKind::StationMove,title:"Move station / X Y Z axis, source-unit offset".into(),value:"0".into(),axis:0});},
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.model.is_some()=>{
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
@@ -1577,6 +1623,11 @@ impl App {
     pub fn click(&mut self, x: i32, y: i32, button: u8, down: bool) {
         self.mouse = [x, y];
         if button == 1 && !down {
+            if self.mesh_drag.is_some() {
+                let result = self.finish_mesh_drag();
+                self.result(result);
+                return;
+            }
             if self.hp_drag.is_some() {
                 let result = self.finish_station_drag();
                 self.result(result);
@@ -1633,6 +1684,24 @@ impl App {
                 .map(|h| h.action);
             if let Some(view::Action::HardpointSelect(i)) = hp {
                 self.start_station_drag(i);
+                return;
+            }
+        }
+        if button == 1
+            && down
+            && self.prompt.is_none()
+            && self.mode == Mode::Model
+            && self.mesh_edit
+        {
+            let vertex = self
+                .layout()
+                .hits
+                .into_iter()
+                .rev()
+                .find(|h| h.contains(x, y) && matches!(h.action, view::Action::MeshVertex(_)))
+                .map(|h| h.action);
+            if let Some(view::Action::MeshVertex(i)) = vertex {
+                self.mesh_select(i, true);
                 return;
             }
         }
@@ -1739,6 +1808,12 @@ impl App {
         }
     }
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
+        if self.mesh_drag.is_some() {
+            let result = self.mesh_motion(x, y);
+            self.result(result);
+            self.mouse = [x, y];
+            return;
+        }
         if self.decal_dragging {
             let result = self.place_decal(x, y);
             if let Err(e) = result {
@@ -1816,6 +1891,19 @@ impl App {
                     .clamp(0, b.files.len().saturating_sub(1) as i32)
                     as usize;
             }
+            return;
+        }
+        if self.mode == Mode::Properties
+            && self.field_group == Some(hangar_core::definition::Aspect::Envelope)
+            && !self.envelope_rows().is_empty()
+            && self.mouse[0] > self.left()
+            && self.mouse[0] < self.right()
+            && self.mouse[1] < self.dock_y()
+        {
+            let visible = ((self.dock_y() - 26 - 164) / 26).max(1) as usize;
+            self.envelope_scroll = (self.envelope_scroll as i32 - delta * 3)
+                .clamp(0, 20usize.saturating_sub(visible) as i32)
+                as usize;
             return;
         }
         if self.mode == Mode::Graft
@@ -2061,3 +2149,12 @@ mod libraries_ui;
 mod hardpoint_ui;
 #[path = "ui_materials.rs"]
 mod material_ui;
+
+#[path = "ui_envelope.rs"]
+mod envelope_ui;
+
+#[path = "ui_color.rs"]
+mod color_ui;
+
+#[path = "ui_mesh.rs"]
+mod mesh_ui;

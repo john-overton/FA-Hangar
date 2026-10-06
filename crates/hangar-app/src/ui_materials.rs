@@ -468,8 +468,8 @@ impl App {
         if self.model.is_some() {
             o.button(
                 [r + 12, 300, w - 24, 26],
-                "Remap untextured colors",
-                Action::Recolor,
+                "Base color / untextured panels",
+                Action::BaseColor(false),
                 false,
             );
         }

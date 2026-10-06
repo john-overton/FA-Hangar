@@ -89,6 +89,8 @@ impl App {
                 }
                 Ok(Stroke {
                     entry,
+                    name: self.doc.archive.entries[entry].name.clone(),
+                    generated: None,
                     bytes,
                     pic,
                     last: None,
@@ -146,7 +148,30 @@ impl App {
             let enabled = self.paint_enabled;
             let model_paint = self.model_paint;
             let face = self.selected_face;
-            let r = self.doc.replace(s.entry, s.bytes);
+            let r = if let Some(plan) = s.generated {
+                if !self
+                    .doc
+                    .archive
+                    .entries
+                    .get(plan.entry)
+                    .is_some_and(|e| e.same_storage(&plan.original))
+                    || self.doc.archive.find(&plan.name).is_some()
+                {
+                    Err("Panel source/name changed; stroke cancelled".into())
+                } else {
+                    (|| {
+                        self.doc.transaction(
+                            vec![
+                                Entry::new(&plan.original.name, plan.shape)?,
+                                Entry::new(&plan.name, s.bytes)?,
+                            ],
+                            &[],
+                        )
+                    })()
+                }
+            } else {
+                self.doc.replace(s.entry, s.bytes)
+            };
             self.painting = false;
             self.refresh();
             self.paint_enabled = enabled;
@@ -195,11 +220,7 @@ impl App {
             .or_else(|| {
                 self.stroke
                     .as_ref()
-                    .filter(|s| {
-                        self.doc.archive.entries[s.entry]
-                            .name
-                            .eq_ignore_ascii_case(&full)
-                    })
+                    .filter(|s| s.name.eq_ignore_ascii_case(&full))
                     .map(|s| &s.pic)
                     .or_else(|| self.textures.get(name))
             })
@@ -375,22 +396,40 @@ impl App {
             Some((f.faces[i], f.uv[i]))
         }
     }
-    pub(super) fn paint_model_hit(&mut self, face: usize, uv: [i32; 2]) {
+    pub(super) fn paint_model_hit(&mut self, face: usize, mut uv: [i32; 2]) {
         if uv[0] < 0 || uv[1] < 0 {
-            self.status = "This panel has no resolved named texture; use surface recolor".into();
+            if let Err(error) = self.start_generated_stroke(face) {
+                self.status = error;
+                return;
+            }
+            if let Some((_, mapped)) = self.model_hit(self.mouse[0], self.mouse[1]) {
+                uv = mapped;
+            }
+        }
+        if uv[0] < 0 || uv[1] < 0 {
             return;
         }
-        let Some(m) = self.model_for_paint() else {
+        let Some(model) = self.model_for_paint() else {
             return;
         };
-        let name = &m.faces[face].texture;
-        let full = if name.contains('.') {
-            name.clone()
-        } else {
-            format!("{name}.PIC")
+        let Some(f) = model.faces.get(face) else {
+            return;
         };
-        if let Some(i) = self.doc.archive.find(&full) {
+        let name = if f.texture.contains('.') {
+            f.texture.clone()
+        } else {
+            format!("{}.PIC", f.texture)
+        };
+        if let Some(i) = self
+            .stroke
+            .as_ref()
+            .filter(|s| s.name == name)
+            .map(|s| s.entry)
+            .or_else(|| self.doc.archive.find(&name))
+        {
             self.paint_at(i, uv[0] as usize, uv[1] as usize);
+        } else {
+            self.status = "Texture is outside the active LIB; copy/open its owner first".into();
         }
     }
     pub(super) fn media_layout(&self, o: &mut Layout) {
@@ -639,10 +678,26 @@ impl App {
                 );
                 y += 32;
             }
+            if f.uv.is_empty() || f.texture.is_empty() {
+                o.button(
+                    [r + 10, y, w - 20, 24],
+                    "Create paintable panel texture",
+                    Action::PanelTexture,
+                    false,
+                );
+                y += 30;
+                o.button(
+                    [r + 10, y, w - 20, 24],
+                    "Panel color",
+                    Action::BaseColor(true),
+                    false,
+                );
+                y += 30;
+            }
             if self.mode == Mode::Model {
                 o.button(
                     [r + 10, y, w - 20, 24],
-                    "Paint selected panel on model",
+                    "Paint panel / auto-create texture",
                     Action::ModelPaint,
                     self.model_paint,
                 );

@@ -131,6 +131,10 @@ impl App {
         self.context_entry = library.context_entry;
         self.selected_face = library.selected_face;
         self.model_paint = false;
+        self.mesh_edit = false;
+        self.mesh_vertices.clear();
+        self.envelope_selected = 0;
+        self.envelope_scroll = 0;
         self.refresh();
         (self.yaw, self.pitch, self.zoom, self.pan, self.perspective) = library.camera;
         (self.image_zoom, self.image_pan) = library.image;

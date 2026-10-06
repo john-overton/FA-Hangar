@@ -82,7 +82,7 @@ impl App {
                 .max(1),
         ))
     }
-    fn hp_project(&self, p: [i32; 3]) -> Option<[i32; 2]> {
+    pub(super) fn hp_project(&self, p: [i32; 3]) -> Option<[i32; 2]> {
         let (center, span) = self.model_bounds()?;
         let p = [p[0] - center[0], p[2] - center[2], p[1] - center[1]];
         let p = model::rotate(model::rotate(p, 1, self.yaw), 0, self.pitch);
