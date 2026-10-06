@@ -1,4 +1,4 @@
-//! Private aircraft resource graph. BRF strings and bounded module filename
+//! Private object resource graph, including the reviewed aircraft family. BRF strings and bounded module filename
 //! literals are relocated by name without moving any compiled module bytes.
 use crate::{
     archive::{validate_name, Archive, Entry, ARCHIVE_LIMIT},
@@ -9,7 +9,7 @@ use crate::{
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
-    string::String,
+    string::{String, ToString},
     vec::Vec,
 };
 
@@ -60,6 +60,11 @@ fn root_reference(brf: &Brf, label: &str) -> Result<Option<String>> {
     validate_name(&name)?;
     Ok(Some(name))
 }
+fn dependencies_known(name: &str, bytes: &[u8]) -> bool {
+    crate::dependencies::leaf(name)
+        || bytes.starts_with(b"MZ")
+        || bytes.starts_with(b"[brent's_relocatable_format]")
+}
 fn base36(mut n: usize) -> String {
     let mut b = Vec::new();
     loop {
@@ -89,12 +94,12 @@ fn assign(
     validate_name(&new)?;
     if stem(&new).len() > *budget.get(old).unwrap_or(&8) {
         return Err(format!(
-            "{old} has a short compiled name slot; use a shorter aircraft ID"
+            "{old} has a short compiled name slot; use a shorter object ID"
         ));
     }
     if used.contains(&new) {
         return Err(format!(
-            "Name collision: {new}. Choose a different aircraft ID"
+            "Name collision: {new}. Choose a different object ID"
         ));
     }
     used.insert(new.clone());
@@ -156,29 +161,62 @@ pub fn build_with(
         ));
     }
     let donor = donor.to_ascii_uppercase();
-    if ext(&donor) != "PT" {
-        return Err(invalid("Select an aircraft PT to duplicate"));
-    }
+    validate_name(&donor)?;
     let root_bytes = read(&donor)?;
-    let root = Brf::parse(&root_bytes, "PT")?;
-    let main = root_reference(&root, "object.shape")?.ok_or("Donor has no main shape")?;
-    let shadow = root_reference(&root, "object.shadowShape")?.ok_or("Donor has no shadow shape")?;
-    let family = shadow
-        .strip_suffix("_S.SH")
-        .ok_or("Donor does not use the reviewed _S.SH damage family")?;
-    let mut roots = vec![donor.clone(), main.clone(), shadow.clone()];
-    for suffix in ["A", "B", "C", "D"] {
-        roots.push(format!("{family}_{suffix}.SH"));
+    let root = if root_bytes.starts_with(b"[brent's_relocatable_format]") {
+        Some(Brf::parse(&root_bytes, ext(&donor))?)
+    } else {
+        None
+    };
+    let optional_reference = |label: &str| -> Result<Option<String>> {
+        if let Some(b) = &root {
+            if b.fields.iter().any(|f| f.label == label) {
+                return root_reference(b, label);
+            }
+        }
+        Ok(None)
+    };
+    let main = optional_reference("object.shape")?;
+    let shadow = optional_reference("object.shadowShape")?;
+    let family = if ext(&donor) == "PT" {
+        Some(
+            shadow
+                .as_deref()
+                .and_then(|s| s.strip_suffix("_S.SH"))
+                .ok_or("Aircraft does not use the reviewed _S.SH family")?
+                .to_string(),
+        )
+    } else {
+        None
+    };
+    if family.is_some() && main == shadow {
+        return Err(invalid(
+            "Main and shadow share a file; this aircraft family needs separate authoring",
+        ));
     }
-    let hud = root_reference(&root, "object.hudName")?.or_else(|| {
+    let mut roots = vec![donor.clone()];
+    if let Some(name) = &main {
+        roots.push(name.clone());
+    }
+    if let Some(name) = &shadow {
+        roots.push(name.clone());
+    }
+    if let Some(family) = &family {
+        for suffix in ["A", "B", "C", "D"] {
+            roots.push(format!("{family}_{suffix}.SH"));
+        }
+    }
+    let hud = optional_reference("object.hudName")?.or_else(|| {
         let n = format!("{}.HUD", stem(&donor));
-        catalog.contains(&n).then_some(n)
+        (ext(&donor) == "PT" && catalog.contains(&n)).then_some(n)
     });
     if let Some(h) = &hud {
         roots.push(h.clone());
     }
     let private_palette = format!("{}.PAL", stem(&donor));
-    let palette = if catalog.contains(&private_palette) {
+    let palette = if matches!(ext(&donor), "5K" | "8K" | "11K" | "22K" | "WAV" | "PAL") {
+        None
+    } else if catalog.contains(&private_palette) {
         Some(private_palette)
     } else if catalog.contains("PALETTE.PAL") {
         Some("PALETTE.PAL".into())
@@ -197,7 +235,7 @@ pub fn build_with(
             continue;
         }
         if graph.len() >= 4096 {
-            return Err(invalid("Aircraft graph exceeds 4096 resources"));
+            return Err(invalid("Object graph exceeds 4096 resources"));
         }
         if ext(&name) == "PT" && name != donor {
             return Err(format!("The donor graph references another aircraft {name}; correct its identity/reference before exporting"));
@@ -207,10 +245,17 @@ pub fn build_with(
             .checked_add(bytes.len())
             .ok_or("Resource size overflow")?;
         if bytes_total > ARCHIVE_LIMIT {
-            return Err(invalid("Aircraft graph exceeds 128 MiB"));
+            return Err(invalid("Object graph exceeds 128 MiB"));
         }
-        let refs = references(&name, &bytes, catalog, &mut unresolved)
-            .map_err(|e| format!("{name}: {e}"))?;
+        let refs = if !dependencies_known(&name, &bytes) {
+            unresolved.insert(format!(
+                "{name}: opaque bytes copied unchanged; dependency discovery unavailable."
+            ));
+            Vec::new()
+        } else {
+            references(&name, &bytes, catalog, &mut unresolved)
+                .map_err(|e| format!("{name}: {e}"))?
+        };
         for r in &refs {
             if !catalog.contains(&r.target) {
                 return Err(format!(
@@ -249,22 +294,41 @@ pub fn build_with(
     }
     let mut mapping = BTreeMap::new();
     let mut used = catalog.clone();
-    assign(&donor, format!("{id}.PT"), &mut mapping, &mut used, &budget)?;
-    assign(&main, format!("{id}.SH"), &mut mapping, &mut used, &budget)?;
-    for suffix in ["A", "B", "C", "D", "S"] {
-        assign(
-            &format!("{family}_{suffix}.SH"),
-            format!("{id}_{suffix}.SH"),
-            &mut mapping,
-            &mut used,
-            &budget,
-        )?;
+    assign(
+        &donor,
+        format!("{id}.{}", ext(&donor)),
+        &mut mapping,
+        &mut used,
+        &budget,
+    )?;
+    if let Some(main) = &main {
+        if main != &donor {
+            assign(main, format!("{id}.SH"), &mut mapping, &mut used, &budget)?;
+        }
+    }
+    if let Some(family) = &family {
+        for suffix in ["A", "B", "C", "D", "S"] {
+            let name = format!("{family}_{suffix}.SH");
+            if !mapping.contains_key(&name) {
+                assign(
+                    &name,
+                    format!("{id}_{suffix}.SH"),
+                    &mut mapping,
+                    &mut used,
+                    &budget,
+                )?;
+            }
+        }
     }
     if let Some(h) = &hud {
-        assign(h, format!("{id}.HUD"), &mut mapping, &mut used, &budget)?;
+        if !mapping.contains_key(h) {
+            assign(h, format!("{id}.HUD"), &mut mapping, &mut used, &budget)?;
+        }
     }
     if let Some(name) = &palette {
-        assign(name, format!("{id}.PAL"), &mut mapping, &mut used, &budget)?;
+        if !mapping.contains_key(name) {
+            assign(name, format!("{id}.PAL"), &mut mapping, &mut used, &budget)?;
+        }
     }
 
     // Preserve store/icon stem relationships rather than independently aliasing icons.
@@ -272,6 +336,19 @@ pub fn build_with(
         .keys()
         .filter(|n| matches!(ext(n), "JT" | "SEE" | "ECM" | "GAS"))
     {
+        if let Some(new_name) = mapping.get(name).cloned() {
+            let icon = format!("${}.PIC", stem(name));
+            if graph.contains_key(&icon) {
+                assign(
+                    &icon,
+                    format!("${}.PIC", stem(&new_name)),
+                    &mut mapping,
+                    &mut used,
+                    &budget,
+                )?;
+            }
+            continue;
+        }
         let icon = format!("${}.PIC", stem(name));
         let mut limit = budget[name];
         if graph.contains_key(&icon) {
@@ -352,22 +429,35 @@ pub fn build_with(
         }
     }
     let mut archive = Archive::empty();
-    let name_block = root
-        .fields
-        .iter()
-        .find(|f| f.label == "object.ot_names" && f.kind == "ptr")
-        .ok_or("No aircraft name block")?
-        .value
-        .clone();
-    let labels: Vec<_> = root
-        .fields
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| f.block == name_block && f.kind == "string")
-        .map(|(i, _)| i)
-        .collect();
-    if labels.len() != 3 {
-        return Err(invalid("Expected three aircraft identity strings"));
+    let mut identities = Vec::new();
+    if let Some(root) = &root {
+        for pointer in root.fields.iter().filter(|f| {
+            f.kind == "ptr"
+                && (f.label.ends_with(".ot_names")
+                    || f.label.ends_with(".si_names")
+                    || matches!(f.value.as_str(), "ot_names" | "si_names"))
+        }) {
+            let labels: Vec<_> = root
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.block == pointer.value && f.kind == "string")
+                .map(|(i, _)| i)
+                .collect();
+            if labels.len() == 3
+                && root
+                    .fields
+                    .iter()
+                    .filter(|f| f.block == pointer.value)
+                    .count()
+                    == 3
+            {
+                identities.push(labels);
+            }
+        }
+        if identities.is_empty() {
+            unresolved.insert("Display-name block unrecognized; existing text preserved.".into());
+        }
     }
     let mut ordered: Vec<_> = graph.keys().cloned().collect();
     ordered.retain(|n| n != &donor);
@@ -384,9 +474,11 @@ pub fn build_with(
                 }
             }
             if name == donor {
-                edits.insert(labels[0], format!("\"{title}\""));
-                edits.insert(labels[1], format!("\"{title}\""));
-                edits.insert(labels[2], format!("\"{id}.PT\""));
+                for labels in &identities {
+                    edits.insert(labels[0], format!("\"{title}\""));
+                    edits.insert(labels[1], format!("\"{title}\""));
+                    edits.insert(labels[2], format!("\"{id}.{}\"", ext(&donor)));
+                }
             }
             // Descending source ranges preserve comments/unknown operands exactly.
             for (index, value) in edits.iter().rev() {
@@ -418,7 +510,11 @@ pub fn build_with(
     let mut audit_catalog = catalog.clone();
     audit_catalog.extend(output_catalog.iter().cloned());
     for e in &archive.entries {
-        for r in references(&e.name, &e.read()?, &audit_catalog, &mut BTreeSet::new())? {
+        let bytes = e.read()?;
+        if !dependencies_known(&e.name, &bytes) {
+            continue;
+        }
+        for r in references(&e.name, &bytes, &audit_catalog, &mut BTreeSet::new())? {
             if !output_catalog.contains(&r.target) {
                 return Err(format!(
                     "Output validation: {} still references {}",
@@ -622,5 +718,75 @@ mod tests {
         }
         assert!(crate::archive::directory(&b[..n], b.len() + 1).is_err());
         assert!(crate::archive::directory(&b[..n - 1], b.len()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod object_tests {
+    use super::*;
+    fn weapon() -> Vec<u8> {
+        let mut s = String::from("[brent's_relocatable_format]\n");
+        for schema in [crate::schema::OBJECT, crate::schema::PROJECTILE] {
+            for (kind, name) in schema {
+                let (k, v) = if *kind == "ptr" && ["ot_names", "si_names", "shape"].contains(name) {
+                    ("ptr", *name)
+                } else if *kind == "ptr" {
+                    ("dword", "0")
+                } else if *kind == "symbol" {
+                    ("symbol", "_DEMO")
+                } else {
+                    (*kind, "0")
+                };
+                s.push_str(&format!("{k} {v} ; {name}\n"));
+            }
+        }
+        s.push_str(":ot_names\nstring \"Old\"\nstring \"Old weapon\"\nstring \"OLD.JT\"\n:si_names\nstring \"Old\"\nstring \"Old weapon\"\nstring \"OLD.JT\"\n:shape\nstring \"BODY.SH\"\nend\n");
+        s.into_bytes()
+    }
+    #[test]
+    fn weapon_export_keeps_numeric_values_and_private_icon_pair() {
+        let mut a = Archive::empty();
+        a.entries = vec![
+            Entry::new("OLD.JT", weapon()).unwrap(),
+            Entry::new("BODY.SH", crate::model::demo_shape()).unwrap(),
+            Entry::new("$OLD.PIC", crate::picture::demo()).unwrap(),
+        ];
+        let before = a.bytes().unwrap();
+        let out = build(&[&a], "OLD.JT", "NEW", "New missile").unwrap();
+        assert!(out.archive.find("NEW.JT").is_some());
+        assert!(out.archive.find("NEW.SH").is_some());
+        assert!(out.archive.find("$NEW.PIC").is_some());
+        let bytes = out.archive.entries[out.archive.find("NEW.JT").unwrap()]
+            .read()
+            .unwrap();
+        let b = Brf::parse(&bytes, "JT").unwrap();
+        let original = Brf::parse(&weapon(), "JT").unwrap();
+        for (a, b) in original.fields.iter().zip(&b.fields) {
+            if a.kind != "string" {
+                assert_eq!(a.value, b.value);
+            }
+        }
+        assert_eq!(
+            b.fields
+                .iter()
+                .filter(|f| f.kind == "string" && f.value == "\"New missile\"")
+                .count(),
+            4
+        );
+        assert_eq!(a.bytes().unwrap(), before);
+    }
+    #[test]
+    fn leaf_and_opaque_resources_export_without_inventing_dependencies() {
+        let mut a = Archive::empty();
+        a.entries = vec![
+            Entry::new("SOUND.11K", b"BAD.SH\0".to_vec()).unwrap(),
+            Entry::new("OPAQUE.BIN", vec![1, 2, 3]).unwrap(),
+        ];
+        let out = build(&[&a], "SOUND.11K", "NEW", "Sound").unwrap();
+        assert_eq!(out.archive.entries.len(), 1);
+        assert_eq!(out.archive.entries[0].read().unwrap(), b"BAD.SH\0");
+        let out = build(&[&a], "OPAQUE.BIN", "NEW", "Unknown").unwrap();
+        assert_eq!(out.archive.entries[0].read().unwrap(), vec![1, 2, 3]);
+        assert!(out.notes.iter().any(|s| s.contains("opaque")));
     }
 }

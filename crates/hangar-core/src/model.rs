@@ -20,6 +20,8 @@ pub struct Face {
     pub texture: String,
     pub uv: Vec<[i32; 2]>,
     pub uv_offsets: Vec<usize>,
+    pub end: usize,
+    pub material_selector: Vec<u8>,
 }
 #[derive(Clone, Debug)]
 pub struct Model {
@@ -29,6 +31,13 @@ pub struct Model {
     pub texture_records: BTreeMap<usize, String>,
     pub writable: bool,
     pub reason: String,
+    pub records: Vec<Record>,
+}
+#[derive(Clone, Debug)]
+pub struct Record {
+    pub offset: usize,
+    pub length: usize,
+    pub opcode: u8,
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Transform {
@@ -114,14 +123,16 @@ impl Model {
             texture_records: BTreeMap::new(),
             writable: true,
             reason: String::new(),
+            records: Vec::new(),
         };
         let mut slots = BTreeMap::<usize, usize>::new();
         let mut seen = BTreeSet::new();
         let mut texture = String::new();
+        let mut material_selector = Vec::new();
         let mut p = 0;
         let mut end = None;
         let mut trans = [0; 3];
-        type Frame = (usize, Option<usize>, [i32; 3], Option<String>);
+        type Frame = (usize, Option<usize>, [i32; 3], Option<(String, Vec<u8>)>);
         let mut stack: Vec<Frame> = Vec::new();
         let mut done = false;
         for _ in 0..30000 {
@@ -134,14 +145,16 @@ impl Model {
                     p = ret;
                     end = e;
                     trans = t;
-                    if let Some(name) = old_texture {
+                    if let Some((name, selector)) = old_texture {
                         texture = name;
+                        material_selector = selector;
                     }
                     continue;
                 }
                 done = true;
                 break;
             }
+            let record_start = p;
             match op {
                 0x38 => {
                     out.writable = false;
@@ -160,13 +173,17 @@ impl Model {
                     end = None;
                 }
                 0x48 => {
-                    out.writable = false;
                     p = target(p + 4, word(c, p + 2)?, len)?;
                 }
                 0xc4 => {
                     out.writable = false;
                     let t = target(p + 16, word(c, p + 14)?, len)?;
-                    stack.push((p + 16, end, trans, Some(texture.clone())));
+                    stack.push((
+                        p + 16,
+                        end,
+                        trans,
+                        Some((texture.clone(), material_selector.clone())),
+                    ));
                     trans[0] += word(c, p + 2)?;
                     trans[1] += word(c, p + 6)?;
                     trans[2] += word(c, p + 4)?;
@@ -175,6 +192,7 @@ impl Model {
                 }
                 0xf0 => {
                     out.writable = false;
+                    material_selector.clear();
                     let mut at = p + 2;
                     if slice(c, at, 2)? == [0x83, 0x0d]
                         && slice(c, at + 6, 1)? == [2]
@@ -294,10 +312,13 @@ impl Model {
                             texture: texture.clone(),
                             uv,
                             uv_offsets,
+                            end: start + p,
+                            material_selector: material_selector.clone(),
                         });
                     }
                 }
                 0xe2 => {
+                    material_selector = slice(c, p, 16)?.to_vec();
                     let name = slice(c, p + 2, 14)?.split(|b| *b == 0).next().unwrap();
                     let name = core::str::from_utf8(name)
                         .map_err(|_| invalid("Non-ASCII texture reference"))?
@@ -310,6 +331,7 @@ impl Model {
                     p += 16;
                 }
                 0xe0 => {
+                    material_selector = slice(c, p, 4)?.to_vec();
                     texture.clear();
                     p += 4;
                 }
@@ -351,6 +373,17 @@ impl Model {
                     };
                 }
             }
+            let length = match op {
+                0x12 | 0x48 => 4,
+                0xc4 => 16,
+                0xf0 => 2,
+                _ => p.saturating_sub(record_start),
+            };
+            out.records.push(Record {
+                offset: start + record_start,
+                length,
+                opcode: op,
+            });
             if p > len {
                 return Err(invalid("Truncated SH record"));
             }
@@ -407,10 +440,38 @@ impl Model {
             return Err(self.reason.clone());
         }
         let original = Self::parse(source)?;
+        if !original.writable {
+            return Err(original.reason.clone());
+        }
+        if self
+            .vertices
+            .iter()
+            .any(|v| v.point.iter().any(|x| !(-32768..=32767).contains(x)))
+        {
+            return Err(invalid("Vertex exceeds signed 16-bit source coordinates"));
+        }
         if original.vertices.len() != self.vertices.len()
             || original.faces.len() != self.faces.len()
         {
             return Err(invalid("Model does not match its source"));
+        }
+        if original
+            .vertices
+            .iter()
+            .zip(&self.vertices)
+            .any(|(a, b)| a.offset != b.offset)
+            || original.faces.iter().zip(&self.faces).any(|(a, b)| {
+                a.offset != b.offset
+                    || a.end != b.end
+                    || a.indices != b.indices
+                    || a.flags != b.flags
+                    || a.sub != b.sub
+                    || a.uv != b.uv
+            })
+        {
+            return Err(invalid(
+                "Geometry edits must preserve source record topology/provenance",
+            ));
         }
         if original
             .vertices
@@ -505,6 +566,16 @@ impl Model {
         }
         Self::parse(&out)?;
         Ok((out, n))
+    }
+    pub fn recolor_face(source: &[u8], face: usize, to: u8) -> Result<Vec<u8>> {
+        let model = Self::parse(source)?;
+        let f = model.faces.get(face).ok_or("No selected face")?;
+        if f.sub & 4 != 0 || u16_at(source, f.offset + 3)? > 255 {
+            return Err(invalid("This face does not use a plain palette color"));
+        }
+        let mut out = source.to_vec();
+        out[f.offset + 3] = to;
+        Ok(out)
     }
     pub fn recolor(source: &[u8], from: u8, to: u8) -> Result<(Vec<u8>, usize)> {
         let model = Self::parse(source)?;
