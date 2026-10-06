@@ -19,6 +19,7 @@ pub struct Face {
     pub color: u8,
     pub texture: String,
     pub uv: Vec<[i32; 2]>,
+    pub uv_offsets: Vec<usize>,
 }
 #[derive(Clone, Debug)]
 pub struct Model {
@@ -268,8 +269,10 @@ impl Model {
                         );
                     }
                     let mut uv = Vec::new();
+                    let mut uv_offsets = Vec::new();
                     if sub & 4 != 0 {
                         for _ in 0..count {
+                            uv_offsets.push(start + p);
                             if flags & 1 != 0 {
                                 let b = slice(c, p, 2)?;
                                 uv.push([b[0] as i32, b[1] as i32]);
@@ -290,6 +293,7 @@ impl Model {
                             color: c[addr + 3],
                             texture: texture.clone(),
                             uv,
+                            uv_offsets,
                         });
                     }
                 }

@@ -130,7 +130,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo run --locked -- --smoke-test
 ```
 
-No Rust dependencies beyond the two local workspace crates. No Python,
+PNG decoding uses the small no_std Rust crates miniz_oxide and adler2,
+compiled into the executable. No Python,
 Blender, OpenFA, web browser, GPU runtime or network access is needed by the
 Windows editor. Python is used only for development checks.
 

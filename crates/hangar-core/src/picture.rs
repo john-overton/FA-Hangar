@@ -242,6 +242,21 @@ impl Pic {
         }
         Ok(count)
     }
+    pub fn patch_indices(&mut self, source: &mut [u8], pixels: &[u8]) -> Result<usize> {
+        if !self.paintable || source.len() != self.source_len || pixels.len() != self.pixels.len() {
+            return Err(invalid("PIC raster cannot be patched safely"));
+        }
+        let mut count = 0;
+        for (i, color) in pixels.iter().enumerate() {
+            let at = self.offsets[i];
+            if at != u32::MAX && self.pixels[i] != *color {
+                source[at as usize] = *color;
+                self.pixels[i] = *color;
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
     pub fn colors(&self, base: &[[u8; 3]; 256]) -> [[u8; 3]; 256] {
         let mut p = *base;
         p[..self.palette.len()].copy_from_slice(&self.palette);

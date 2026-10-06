@@ -8,6 +8,7 @@ pub struct Field {
     pub kind: String,
     pub value: String,
     pub start: usize,
+    pub kind_start: usize,
     pub end: usize,
     pub scaled: bool,
 }
@@ -15,6 +16,7 @@ pub struct Field {
 pub struct Brf {
     pub fields: Vec<Field>,
     pub issues: Vec<String>,
+    pub end_offset: usize,
 }
 fn number(kind: &str, value: &str) -> Result<()> {
     let n = if let Some(s) = value.strip_prefix('$') {
@@ -53,6 +55,7 @@ impl Brf {
         let mut block = String::new();
         let mut labels = BTreeSet::new();
         let mut ended = false;
+        let mut end_offset = 0;
         let mut pos = 0;
         for (line_no, line) in text.split_inclusive('\n').enumerate() {
             let at = pos;
@@ -81,6 +84,7 @@ impl Brf {
             }
             if content == "end" {
                 ended = true;
+                end_offset = at;
                 continue;
             }
             if let Some(label) = content.strip_prefix(':') {
@@ -130,6 +134,7 @@ impl Brf {
                 kind: kind.into(),
                 value: v.into(),
                 start: start + usize::from(scaled),
+                kind_start: at + (kind.as_ptr() as usize - line.as_ptr() as usize),
                 end: start + value.len(),
                 scaled,
             });
@@ -193,7 +198,11 @@ impl Brf {
             }
         }
         let issues = crate::definition::annotate(&mut fields);
-        Ok(Self { fields, issues })
+        Ok(Self {
+            fields,
+            issues,
+            end_offset,
+        })
     }
     pub fn edit_many(
         &self,
