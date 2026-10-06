@@ -63,8 +63,10 @@ pub fn validate_name(name: &str) -> Result<()> {
         || !(1..=3).contains(&ext.len())
         || !stem
             .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_~&-#^".contains(&c))
-        || !ext.bytes().all(|c| c.is_ascii_alphanumeric())
+            .all(|c| c.is_ascii_alphanumeric() || b"!#$%&'()-@^_`{}~".contains(&c))
+        || !ext
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"!#$%&'()-@^_`{}~".contains(&c))
     {
         return Err(invalid("Expected an ASCII 8.3 name"));
     }
@@ -108,7 +110,9 @@ impl Archive {
             let name = core::str::from_utf8(raw.split(|b| *b == 0).next().unwrap())
                 .map_err(|_| invalid("Non-ASCII resource name"))?
                 .to_ascii_uppercase();
-            validate_name(&name)?;
+            validate_name(&name).map_err(|reason| {
+                format!("Invalid LIB entry {name:?} at directory offset 0x{at:X}: {reason}")
+            })?;
             if !names.insert(name.clone()) {
                 return Err(invalid("Duplicate resource name"));
             }
@@ -223,7 +227,35 @@ mod tests {
         );
     }
     #[test]
+    fn dos_punctuation_roundtrips_and_survives_repack() {
+        // Synthetic EALIB: 13-byte name, flag, payload offset and EOF sentinel.
+        let mut bytes = b"EALIB\x01\x00".to_vec();
+        bytes.extend_from_slice(b"$ICON.PIC\0\0\0\0\0");
+        bytes.extend_from_slice(&43_u32.to_le_bytes());
+        bytes.extend_from_slice(&[0; 14]);
+        bytes.extend_from_slice(&46_u32.to_le_bytes());
+        bytes.extend_from_slice(b"pic");
+        let mut archive = Archive::parse(bytes.clone()).unwrap();
+        assert_eq!(archive.entries[0].name, "$ICON.PIC");
+        assert_eq!(archive.bytes().unwrap(), bytes);
+        archive.changed();
+        archive
+            .entries
+            .push(Entry::new("EXTRA.TXT", b"new".to_vec()).unwrap());
+        let repacked = Archive::parse(archive.bytes().unwrap()).unwrap();
+        assert_eq!(repacked.entries[0].read().unwrap(), b"pic");
+        for name in ["$NAME.PIC", "!TEST.PT", "X%Y.SH", "A@B.PIC", "TEST.$$$"] {
+            assert!(validate_name(name).is_ok(), "{name}");
+        }
+        for name in [
+            "A+B.PIC", "A,B.PIC", "A;B.PIC", "A=B.PIC", "A[B.PIC", "A?B.PIC",
+        ] {
+            assert!(validate_name(name).is_err(), "{name}");
+        }
+    }
+    #[test]
     fn names_are_safe_and_unique() {
+        assert!(Entry::new("$ICON.PIC", vec![]).is_ok());
         assert!(Entry::new("#CALL.5K", vec![]).is_ok());
         assert!(Entry::new("^CALL.11K", vec![]).is_ok());
         for name in ["../x", "A/B.PT", "TOOLONG99.PT", "A.B.C", "é.PT"] {
