@@ -621,7 +621,11 @@ impl App {
             out.canvas.line(r, 26, r, h - 22, c::GM_1000);
         }
         out.canvas.rect(0, h - 22, w, 22, c::GM_950);
-        let msg = if self.status.starts_with("Error:") {
+        let msg = if !self.status.starts_with("Opened ")
+            && !self.status.starts_with("Ready")
+            && !self.status.starts_with("Synthetic demo")
+            && !self.status.is_empty()
+        {
             self.status.as_str()
         } else {
             match self.mode {
