@@ -533,7 +533,7 @@ impl App {
         let title = match a {
             FileAction::Png => "Export picture as PNG",
             FileAction::Wav => "Export sound as WAV",
-            FileAction::Palette => "Load display palette (.PAL)",
+            FileAction::Palette => "Load display palette (.PAL or a LIB containing PALETTE.PAL)",
             FileAction::Open => "Open LIB",
             FileAction::Variant => "New aircraft / step 1: imported main SH path",
             FileAction::Save => "Package LIB: new output path",
@@ -596,7 +596,17 @@ impl App {
                 Ok(())
             }
             FileAction::Palette => {
-                self.palette_override = Some(picture::palette(&crate::platform::read(path)?)?);
+                let bytes = crate::platform::read(path)?;
+                let palette = if bytes.starts_with(b"EALIB") {
+                    let archive = Archive::parse(bytes)?;
+                    let at = archive
+                        .find("PALETTE.PAL")
+                        .ok_or("This LIB has no PALETTE.PAL")?;
+                    picture::palette(&archive.entries[at].read()?)?
+                } else {
+                    picture::palette(&bytes)?
+                };
+                self.palette_override = Some(palette);
                 self.refresh();
                 self.status =
                     "Display palette loaded; original resource palettes remain unchanged".into();
@@ -912,6 +922,9 @@ impl App {
                                 if let Some(v) = self.variant_draft.take() {
                                     self.required = v.missing_textures;
                                     self.status=format!("New aircraft {} | {} shared stock references | {} missing textures",self.variant_id,v.shared.len(),self.required.len());
+                                    if self.palette_loaded {
+                                        self.palette_override = Some(self.base_palette);
+                                    }
                                     self.doc = Document::new(v.archive);
                                     self.doc.mark_unsaved();
                                     self.path = format!(

@@ -656,7 +656,7 @@ impl App {
         if y + 24 < bottom {
             o.button(
                 [r + 10, y, w - 20, 23],
-                "Load base palette .PAL",
+                "Load palette from PAL / LIB",
                 Action::File(FileAction::Palette),
                 false,
             );

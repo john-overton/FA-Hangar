@@ -170,7 +170,7 @@ rewrite Gouraud vertex colors or textured materials.
 
 A full embedded PIC palette or a base palette is needed for painting. Hangar
 loads `PALETTE.PAL` from the current LIB, or you can load a 768-byte 6-bit RGB
-PAL for preview. Missing colors are shown in grayscale and painting is blocked
+PAL (or another LIB containing PALETTE.PAL) for preview. Missing colors are shown in grayscale and painting is blocked
 until a complete palette is available. Span holes are preserved; this brush
 does not create new opaque pixels outside existing spans. PNG/WAV export does
 not imply PNG import, arbitrary audio-format conversion or re-UV tools.

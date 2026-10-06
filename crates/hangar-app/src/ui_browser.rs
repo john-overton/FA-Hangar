@@ -51,6 +51,8 @@ impl App {
                         if let Some(ext) = ext {
                             files.retain(|f| {
                                 f.directory
+                                    || (matches!(action, FileAction::Palette)
+                                        && f.name.to_ascii_uppercase().ends_with(".LIB"))
                                     || f.name
                                         .rsplit('.')
                                         .next()
@@ -100,11 +102,28 @@ impl App {
     }
     pub(super) fn recent_open(&mut self, i: usize) {
         if let Some(path) = self.recent.get(i).cloned() {
-            let r = self.open(&path);
-            self.result(r);
-            if !self.status.starts_with("Error:") {
-                self.prompt = None;
-                self.browser = None;
+            let action = self.prompt.as_ref().and_then(|p| {
+                if let PromptKind::File(a) = p.kind {
+                    Some(a)
+                } else {
+                    None
+                }
+            });
+            if matches!(action, Some(FileAction::Open)) {
+                let r = self.open(&path);
+                self.result(r);
+                if !self.status.starts_with("Error:") {
+                    self.prompt = None;
+                    self.browser = None;
+                }
+            } else {
+                let folder = Self::parent_path(&path);
+                self.browse_folder(&folder);
+                if matches!(action, Some(FileAction::Palette | FileAction::Graft)) {
+                    if let Some(p) = &mut self.prompt {
+                        p.value = path;
+                    }
+                }
             }
         }
     }
