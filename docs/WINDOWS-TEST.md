@@ -7,13 +7,13 @@ The EXE is portable; the other files are documentation and licensing.
 
 ## Quick application check
 
-1. Click **Demo**. Confirm a wireframe and seven synthetic entries appear.
+1. Choose **File > Load synthetic demo** (or click the Hangar logo). Confirm a wireframe and seven synthetic entries appear.
 2. Orbit with middle mouse, pan with Shift+middle mouse, zoom with the wheel.
    Try 1/3/7 views and Home to frame.
 3. With DEMO.SH selected, press G, X, type 10, Enter. Confirm Modified.
    Ctrl+Z should restore Saved. Try R/Z/30 and S/X/120, then undo.
-4. Select DEMO.PT, click Properties, edit a numeric field. Ctrl+A clears the
-   value before typing. Verify undo/redo.
+4. Select DEMO.PT, click Flight, edit a numeric field. Ctrl+A clears the
+   value before typing. Verify amber highlighting, saved values and undo/redo.
 5. Ctrl+S, enter a **new full output path**, and press Enter. Reopen the LIB
    with Ctrl+O and confirm the changes. Reusing an existing output path should
    display an error without changing that file.
@@ -25,7 +25,8 @@ The synthetic demo is only an editor test; do not install it in the game.
 
 Use a copy of your own game installation for the game check.
 
-1. Open FA_2.LIB and search for a donor PT, for example F18.PT. Search for
+1. Open FA_1.LIB first and confirm its 2,001 entries load without the old
+   ASCII-name error. Then open FA_2.LIB and search for a donor PT, for example F18.PT. Search for
    F18.SH separately to inspect the main model, then export it to a new SH file.
 2. Select F18.PT and click **New aircraft**. Supply that exported SH, ID
    `TEST18`, and display name `Hangar F18 Test`; type CREATE at the review.

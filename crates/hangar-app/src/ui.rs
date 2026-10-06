@@ -1,4 +1,5 @@
 use alloc::{
+    collections::BTreeMap,
     format,
     string::{String, ToString},
     vec,
@@ -22,6 +23,7 @@ pub enum Draw {
     Rect(i32, i32, i32, i32, u32),
     Line(i32, i32, i32, i32, u32),
     Text(i32, i32, String, u32),
+    Label(i32, i32, String, u32),
 }
 pub struct Canvas {
     pub commands: Vec<Draw>,
@@ -35,6 +37,9 @@ impl Canvas {
     pub fn line(&mut self, x: i32, y: i32, a: i32, b: i32, color: Rgb) {
         self.commands.push(Draw::Line(x, y, a, b, color.0));
     }
+    pub fn label(&mut self, x: i32, y: i32, s: &str, color: Rgb) {
+        self.commands.push(Draw::Label(x, y, s.into(), color.0));
+    }
     pub fn text(&mut self, x: i32, y: i32, s: &str, color: Rgb) {
         self.commands.push(Draw::Text(x, y, s.into(), color.0));
     }
@@ -44,6 +49,7 @@ enum Mode {
     Browse,
     Model,
     Properties,
+    Graft,
     Package,
 }
 #[derive(Clone, Copy)]
@@ -118,6 +124,15 @@ pub struct App {
     variant_id: String,
     variant_draft: Option<Variant>,
     required: Vec<String>,
+    collapsed: [bool; 9],
+    category: Option<usize>,
+    menu: Option<usize>,
+    dock: u8,
+    table_scroll: usize,
+    inspector_scroll: i32,
+    original_brf: Option<Brf>,
+    model_entry: Option<usize>,
+    validation: Option<String>,
 }
 fn extension(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or("")
@@ -149,8 +164,8 @@ impl App {
             preview: None,
             detail: String::new(),
             prompt: None,
-            yaw: -25,
-            pitch: 22,
+            yaw: 0,
+            pitch: -90,
             zoom: 100,
             pan: [0, 0],
             perspective: false,
@@ -163,6 +178,15 @@ impl App {
             variant_id: String::new(),
             variant_draft: None,
             required: Vec::new(),
+            collapsed: [true; 9],
+            category: None,
+            menu: None,
+            dock: 0,
+            table_scroll: 0,
+            inspector_scroll: 0,
+            original_brf: None,
+            model_entry: None,
+            validation: None,
         }
     }
     pub fn demo(&mut self) {
@@ -182,6 +206,12 @@ impl App {
         self.doc = Document::new(a);
         self.required.clear();
         self.path = "Synthetic demo (not a game asset)".into();
+        self.collapsed = [true; 9];
+        self.category = None;
+        self.scroll = 0;
+        self.table_scroll = 0;
+        self.filter.clear();
+        self.mode = Mode::Model;
         self.selected = 0;
         self.refresh();
         self.status =
@@ -198,6 +228,10 @@ impl App {
         self.selected = 0;
         self.scroll = 0;
         self.filter.clear();
+        self.category = None;
+        self.collapsed = [true; 9];
+        self.table_scroll = 0;
+        self.mode = Mode::Browse;
         self.refresh();
         self.status = format!(
             "Opened {} | {} entries",
@@ -208,9 +242,25 @@ impl App {
     }
     pub fn select_entry(&mut self, index: usize) {
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
-        let rows = ((self.height - 142) / 20).max(1) as usize;
-        if self.selected < self.scroll || self.selected >= self.scroll + rows {
-            self.scroll = self.selected.saturating_sub(rows / 2);
+        self.collapsed[view::category_of(self.name())] = false;
+        self.category = Some(view::category_of(self.name()));
+        let table_position = self
+            .browser_entries()
+            .iter()
+            .position(|i| *i == self.selected)
+            .unwrap_or(0);
+        let table_rows = ((self.dock_y() - 80) / 24).max(1) as usize;
+        if table_position < self.table_scroll || table_position >= self.table_scroll + table_rows {
+            self.table_scroll = table_position.saturating_sub(table_rows / 2);
+        }
+        let position = self
+            .tree_rows()
+            .iter()
+            .position(|(_, i)| *i == Some(self.selected))
+            .unwrap_or(0);
+        let rows = ((self.height - 132) / 20).max(1) as usize;
+        if position < self.scroll || position >= self.scroll + rows {
+            self.scroll = position.saturating_sub(rows / 2);
         }
         self.refresh();
     }
@@ -224,6 +274,10 @@ impl App {
     fn refresh(&mut self) {
         self.brf = None;
         self.model = None;
+        self.model_entry = None;
+        self.original_brf = None;
+        self.inspector_scroll = 0;
+        self.validation = None;
         self.preview = None;
         self.data.clear();
         self.field_scroll = 0;
@@ -245,6 +299,7 @@ impl App {
                                     m.reason.clone()
                                 };
                                 self.model = Some(m);
+                                self.model_entry = Some(self.selected);
                             }
                             Err(e) => self.detail = e,
                         }
@@ -264,6 +319,37 @@ impl App {
                 }
                 Err(err) => self.detail = err,
             }
+        }
+        if let Some(old) = self.doc.saved_entry(self.name()) {
+            if let Ok(data) = old.read() {
+                self.original_brf = Brf::parse(&data, extension(self.name())).ok();
+            }
+        }
+        if let Some(brf) = &self.brf {
+            if let Some(ptr) = brf
+                .fields
+                .iter()
+                .find(|f| f.label == "object.shape" && f.kind == "ptr")
+            {
+                if let Some(field) = brf
+                    .fields
+                    .iter()
+                    .find(|f| f.block == ptr.value && f.kind == "string")
+                {
+                    let name = field.value.trim_matches('"');
+                    if let Some(index) = self.doc.archive.find(name) {
+                        if let Ok(bytes) = self.doc.archive.entries[index].read() {
+                            if let Ok(model) = Model::parse(&bytes) {
+                                self.model = Some(model);
+                                self.model_entry = Some(index);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !self.doc.archive.entries.is_empty() {
+            self.collapsed[view::category_of(self.name())] = false;
         }
         self.frame();
     }
@@ -347,6 +433,11 @@ impl App {
                 Archive::parse(b.clone())?;
                 crate::platform::write_new(path, &b)?;
                 self.doc.mark_saved();
+                let field = self.field_selected;
+                let scroll = self.field_scroll;
+                self.refresh();
+                self.field_selected = field;
+                self.field_scroll = scroll;
                 self.path = path.into();
                 self.status = format!(
                     "Packaged {} entries into {path}",
@@ -477,6 +568,13 @@ impl App {
         }
     }
     pub fn key(&mut self, key: Key, ctrl: bool, shift: bool) {
+        if self.menu.is_some() {
+            self.menu = None;
+            if matches!(key, Key::Escape) {
+                return;
+            }
+        }
+
         if self.prompt.is_some() {
             match key {
                 Key::Escape => {
@@ -625,10 +723,14 @@ impl App {
                 Key::Escape | Key::Enter => self.filter_focus = false,
                 Key::Backspace => {
                     self.filter.pop();
+                    self.category = None;
+                    self.table_scroll = 0;
                     self.scroll = 0;
                 }
                 Key::Char(c) if !ctrl => {
                     self.filter.push(c);
+                    self.category = None;
+                    self.table_scroll = 0;
                     self.scroll = 0;
                 }
                 _ => {}
@@ -636,12 +738,12 @@ impl App {
             return;
         }
         match key {
-            Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
+            Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.model.is_some()=>{
-                if self.model.as_ref().is_some_and(|m|!m.writable){self.status=self.model.as_ref().unwrap().reason.clone();return;}
+                if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
                 let op=ch.to_ascii_lowercase();self.prompt=Some(Prompt{kind:PromptKind::Transform(op),title:match op{'g'=>"Move in source units",'r'=>"Rotate in degrees",_=>"Scale in percent"}.into(),value:String::new(),axis:0});self.transform_preview();
             },
-            Key::Char('1')|Key::Num(1)=>{self.yaw=0;self.pitch=0;},Key::Char('3')|Key::Num(3)=>{self.yaw=90;self.pitch=0;},Key::Char('7')|Key::Num(7)=>{self.yaw=0;self.pitch=90;},Key::Char('5')|Key::Num(5)=>self.perspective = !self.perspective,
+            Key::Char('1')|Key::Num(1)=>{self.yaw=0;self.pitch=0;},Key::Char('3')|Key::Num(3)=>{self.yaw=90;self.pitch=0;},Key::Char('7')|Key::Num(7)=>{self.yaw=0;self.pitch = -90;},Key::Char('5')|Key::Num(5)=>self.perspective = !self.perspective,
             Key::Home|Key::Char('.')=>self.frame(),
             Key::Up=>{self.select_entry(self.selected.saturating_sub(1));},
             Key::Down=>{self.select_entry(self.selected+1);},
@@ -667,123 +769,52 @@ impl App {
         if self.width < 1050 {
             210
         } else {
-            260
+            280
         }
     }
     fn right(&self) -> i32 {
-        self.width - if self.width < 1050 { 260 } else { 322 }
+        self.width - if self.width < 1050 { 270 } else { 322 }
     }
-    fn visible(&self) -> Vec<usize> {
-        let f = self.filter.to_ascii_uppercase();
-        self.doc
-            .archive
-            .entries
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| e.name.contains(&f).then_some(i))
-            .collect()
+    fn dock_y(&self) -> i32 {
+        self.height - if self.height < 700 { 170 } else { 208 }
     }
     pub fn click(&mut self, x: i32, y: i32, button: u8, down: bool) {
         self.mouse = [x, y];
         if button == 2 {
-            self.drag =
-                down && x > self.left() && x < self.right() && y > 82 && y < self.height - 165;
+            self.drag = down
+                && self.prompt.is_none()
+                && self.mode == Mode::Model
+                && x > self.left()
+                && x < self.right()
+                && y > 54
+                && y < self.dock_y();
             return;
         }
         if !down {
             return;
         }
-        if button == 3 && self.prompt.is_some() {
-            self.key(Key::Escape, false, false);
+        if button == 3 {
+            self.menu = None;
+            if self.prompt.is_some() {
+                self.key(Key::Escape, false, false);
+            }
             return;
         }
         if button != 1 {
             return;
         }
-        if self.prompt.is_some() {
-            return;
-        }
-        self.filter_focus = false;
-        if y < 26 {
-            match x {
-                0..=164 => self.file_prompt(FileAction::Open),
-                165..=294 => self.file_prompt(FileAction::Save),
-                295..=370 => {
-                    self.doc.undo();
-                    self.refresh();
-                }
-                371..=445 => {
-                    self.doc.redo();
-                    self.refresh();
-                }
-                446..=530 => self.demo(),
-                531..=700 => self.file_prompt(FileAction::Variant),
-                _ => {}
-            }
-            return;
-        }
-        if (30..=54).contains(&y) {
-            self.mode = match x {
-                0..=130 => Mode::Browse,
-                131..=245 => Mode::Model,
-                246..=390 => Mode::Properties,
-                _ => Mode::Package,
-            };
-            return;
-        }
-        if x < self.left() {
-            if y < 110 {
-                self.filter_focus = true;
-                return;
-            }
-            let row = ((y - 116) / 20) as usize + self.scroll;
-            if let Some(i) = self.visible().get(row) {
-                self.selected = *i;
-                self.refresh();
-            }
-            return;
-        }
-        if x >= self.right() {
-            if (110..138).contains(&y) {
-                self.file_prompt(FileAction::Export);
-                return;
-            }
-            if (142..170).contains(&y) {
-                self.file_prompt(FileAction::Replace);
-                return;
-            }
-            if (174..202).contains(&y) {
-                self.file_prompt(FileAction::Import);
-                return;
-            }
-            if (206..234).contains(&y) && self.model.is_some() {
-                self.file_prompt(FileAction::Obj);
-                return;
-            }
-            if y >= 300 && self.brf.is_some() {
-                let row = ((y - 300) / 36) as usize + self.field_scroll;
-                self.edit_field(row);
-                return;
-            }
-        }
-        if self.mode == Mode::Package
-            && x > self.left() + 24
-            && x < self.left() + 220
-            && (250..282).contains(&y)
-        {
-            self.file_prompt(FileAction::Save);
-        }
-        if self.mode == Mode::Properties && self.brf.is_some() && y >= 140 && y < self.height - 165
-        {
-            let row = ((y - 140) / 28) as usize + self.field_scroll;
-            self.edit_field(row);
-        }
-        if y > self.height - 145 && y < self.height - 110 {
-            if x < self.left() + 140 {
-                self.file_prompt(FileAction::Import);
-            } else if x < self.left() + 320 {
-                self.file_prompt(FileAction::Graft);
-            }
+        let action = self
+            .layout()
+            .hits
+            .into_iter()
+            .rev()
+            .find(|h| h.contains(x, y))
+            .map(|h| h.action);
+        if let Some(action) = action {
+            self.act(action);
+        } else {
+            self.menu = None;
+            self.filter_focus = false;
         }
     }
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
@@ -805,413 +836,27 @@ impl App {
             return;
         }
         if self.mouse[0] < self.left() {
-            let count = self.visible().len();
-            let rows = ((self.height - 140) / 20).max(1) as usize;
+            let count = self.tree_rows().len();
+            let rows = ((self.height - 132) / 20).max(1) as usize;
             self.scroll = (self.scroll as i32 - delta * 3)
                 .clamp(0, count.saturating_sub(rows) as i32) as usize;
-        } else if self.mouse[0] >= self.right() || self.mode == Mode::Properties {
+        } else if self.mouse[0] >= self.right() {
+            self.inspector_scroll =
+                (self.inspector_scroll - delta * 3).clamp(0, self.inspector_max_scroll());
+        } else if self.mouse[1] > self.dock_y()
+            || matches!(self.mode, Mode::Properties | Mode::Graft)
+        {
             let n = self.brf.as_ref().map_or(0, |b| b.fields.len());
             self.field_scroll = (self.field_scroll as i32 - delta * 3)
                 .clamp(0, n.saturating_sub(1) as i32) as usize;
+        } else if self.mode == Mode::Browse {
+            let n = self.browser_entries().len();
+            let rows = ((self.dock_y() - 86) / 24).max(1) as usize;
+            self.table_scroll = (self.table_scroll as i32 - delta * 3)
+                .clamp(0, n.saturating_sub(rows) as i32) as usize;
         } else {
             self.zoom = (self.zoom + delta * 10).clamp(10, 1000);
         }
-    }
-    fn button(canvas: &mut Canvas, x: i32, y: i32, w: i32, label: &str) {
-        canvas.rect(x, y, w, 22, c::GM_700);
-        canvas.line(x, y, x + w, y, c::GM_600);
-        canvas.text(x + 8, y + 15, label, c::INK_MUTED);
-    }
-    pub fn draw(&self) -> Canvas {
-        let mut d = Canvas {
-            commands: Vec::new(),
-        };
-        let w = self.width;
-        let h = self.height;
-        let l = self.left();
-        let r = self.right();
-        let vw = r - l;
-        d.rect(0, 0, w, h, c::GM_900);
-        d.rect(0, 0, w, 26, c::GM_950);
-        d.text(12, 18, "TORE / Open LIB", c::INK);
-        d.text(175, 18, "Package LIB", c::AMBER);
-        d.text(308, 18, "Undo", c::INK_MUTED);
-        d.text(383, 18, "Redo", c::INK_MUTED);
-        d.text(458, 18, "Demo", c::INK_MUTED);
-        d.text(544, 18, "New aircraft", c::STEEL);
-        d.text(w - 170, 18, "HANGAR  /  0.1", c::INK_FAINT);
-        for (x, size, label, mode) in [
-            (8, 122, "Browse", Mode::Browse),
-            (132, 110, "Model", Mode::Model),
-            (244, 144, "Properties", Mode::Properties),
-            (390, 120, "Package", Mode::Package),
-        ] {
-            if self.mode == mode {
-                d.rect(x, 30, size, 24, c::AMBER_DEEP);
-                d.line(x, 53, x + size, 53, c::AMBER);
-            }
-            d.text(
-                x + 14,
-                47,
-                label,
-                if self.mode == mode {
-                    c::AMBER
-                } else {
-                    c::INK_MUTED
-                },
-            );
-        }
-        d.rect(0, 56, l, h - 78, c::GM_800);
-        d.rect(r, 56, w - r, h - 78, c::GM_800);
-        d.rect(l + 1, 56, vw - 2, h - 78, c::GM_950);
-        d.rect(0, 56, l, 28, c::GM_700);
-        d.text(12, 75, "LIB ENTRIES", c::INK_MUTED);
-        d.text(
-            l - 55,
-            75,
-            &format!("{}", self.doc.archive.entries.len()),
-            c::INK_FAINT,
-        );
-        d.rect(8, 90, l - 16, 20, c::GM_950);
-        d.text(
-            14,
-            104,
-            &short(
-                &if self.filter.is_empty() {
-                    "Search entries...  Ctrl+F".into()
-                } else {
-                    self.filter.clone()
-                },
-                ((l - 26) / 7) as usize,
-            ),
-            if self.filter_focus {
-                c::AMBER
-            } else {
-                c::INK_FAINT
-            },
-        );
-        if self.filter_focus {
-            d.line(8, 110, l - 8, 110, c::FOCUS);
-        }
-        let rows = ((h - 142) / 20).max(0) as usize;
-        for (row, i) in self
-            .visible()
-            .iter()
-            .skip(self.scroll)
-            .take(rows)
-            .enumerate()
-        {
-            let e = &self.doc.archive.entries[*i];
-            let y = 116 + row as i32 * 20;
-            if *i == self.selected {
-                d.rect(4, y, l - 8, 20, c::AMBER_DEEP);
-                d.rect(4, y, 2, 20, c::AMBER);
-            } else if row % 2 == 1 {
-                d.rect(4, y, l - 8, 20, c::GM_900);
-            }
-            d.text(
-                16,
-                y + 14,
-                &short(&e.name, 18),
-                if *i == self.selected {
-                    c::AMBER_BRIGHT
-                } else {
-                    c::INK
-                },
-            );
-            d.text(l - 42, y + 14, extension(&e.name), c::INK_FAINT);
-        }
-        d.rect(l + 1, 56, vw - 2, 28, c::GM_800);
-        d.text(l + 14, 75, &short(self.name(), 20), c::INK);
-        d.text(
-            (r - 165).max(l + 175),
-            75,
-            if self.perspective {
-                "Perspective"
-            } else {
-                "Orthographic"
-            },
-            c::INK_FAINT,
-        );
-        d.rect(r, 56, w - r, 28, c::GM_700);
-        d.text(r + 14, 75, "ENTRY / INSPECTOR", c::INK_MUTED);
-        d.text(r + 14, 102, &short(self.name(), 32), c::AMBER);
-        Self::button(&mut d, r + 12, 114, w - r - 24, "Export entry   Ctrl+E");
-        Self::button(&mut d, r + 12, 146, w - r - 24, "Replace entry");
-        Self::button(&mut d, r + 12, 178, w - r - 24, "Add entry      Ctrl+I");
-        if self.model.is_some() {
-            Self::button(&mut d, r + 12, 210, w - r - 24, "Export geometry as OBJ");
-        }
-        d.text(
-            r + 14,
-            260,
-            &format!("{} bytes decoded", self.data.len()),
-            c::INK_MUTED,
-        );
-        d.text(r + 14, 282, "FIELDS / SOURCE UNITS", c::INK_FAINT);
-        if let Some(b) = &self.brf {
-            for (row, (i, f)) in b
-                .fields
-                .iter()
-                .enumerate()
-                .skip(self.field_scroll)
-                .take(((h - 332) / 36).max(0) as usize)
-                .enumerate()
-            {
-                let y = 300 + row as i32 * 36;
-                d.text(
-                    r + 14,
-                    y + 12,
-                    &short(&f.label, ((w - r - 28) / 7) as usize),
-                    c::INK_MUTED,
-                );
-                d.rect(
-                    r + 12,
-                    y + 16,
-                    w - r - 24,
-                    18,
-                    if i == self.field_selected {
-                        c::AMBER_DEEP
-                    } else {
-                        c::GM_950
-                    },
-                );
-                d.text(
-                    r + 20,
-                    y + 29,
-                    &short(&f.value, ((w - r - 40) / 7) as usize),
-                    c::INK,
-                );
-            }
-        } else if let Some(m) = &self.model {
-            d.text(
-                r + 14,
-                312,
-                &format!("{} vertices", m.vertices.len()),
-                c::INK,
-            );
-            d.text(r + 14, 338, &format!("{} faces", m.faces.len()), c::INK);
-            d.text(
-                r + 14,
-                376,
-                if m.writable {
-                    "G  Move   R  Rotate   S  Scale"
-                } else {
-                    "Read-only static pose"
-                },
-                if m.writable { c::AMBER } else { c::STEEL },
-            );
-            d.text(r + 14, 400, "MMB orbit / Shift+MMB pan", c::INK_MUTED);
-            d.text(r + 14, 422, "Wheel zoom / Home frame", c::INK_MUTED);
-            d.text(r + 14, 444, "1 front / 3 side / 7 top", c::INK_MUTED);
-        }
-        match self.mode {
-            Mode::Package => {
-                d.text(l + 24, 130, "PACKAGE LIB", c::AMBER);
-                d.text(
-                    l + 24,
-                    165,
-                    &format!("{} entries ready", self.doc.archive.entries.len()),
-                    c::INK,
-                );
-                d.text(
-                    l + 24,
-                    194,
-                    "Unchanged compression is preserved.",
-                    c::INK_MUTED,
-                );
-                d.text(
-                    l + 24,
-                    218,
-                    "Writes a new file; existing files are protected.",
-                    c::INK_MUTED,
-                );
-                Self::button(&mut d, l + 24, 254, 196, "Choose output path");
-            }
-            Mode::Properties if self.brf.is_some() => {
-                d.text(
-                    l + 18,
-                    112,
-                    "FIELD                             VALUE",
-                    c::INK_FAINT,
-                );
-                for (row, f) in self
-                    .brf
-                    .as_ref()
-                    .unwrap()
-                    .fields
-                    .iter()
-                    .skip(self.field_scroll)
-                    .take(((h - 315) / 28).max(0) as usize)
-                    .enumerate()
-                {
-                    let y = 140 + row as i32 * 28;
-                    if row % 2 == 0 {
-                        d.rect(l + 8, y, vw - 16, 26, c::GM_900);
-                    }
-                    d.text(
-                        l + 18,
-                        y + 18,
-                        &short(&f.label, ((vw * 2 / 3 - 32) / 7).max(3) as usize),
-                        c::INK_MUTED,
-                    );
-                    d.text(
-                        l + vw * 2 / 3,
-                        y + 18,
-                        &short(&f.value, ((vw / 3 - 16) / 7).max(3) as usize),
-                        c::INK,
-                    );
-                }
-            }
-            Mode::Browse => {
-                d.text(l + 18, 116, "RESOURCE BYTES / HEX", c::INK_FAINT);
-                for (row, bytes) in self
-                    .data
-                    .chunks(12)
-                    .take(((h - 300) / 20).max(0) as usize)
-                    .enumerate()
-                {
-                    let mut s = format!("{:06X}  ", row * 12);
-                    for b in bytes {
-                        s.push_str(&format!("{b:02X} "));
-                    }
-                    d.text(
-                        l + 18,
-                        148 + row as i32 * 20,
-                        &short(&s, ((vw - 32) / 7).max(1) as usize),
-                        c::INK_MUTED,
-                    );
-                }
-            }
-            _ => {
-                if let Some(m) = self.preview.as_ref().or(self.model.as_ref()) {
-                    self.viewport(&mut d, m, l + 1, 84, vw - 2, h - 250);
-                } else {
-                    d.text(l + 28, 150, "TORE HANGAR", c::INK);
-                    d.text(
-                        l + 28,
-                        184,
-                        "A workshop for Fighters Anthology LIBs",
-                        c::INK_MUTED,
-                    );
-                    d.text(l + 28, 230, "Open LIB  /  Ctrl+O", c::AMBER);
-                    d.text(
-                        l + 28,
-                        260,
-                        "Select SH for a model; PT/JT/OT for fields.",
-                        c::INK_MUTED,
-                    );
-                    d.text(
-                        l + 28,
-                        292,
-                        "Click Properties to edit definition values.",
-                        c::INK_MUTED,
-                    );
-                    d.text(
-                        l + 28,
-                        334,
-                        "Demo contains synthetic resources only.",
-                        c::INK_FAINT,
-                    );
-                }
-            }
-        }
-        let dock = h - 164;
-        d.rect(l + 1, dock, vw - 2, 142, c::GM_800);
-        d.line(l, dock, r, dock, c::GM_1000);
-        Self::button(&mut d, l + 14, dock + 18, 120, "Add entry");
-        Self::button(&mut d, l + 146, dock + 18, 164, "Copy donor field");
-        d.text(
-            l + 14,
-            dock + 66,
-            &short(&self.detail, ((vw - 28) / 7).max(1) as usize),
-            c::INK_MUTED,
-        );
-        d.text(
-            l + 14,
-            dock + 92,
-            "Edits stay in memory until Package LIB.",
-            c::INK_FAINT,
-        );
-        d.text(
-            l + 14,
-            dock + 117,
-            &short(&self.path, ((vw - 28) / 7).max(1) as usize),
-            c::INK_FAINT,
-        );
-        d.line(l, 56, l, h - 22, c::GM_1000);
-        d.line(r, 56, r, h - 22, c::GM_1000);
-        d.rect(0, h - 22, w, 22, c::GM_950);
-        d.text(
-            12,
-            h - 7,
-            &short(&self.status, ((w - 135) / 7).max(1) as usize),
-            if self.status.starts_with("Error:") {
-                c::DANGER
-            } else {
-                c::INK_MUTED
-            },
-        );
-        d.text(
-            w - 112,
-            h - 7,
-            if self.doc.dirty() {
-                "* MODIFIED"
-            } else {
-                "  SAVED"
-            },
-            if self.doc.dirty() {
-                c::AMBER
-            } else {
-                c::INK_FAINT
-            },
-        );
-        if let Some(p) = &self.prompt {
-            let pw = (w - 48).min(700);
-            let x = (w - pw) / 2;
-            let y = h / 2 - 66;
-            d.rect(x - 2, y - 2, pw + 4, 144, c::GM_1000);
-            d.rect(x, y, pw, 140, c::GM_800);
-            d.text(
-                x + 16,
-                y + 26,
-                &short(&p.title, ((pw - 32) / 7) as usize),
-                c::INK,
-            );
-            d.rect(x + 14, y + 42, pw - 28, 30, c::GM_950);
-            d.line(x + 14, y + 72, x + pw - 14, y + 72, c::FOCUS);
-            let chars = ((pw - 48) / 7) as usize;
-            let value: String = p
-                .value
-                .chars()
-                .rev()
-                .take(chars)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            d.text(x + 22, y + 63, &format!("{value}_"), c::AMBER);
-            let hint = if matches!(p.kind, PromptKind::Transform(_)) {
-                format!(
-                    "Axis {} | X/Y/Z constrain | Enter apply | Esc cancel",
-                    ['X', 'Y', 'Z'][p.axis]
-                )
-            } else {
-                "Enter apply / open | Esc cancel | Ctrl+A clear".into()
-            };
-            d.text(x + 16, y + 99, &hint, c::INK_MUTED);
-            d.text(
-                x + 16,
-                y + 122,
-                &short(&self.status, ((pw - 32) / 7) as usize),
-                if self.status.starts_with("Error:") {
-                    c::DANGER
-                } else {
-                    c::INK_FAINT
-                },
-            );
-        }
-        d
     }
     fn viewport(&self, d: &mut Canvas, m: &Model, x: i32, y: i32, w: i32, h: i32) {
         let mut min = [i32::MAX; 3];
@@ -1247,45 +892,57 @@ impl App {
                 d.line(a[0], a[1], b[0], b[1], color);
             }
         };
-        for i in -10..=10 {
+        for i in -40..=40 {
             let a = i * span / 10;
             line(
                 d,
-                project([a + center[0], center[1] - span, min[2]]),
-                project([a + center[0], center[1] + span, min[2]]),
+                project([a + center[0], center[1] - span * 4, 0]),
+                project([a + center[0], center[1] + span * 4, 0]),
                 c::GM_800,
             );
             line(
                 d,
-                project([center[0] - span, a + center[1], min[2]]),
-                project([center[0] + span, a + center[1], min[2]]),
+                project([center[0] - span * 4, a + center[1], 0]),
+                project([center[0] + span * 4, a + center[1], 0]),
                 c::GM_800,
             );
         }
+        let mut edges = BTreeMap::<([i32; 3], [i32; 3]), (usize, bool, bool)>::new();
         for f in &m.faces {
+            let a = project(m.vertices[f.indices[0]].point);
+            let b = project(m.vertices[f.indices[1]].point);
+            let c = project(m.vertices[f.indices[2]].point);
+            let front = (b[0] as i64 - a[0] as i64) * (c[1] as i64 - a[1] as i64)
+                - (b[1] as i64 - a[1] as i64) * (c[0] as i64 - a[0] as i64)
+                > 0;
             for i in 0..f.indices.len() {
                 let a = m.vertices[f.indices[i]].point;
                 let b = m.vertices[f.indices[(i + 1) % f.indices.len()]].point;
-                line(d, project(a), project(b), c::AMBER);
+                let edge = edges
+                    .entry(if a < b { (a, b) } else { (b, a) })
+                    .or_insert((0, false, false));
+                edge.0 += 1;
+                edge.1 |= front;
+                edge.2 |= !front;
             }
+        }
+        for ((a, b), (n, front, back)) in edges {
+            line(
+                d,
+                project(a),
+                project(b),
+                if n == 1 || (front && back) {
+                    c::AMBER
+                } else {
+                    c::GM_500
+                },
+            );
         }
         for (j, color) in [c::AXIS_X, c::AXIS_Y, c::AXIS_Z].into_iter().enumerate() {
             let mut p = center;
             p[j] += span / 3;
             line(d, project(center), project(p), color);
         }
-        d.text(x + 16, y + 26, "STATIC POSE / WIREFRAME", c::INK_FAINT);
-        d.text(
-            x + 16,
-            y + h - 18,
-            &format!(
-                "{} vertices   {} faces   {}%",
-                m.vertices.len(),
-                m.faces.len(),
-                self.zoom
-            ),
-            c::INK_MUTED,
-        );
     }
 }
 // Integer Cohen-Sutherland clipping prevents models drawing over adjacent editors.
@@ -1329,3 +986,6 @@ fn clip(mut a: [i32; 2], mut b: [i32; 2], r: [i32; 4]) -> Option<([i32; 2], [i32
     }
     None
 }
+
+#[path = "ui_view.rs"]
+mod view;

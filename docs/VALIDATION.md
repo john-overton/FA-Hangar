@@ -1,17 +1,21 @@
-# First test build validation
+# Current test build validation
 
 2026-10-06. Implementation work, not a claim of original-game or Windows 98
 acceptance. Tests used Rust 1.91.1. No game payloads, extracted models or retail
 screenshots are committed or uploaded in build artifacts.
 
-- Eleven core tests pass: archive boundaries, duplicate/unsafe names, DCL
+- Twelve core tests pass: archive boundaries, duplicate/unsafe names, DCL
   malformed streams, untouched compressed bytes, BRF lossless edits, history
-  branches, shape bounds/transforms and donor-family creation/rejection.
+  branches, shape bounds/transforms, DOS-punctuation names, saved-value
+  comparisons and donor-family creation/rejection.
 - Linux shared-UI smoke passes: selection, transform/invalid-input handling,
-  undo, BRF edit, donor wizard, package save and reopening.
+  undo, BRF edit, donor wizard, package save and reopening. The 0.2 smoke also
+  clicks controls through rendered hit regions, checks linked PT/SH selection,
+  menus, highlights, and control bounds at 800x600 across all five workspaces.
 - Linux native Xlib rendering was exercised on an unmapped private window and
   captured to a local image. The real F18-derived variant was visually checked
-  for layout and correct source-axis orientation. No user desktop window was
+  for layout and correct source-axis orientation. All five redesigned workspaces
+  were rendered natively; 1280x800 and 800x600 layouts were visually checked. No user desktop window was
   opened for this check.
 - Local Rust formatting, strict Clippy, Linux build, and both Windows release
   cross-builds pass. Both PE import/header audits pass; the executables import
@@ -20,6 +24,11 @@ screenshots are committed or uploaded in build artifacts.
   running each custom-runtime executable's headless smoke path. These checks
   exercise the allocator, integer math, drawing commands, transform and undo.
   They do not exercise native GDI mouse/window interactions or a Win98 kernel.
+- FA_1.LIB's reported failure was reproduced: 99 picture names begin with `$`.
+  The name validator now accepts ASCII DOS 8.3 punctuation while rejecting
+  separators and other invalid path characters. FA_1.LIB (2,001 entries),
+  FA_2.LIB, FA_4B.LIB and FA_4D.LIB all pass byte-identical no-op repacks;
+  source hashes stay unchanged.
 - A user-owned retail FA_2.LIB containing 5,405 entries was opened locally.
   A no-op repack was byte-identical. Editing F18.PT object weight changed only
   its payload; all 5,404 other payloads and compression flags were identical.

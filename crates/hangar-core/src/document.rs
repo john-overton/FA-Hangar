@@ -3,7 +3,11 @@ use crate::{
     archive::{Archive, Entry},
     invalid, Result,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::String,
+    vec::Vec,
+};
 #[derive(Clone)]
 struct Change {
     at: usize,
@@ -16,10 +20,16 @@ pub struct Document {
     redo: Vec<Change>,
     revision: u64,
     saved_revision: Option<u64>,
+    saved: BTreeMap<String, Entry>,
 }
 impl Document {
     pub fn new(archive: Archive) -> Self {
+        let mut saved = BTreeMap::new();
+        for e in &archive.entries {
+            saved.insert(e.name.clone(), e.clone());
+        }
         Self {
+            saved,
             archive,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -32,9 +42,38 @@ impl Document {
     }
     pub fn mark_unsaved(&mut self) {
         self.saved_revision = None;
+        self.saved.clear();
     }
     pub fn mark_saved(&mut self) {
         self.saved_revision = Some(self.revision);
+        self.saved.clear();
+        for e in &self.archive.entries {
+            self.saved.insert(e.name.clone(), e.clone());
+        }
+    }
+    pub fn saved_entry(&self, name: &str) -> Option<&Entry> {
+        self.saved.get(name)
+    }
+    pub fn entry_changed(&self, entry: &Entry) -> bool {
+        self.saved
+            .get(&entry.name)
+            .is_none_or(|old| !old.same_storage(entry))
+    }
+    pub fn changed_count(&self) -> usize {
+        let mut names = BTreeSet::new();
+        for e in &self.archive.entries {
+            names.insert(e.name.as_str());
+        }
+        self.archive
+            .entries
+            .iter()
+            .filter(|e| self.entry_changed(e))
+            .count()
+            + self
+                .saved
+                .keys()
+                .filter(|name| !names.contains(name.as_str()))
+                .count()
     }
     fn apply(&mut self, change: Change) {
         self.archive.changed();
@@ -151,8 +190,11 @@ mod tests {
         let mut d = Document::new(Archive::empty());
         d.import("A.PT", vec![1]).unwrap();
         d.mark_saved();
+        assert_eq!(d.changed_count(), 0);
         d.replace(0, vec![2]).unwrap();
         assert!(d.dirty());
+        assert_eq!(d.changed_count(), 1);
+        assert_eq!(d.saved_entry("A.PT").unwrap().read().unwrap(), vec![1]);
         d.undo();
         assert!(!d.dirty());
         d.redo();

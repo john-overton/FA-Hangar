@@ -365,6 +365,22 @@ unsafe fn paint(hwnd: Handle) {
         1,
         c"Lucida Console".as_ptr(),
     );
+    let ui_font = CreateFontA(
+        -12,
+        0,
+        0,
+        0,
+        400,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        c"Tahoma".as_ptr(),
+    );
     let oldfont = SelectObject(back, font);
     SetBkMode(back, 1);
     for cmd in app.draw().commands {
@@ -392,6 +408,12 @@ unsafe fn paint(hwnd: Handle) {
                 DeleteObject(pen);
             }
             Draw::Text(x, y, s, c) => {
+                SelectObject(back, font);
+                SetTextColor(back, color(c));
+                TextOutA(back, x, y - 12, s.as_ptr().cast(), s.len() as i32);
+            }
+            Draw::Label(x, y, s, c) => {
+                SelectObject(back, ui_font);
                 SetTextColor(back, color(c));
                 TextOutA(back, x, y - 12, s.as_ptr().cast(), s.len() as i32);
             }
@@ -400,6 +422,7 @@ unsafe fn paint(hwnd: Handle) {
     BitBlt(dc, 0, 0, app.width, app.height, back, 0, 0, 0x00cc0020);
     SelectObject(back, oldfont);
     DeleteObject(font);
+    DeleteObject(ui_font);
     SelectObject(back, oldbitmap);
     DeleteObject(bitmap);
     DeleteDC(back);
@@ -529,6 +552,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             assert!(app.draw().commands.len() > 100);
             app.key(Key::Char('z'), true, false);
             assert_eq!(app.doc.archive.bytes().unwrap(), before);
+            app.smoke_layout();
             ExitProcess(0);
         }
         if rest == "--demo" {
@@ -558,7 +582,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let hwnd = CreateWindowExA(
             0,
             class.name,
-            c"TORE Hangar".as_ptr(),
+            concat!("TORE Hangar ", env!("CARGO_PKG_VERSION"), "\0")
+                .as_ptr()
+                .cast(),
             0x00cf0000,
             0x80000000u32 as i32,
             0x80000000u32 as i32,

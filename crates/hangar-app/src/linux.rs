@@ -206,7 +206,8 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
             0,
             0x1b1f23,
         );
-        XStoreName(d, w, c"TORE Hangar".as_ptr());
+        let title = CString::new(format!("TORE Hangar {}", env!("CARGO_PKG_VERSION"))).unwrap();
+        XStoreName(d, w, title.as_ptr());
         XSelectInput(d, w, 1 | 4 | 8 | 64 | 32768 | 131072);
         let mut delete = XInternAtom(d, c"WM_DELETE_WINDOW".as_ptr(), 0);
         XSetWMProtocols(d, w, &mut delete, 1);
@@ -299,7 +300,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                         XSetForeground(d, gc, color as c_ulong);
                         XDrawLine(d, pix, gc, x, y, a, b);
                     }
-                    Draw::Text(x, y, s, color) => {
+                    Draw::Text(x, y, s, color) | Draw::Label(x, y, s, color) => {
                         let s = CString::new(s.replace('\0', "?")).unwrap();
                         XSetForeground(d, gc, color as c_ulong);
                         XDrawString(d, pix, gc, x, y, s.as_ptr(), s.as_bytes().len() as i32);

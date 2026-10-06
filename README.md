@@ -9,6 +9,12 @@ Blender-inspired workspace.
 BRF editing work; general animated aircraft geometry remains read-only until
 its spatial and control records can be rewritten safely. No game data ships.
 
+The 0.2 UI follows the supplied concept: one menu/workspace bar, categorized
+outliner with type icons, linked aircraft/shape selection, grouped source-value
+properties, and Browse/Model/Flight/Graft/Package workspaces. Raw fields show
+saved values beside current values, with amber edits and reset controls.
+Windows uses Tahoma for interface labels and Lucida Console for resource data.
+
 ## What works
 
 - Open EALIB archives, search entries, inspect bytes, add, remove, replace and
@@ -83,7 +89,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently about
-115–145 KB. Copy it to a writable location and run it. No installer or runtime
+160–200 KB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -122,14 +128,14 @@ implemented. See [the Windows test checklist](docs/WINDOWS-TEST.md).
 
 | Action | Control |
 | --- | --- |
-| Open LIB / package new LIB | Ctrl+O / Ctrl+S, or top bar |
+| Open LIB / package new LIB | Ctrl+O / Ctrl+S, or File menu |
 | Add entry / export selected entry | Ctrl+I / Ctrl+E |
 | Replace / export OBJ | Inspector buttons |
 | Search entry names | Ctrl+F or search field; Esc leaves search |
 | Select entry | Click or Up/Down; wheel scrolls the outliner |
 | Edit a definition operand | Click its field; Ctrl+A clears the input |
-| Scroll fields | Wheel over inspector or Properties workspace |
-| Copy a donor field | Select/edit a field, Esc, then Copy donor field |
+| Scroll fields | Wheel over inspector, Flight workspace or Raw fields |
+| Copy a donor field | Select a field, open Graft, then Choose donor |
 | Remove selected entry | Delete; Ctrl+Z restores it |
 | Undo / redo | Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y |
 | Orbit / pan | Middle-drag / Shift+middle-drag |
@@ -149,7 +155,7 @@ in memory and displays its cause. The app writes only when explicitly asked.
 A complete animated SH writer, vertex/face selection, topology changes,
 texture and palette editing, hardpoint tools, animation playback, dependency
 closure, richer grafting, unit-aware gameplay controls, native file pickers,
-per-field change highlighting, resizable editor splits, and bitmap fonts.
+resizable editor splits and bitmap fonts.
 There are no inactive timeline controls pretending these features work.
 
 The loader never executes code from a resource. Unsupported records produce

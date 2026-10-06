@@ -86,9 +86,20 @@ be silently flattened or discarded.
 
 ## UI differences from the design reference
 
-The first implementation has fixed Browse/Model/Properties/Package layouts,
-wireframe drawing, system monospace fonts and typed path dialogs. It omits the
-unimplemented animation timeline and tool icons. It does not yet provide
-per-field dirty color, full Graft workspace, dock rearrangement or vertex Edit
-mode. Geometry transformations use integer rounding and an approximate sine
-for editor interaction; they are not an original-game simulation.
+The 0.2 pass follows the supplied four-page concept with fixed
+Browse/Model/Flight/Graft/Package workspaces, a compact menu bar, grouped
+outliner, type icons, linked PT/SH selection, categorized properties, and a
+Raw fields/Hex/Details dock. `ui_view.rs` emits drawing commands and hit regions
+from the same layout. Minimum-size hit regions are checked in the shared smoke.
+Windows uses Tahoma labels and Lucida Console data; Linux keeps its available
+X11 fixed font. Both backends remain native, with no added dependencies.
+
+Saved entry snapshots share source buffers. Changed field values and resources
+are marked amber; the raw table can restore a saved operand. Source units are
+shown explicitly. Package validation checks the archive directory, not full
+semantic or animation dependency closure.
+
+The animation timeline and geometric graft controls remain unimplemented and
+are not shown as working controls. Graft supports the existing single-field
+donor operation. Typed path dialogs, fixed panel splits and a wireframe viewport
+remain; vertex Edit mode, native file pickers and bitmap fonts are future work.

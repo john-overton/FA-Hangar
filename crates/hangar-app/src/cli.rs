@@ -18,7 +18,7 @@ pub fn run() -> Result<()> {
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
             assert!(!app.doc.dirty());assert_eq!(app.doc.archive.bytes()?,before);app.key(Key::Escape,false,false);
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('0'),false,false);app.key(Key::Enter,false,false);assert!(app.doc.dirty());assert_ne!(app.doc.archive.bytes()?,before);app.key(Key::Char('z'),true,false);assert!(!app.doc.dirty());assert_eq!(app.doc.archive.bytes()?,before);
-            app.click(20,145,1,true);assert_eq!(app.selected,1);app.key(Key::Enter,false,false);app.key(Key::Char('a'),true,false);app.key(Key::Char('6'),false,false);app.key(Key::Enter,false,false);assert!(app.doc.dirty());assert!(!app.draw().commands.is_empty());
+            app.select_entry(1);assert_eq!(app.selected,1);app.key(Key::Enter,false,false);app.key(Key::Char('a'),true,false);app.key(Key::Char('6'),false,false);app.key(Key::Enter,false,false);assert!(app.doc.dirty());assert!(!app.draw().commands.is_empty());
             app.key(Key::Char('z'),true,false);
             let temp=std::env::temp_dir().join(format!("hangar-smoke-{}",std::process::id()));
             std::fs::create_dir(&temp).map_err(|e|e.to_string())?;
@@ -35,18 +35,23 @@ pub fn run() -> Result<()> {
             assert!(!app.doc.dirty(),"{}",app.status);
             app.open(output.to_str().unwrap())?;assert_eq!(app.doc.archive.entries.len(),7);
             std::fs::remove_dir_all(temp).map_err(|e|e.to_string())?;
+            app.smoke_layout();
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
         Some("--native-snapshot") => {
             if let Some(path)=args.get(2) { app.open(path)?; if let Some(name)=args.get(3) { let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at); } } else { app.demo(); }
+            if let Some(workspace)=args.get(4){app.workspace(workspace)?;}
+            if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
             platform::capture(app,argument(&args,1)?)?;
         },
         Some("--demo")=>{app.demo();platform::run(app)?;},
         Some("demo-lib")=>{app.demo();platform::write_new(argument(&args,1)?,&app.doc.archive.bytes()?)?;},
         Some("--snapshot")=>{if let Some(path)=args.get(2){app.open(path)?;if let Some(name)=args.get(3){let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at);}}else{app.demo();}
+            if let Some(workspace)=args.get(4){app.workspace(workspace)?;}
+            if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
             let mut s=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">",app.width,app.height);
             fn escape(s:&str)->String{s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;")}
-            for d in app.draw().commands{match d{Draw::Rect(x,y,w,h,c)=>s.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>")),Draw::Line(x,y,a,b,c)=>s.push_str(&format!("<path d=\"M{x} {y} L{a} {b}\" stroke=\"#{c:06x}\"/>")),Draw::Text(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"monospace\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t)))}}s.push_str("</svg>");platform::write_new(argument(&args,1)?,s.as_bytes())?;
+            for d in app.draw().commands{match d{Draw::Rect(x,y,w,h,c)=>s.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>")),Draw::Line(x,y,a,b,c)=>s.push_str(&format!("<path d=\"M{x} {y} L{a} {b}\" stroke=\"#{c:06x}\"/>")),Draw::Label(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t))),Draw::Text(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"monospace\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t)))}}s.push_str("</svg>");platform::write_new(argument(&args,1)?,s.as_bytes())?;
         },
         Some("variant") => {
             let source=Archive::parse(platform::read(argument(&args,1)?)?)?;

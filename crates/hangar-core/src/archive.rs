@@ -28,6 +28,15 @@ impl Entry {
             source: Rc::new(bytes),
         })
     }
+    pub fn same_storage(&self, other: &Self) -> bool {
+        self.directory == other.directory
+            && self.start == other.start
+            && self.len == other.len
+            && Rc::ptr_eq(&self.source, &other.source)
+    }
+    pub fn source_offset(&self) -> usize {
+        self.start
+    }
     pub fn flag(&self) -> u8 {
         self.directory[13]
     }

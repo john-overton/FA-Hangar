@@ -46,7 +46,7 @@ compiler-generated instructions or runtime behavior work on Windows 98.
   are not replaced. Abrupt power failure is not a transactional save guarantee.
 - No registry entries, installer, config folder or network calls. System fonts
   are used. ASCII paths on Windows; LIB entry names retain ASCII 8.3 syntax,
-  including observed retail `#` and `^` sound prefixes.
+  including DOS punctuation such as `$` picture prefixes and `#`/`^` sounds.
 - Shared UI/format logic is tested on Linux. Windows smoke exercises the
   custom allocator, integer math, drawing command generation, model transform,
   undo and archive serialization without displaying a window.
