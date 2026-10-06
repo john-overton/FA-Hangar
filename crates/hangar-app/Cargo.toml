@@ -1,0 +1,15 @@
+[package]
+name = "tore-hangar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hangar-core = { path = "../hangar-core" }
+
+[[bin]]
+name = "tore-hangar"
+path = "src/main.rs"
+test = false
+bench = false

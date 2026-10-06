@@ -1,0 +1,8 @@
+/target/
+/.local/
+*.LIB
+*.lib
+*.SH
+*.PT
+*.exe
+__pycache__/
