@@ -1,4 +1,5 @@
 use alloc::{
+    boxed::Box,
     collections::BTreeMap,
     format,
     string::{String, ToString},
@@ -89,6 +90,9 @@ enum PromptKind {
     CloneReview,
     Recolor,
     Isolate,
+    CloseLibrary,
+    ResourceName(bool),
+    TransferReview,
 }
 struct Prompt {
     kind: PromptKind,
@@ -134,6 +138,18 @@ pub struct App {
     pub path: String,
     pub status: String,
     pub selected: usize,
+    libraries: Vec<libraries_ui::Library>,
+    library_id: u64,
+    file_backed: bool,
+    external_model: Option<(u64, usize)>,
+    next_library_id: u64,
+    clipboard: Option<libraries_ui::Clipboard>,
+    transfer_plan: Option<hangar_core::resource_ops::Plan>,
+    transfer_scroll: usize,
+    transfer_note: usize,
+    transfer_is_copy: bool,
+    include_dependencies: bool,
+    resource_drag: Option<(u64, usize, [i32; 2])>,
     scroll: usize,
     field_scroll: usize,
     field_selected: usize,
@@ -187,9 +203,9 @@ pub struct App {
     browser: Option<Browser>,
     recent: Vec<String>,
     pic: Option<Pic>,
-    base_palette: [[u8; 3]; 256],
+    base_palette: Box<[[u8; 3]; 256]>,
     palette_loaded: bool,
-    palette_override: Option<[[u8; 3]; 256]>,
+    palette_override: Option<Box<[[u8; 3]; 256]>>,
     image_zoom: i32,
     image_pan: [i32; 2],
     image_drag: bool,
@@ -227,6 +243,18 @@ impl App {
             path: String::new(),
             status: "Ready | Open a Fighters Anthology LIB or load the synthetic demo".into(),
             selected: 0,
+            libraries: Vec::new(),
+            library_id: 0,
+            file_backed: false,
+            external_model: None,
+            next_library_id: 1,
+            clipboard: None,
+            transfer_plan: None,
+            transfer_scroll: 0,
+            transfer_note: 0,
+            transfer_is_copy: false,
+            include_dependencies: true,
+            resource_drag: None,
             scroll: 0,
             field_scroll: 0,
             field_selected: 0,
@@ -280,7 +308,7 @@ impl App {
             browser: None,
             recent: crate::platform::load_recent(),
             pic: None,
-            base_palette: core::array::from_fn(|i| [i as u8; 3]),
+            base_palette: Box::new(core::array::from_fn(|i| [i as u8; 3])),
             palette_loaded: false,
             palette_override: None,
             image_zoom: 100,
@@ -330,6 +358,7 @@ impl App {
         self.model_paint = false;
         self.required.clear();
         self.path = "Synthetic demo (not a game asset)".into();
+        self.file_backed = false;
         self.collapsed = [true; 9];
         self.category = None;
         self.scroll = 0;
@@ -344,12 +373,12 @@ impl App {
     }
     pub fn open(&mut self, path: &str) -> Result<()> {
         self.finish_stroke();
-        if self.doc.dirty() {
-            return Err("Save your changes before opening another LIB".into());
+        if self.open_existing_library(path)? {
+            return Ok(());
         }
         let a = Archive::parse(crate::platform::read(path)?)?;
-        self.suggested_output = None;
-        self.doc = Document::new(a);
+        self.install_library(Document::new(a), path.into())?;
+        self.file_backed = true;
         self.context_model = None;
         self.context_entry = None;
         self.selected_face = None;
@@ -417,7 +446,7 @@ impl App {
             .iter()
             .position(|(_, i)| *i == Some(self.selected))
             .unwrap_or(0);
-        let rows = ((self.height - 132) / 20).max(1) as usize;
+        let rows = ((self.height - self.tree_start() - 54) / 20).max(1) as usize;
         if position < self.scroll || position >= self.scroll + rows {
             self.scroll = position.saturating_sub(rows / 2);
         }
@@ -448,8 +477,10 @@ impl App {
         self.painting = false;
         self.last_paint = None;
         self.paint_enabled = false;
-        self.base_palette = self
+        *self.base_palette = self
             .palette_override
+            .as_deref()
+            .copied()
             .unwrap_or_else(|| core::array::from_fn(|i| [i as u8; 3]));
         self.palette_loaded = self.palette_override.is_some();
         let mut palettes = Vec::new();
@@ -464,10 +495,13 @@ impl App {
             palettes.push(format!("{}.PAL", pts[0].name.split('.').next().unwrap()));
         }
         palettes.push("PALETTE.PAL".into());
-        if let Some(i) = palettes.iter().find_map(|name| self.doc.archive.find(name)) {
-            if let Ok(b) = self.doc.archive.entries[i].read() {
+        if let Some(entry) = palettes
+            .iter()
+            .find_map(|name| self.resolve_resource(name).map(|(_, _, e)| e))
+        {
+            if let Ok(b) = entry.read() {
                 if let Ok(p) = picture::palette(&b) {
-                    self.base_palette = p;
+                    *self.base_palette = p;
                     self.palette_loaded = true;
                 }
             }
@@ -476,6 +510,7 @@ impl App {
         self.brf = None;
         self.model = None;
         self.model_entry = None;
+        self.external_model = None;
         self.original_brf = None;
         self.inspector_scroll = 0;
         self.validation = None;
@@ -488,6 +523,14 @@ impl App {
             names.insert(name.clone());
         }
         self.dependencies.update_with(&self.doc.archive, &names);
+        for entry in &self.doc.archive.entries {
+            names.insert(entry.name.clone());
+        }
+        for library in &mut self.libraries {
+            library
+                .dependencies
+                .update_with(&library.doc.archive, &names);
+        }
         self.preview = None;
         self.data.clear();
         self.field_scroll = 0;
@@ -551,24 +594,25 @@ impl App {
                 self.original_brf = Brf::parse(&data, extension(self.name())).ok();
             }
         }
-        if let Some(brf) = &self.brf {
-            if let Some(ptr) = brf
+        let linked_shape = self.brf.as_ref().and_then(|brf| {
+            let ptr = brf
                 .fields
                 .iter()
-                .find(|f| f.label == "object.shape" && f.kind == "ptr")
-            {
-                if let Some(field) = brf
-                    .fields
-                    .iter()
-                    .find(|f| f.block == ptr.value && f.kind == "string")
-                {
-                    let name = field.value.trim_matches('"');
-                    if let Some(index) = self.doc.archive.find(name) {
-                        if let Ok(bytes) = self.doc.archive.entries[index].read() {
-                            if let Ok(model) = Model::parse(&bytes) {
-                                self.model = Some(model);
-                                self.model_entry = Some(index);
-                            }
+                .find(|f| f.label == "object.shape" && f.kind == "ptr")?;
+            brf.fields
+                .iter()
+                .find(|f| f.block == ptr.value && f.kind == "string")
+                .map(|f| f.value.trim_matches('"').to_string())
+        });
+        if let Some(name) = linked_shape {
+            if let Some((id, index, entry)) = self.resolve_resource(&name) {
+                if let Ok(bytes) = entry.read() {
+                    if let Ok(model) = Model::parse(&bytes) {
+                        self.model = Some(model);
+                        if id == self.library_id {
+                            self.model_entry = Some(index);
+                        } else {
+                            self.external_model = Some((id, index));
                         }
                     }
                 }
@@ -584,8 +628,8 @@ impl App {
                 } else {
                     format!("{name}.PIC")
                 };
-                if let Some(i) = self.doc.archive.find(&key) {
-                    if let Ok(bytes) = self.doc.archive.entries[i].read() {
+                if let Some((_, _, entry)) = self.resolve_resource(&key) {
+                    if let Ok(bytes) = entry.read() {
                         if let Ok(p) = Pic::parse(&bytes) {
                             self.textures.insert(name.clone(), p);
                         }
@@ -807,7 +851,7 @@ impl App {
                 } else {
                     picture::palette(&bytes)?
                 };
-                self.palette_override = Some(palette);
+                self.palette_override = Some(Box::new(palette));
                 self.refresh();
                 self.status =
                     "Display palette loaded; original resource palettes remain unchanged".into();
@@ -831,6 +875,9 @@ impl App {
                 Ok(())
             }
             FileAction::Save => {
+                if self.other_library_at(path) {
+                    return Err("That destination is open in another LIB; switch to it or choose a different path".into());
+                }
                 let missing: Vec<_> = self
                     .required
                     .iter()
@@ -852,6 +899,7 @@ impl App {
                 self.field_selected = field;
                 self.field_scroll = scroll;
                 self.path = path.into();
+                self.file_backed = true;
                 self.suggested_output = None;
                 self.remember(path);
                 self.status = format!(
@@ -1028,6 +1076,7 @@ impl App {
                     }
                     self.prompt = None;
                     self.preview = None;
+                    self.transfer_plan = None;
                     self.status = "Cancelled".into();
                 }
                 Key::Enter => {
@@ -1042,6 +1091,18 @@ impl App {
                     }
                     let p = self.prompt.take().unwrap();
                     let r = match p.kind {
+                        PromptKind::CloseLibrary => {
+                            if p.value == "DISCARD" {
+                                self.discard_library();
+                                Ok(())
+                            } else {
+                                Err("Type DISCARD or press Esc".into())
+                            }
+                        }
+                        PromptKind::ResourceName(duplicate) => {
+                            self.review_resource_name(&p.value, duplicate)
+                        }
+                        PromptKind::TransferReview => self.apply_transfer(),
                         PromptKind::Isolate => (|| {
                             let to = p.value.trim().to_ascii_uppercase();
                             let shape = self
@@ -1139,12 +1200,14 @@ impl App {
                                 Err(e) => Err(e),
                             }
                         }
-                        PromptKind::CloneReview => {
+                        PromptKind::CloneReview => (|| {
                             if let Some(package) = self.clone_draft.take() {
                                 let count = package.archive.entries.len();
+                                self.install_library(
+                                    Document::new(package.archive),
+                                    format!("{}.LIB", package.id),
+                                )?;
                                 self.suggested_output = Some(format!("{}.LIB", package.id));
-                                self.path = format!("{}.LIB", package.id);
-                                self.doc = Document::new(package.archive);
                                 self.doc.mark_unsaved();
                                 self.required.clear();
                                 self.context_model = None;
@@ -1170,7 +1233,7 @@ impl App {
                             } else {
                                 Err("No prepared aircraft export".into())
                             }
-                        }
+                        })(),
                         PromptKind::VariantId => match authoring::validate_id(&p.value) {
                             Ok(id) => {
                                 self.variant_id = id;
@@ -1209,20 +1272,23 @@ impl App {
                                 Err(e) => Err(e),
                             }
                         }
-                        PromptKind::VariantReview => {
+                        PromptKind::VariantReview => (|| {
                             if p.value == "CREATE" {
                                 if let Some(v) = self.variant_draft.take() {
-                                    self.required = v.missing_textures;
-                                    self.status=format!("New aircraft {} | {} shared stock references | {} missing textures",self.variant_id,v.shared.len(),self.required.len());
-                                    if self.palette_loaded {
-                                        self.palette_override = Some(self.base_palette);
-                                    }
-                                    self.doc = Document::new(v.archive);
+                                    let required = v.missing_textures;
+                                    self.status=format!("New aircraft {} | {} shared stock references | {} missing textures",self.variant_id,v.shared.len(),required.len());
+                                    let palette =
+                                        self.palette_loaded.then(|| self.base_palette.clone());
+                                    self.install_library(
+                                        Document::new(v.archive),
+                                        format!(
+                                            "New {}.LIB from {} (not saved)",
+                                            self.variant_id, v.donor
+                                        ),
+                                    )?;
                                     self.doc.mark_unsaved();
-                                    self.path = format!(
-                                        "New {}.LIB from {} (not saved)",
-                                        self.variant_id, v.donor
-                                    );
+                                    self.palette_override = palette;
+                                    self.required = required;
                                     self.variant_shape.clear();
                                     self.selected = 0;
                                     self.scroll = 0;
@@ -1236,7 +1302,7 @@ impl App {
                             } else {
                                 Err("Type CREATE or press Esc".into())
                             }
-                        }
+                        })(),
                         PromptKind::Discard => {
                             if p.value == "DISCARD" {
                                 self.quit = true;
@@ -1330,7 +1396,7 @@ impl App {
             return;
         }
         match key {
-            Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
+            Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'c'=>{let r=self.copy_resource();self.result(r);},'v'=>{let r=self.paste_resources();self.result(r);},'d'=>self.rename_prompt(true),'w'=>{let r=self.close_library();self.result(r);},'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.model.is_some()=>{
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
                 let op=ch.to_ascii_lowercase();self.prompt=Some(Prompt{kind:PromptKind::Transform(op),title:match op{'g'=>"Move in source units",'r'=>"Rotate in degrees",_=>"Scale in percent"}.into(),value:String::new(),axis:0});self.transform_preview();
@@ -1341,6 +1407,7 @@ impl App {
             Key::Down=>{self.select_entry(self.selected+1);},
             Key::Enter=>self.edit_field(self.field_selected),
             Key::Delete=>{let r=self.doc.remove(self.selected);self.result(r);self.refresh();self.status="Entry removed | Ctrl+Z undo".into();},
+            Key::Escape=>{self.graft_library=None;self.resource_drag=None;},
             Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform".into(),
             _=>{}
         }
@@ -1348,10 +1415,14 @@ impl App {
     pub fn close(&mut self) {
         self.finish_stroke();
         crate::platform::stop_audio();
-        if self.doc.dirty() {
+        if self.any_dirty() {
             self.prompt = Some(Prompt {
                 kind: PromptKind::Discard,
-                title: "Unsaved changes: type DISCARD to close, or Esc to keep editing".into(),
+                title: format!(
+                    "Unsaved edits in {} LIBs: type DISCARD to close",
+                    usize::from(self.doc.dirty())
+                        + self.libraries.iter().filter(|l| l.doc.dirty()).count()
+                ),
                 value: String::new(),
                 axis: 0,
             });
@@ -1375,6 +1446,43 @@ impl App {
     pub fn click(&mut self, x: i32, y: i32, button: u8, down: bool) {
         self.mouse = [x, y];
         if button == 1 && !down {
+            if let Some((library, entry, start)) = self.resource_drag.take() {
+                if self.prompt.is_none()
+                    && library == self.library_id
+                    && (x - start[0]).abs() + (y - start[1]).abs() > 6
+                {
+                    let target = self
+                        .layout()
+                        .hits
+                        .into_iter()
+                        .rev()
+                        .find(|h| h.contains(x, y))
+                        .map(|h| h.action);
+                    let result = (|| {
+                        match target {
+                            Some(view::Action::Library(id)) if id != library => {
+                                self.selected = entry;
+                                self.copy_resource()?;
+                                self.switch_library(id)?;
+                                self.paste_resources()?;
+                            }
+                            Some(view::Action::Entry(to))
+                                if to != entry
+                                    && extension(&self.doc.archive.entries[to].name)
+                                        == extension(&self.doc.archive.entries[entry].name) =>
+                            {
+                                self.selected = entry;
+                                self.pin_donor()?;
+                                self.select_entry(to);
+                                self.mode = Mode::Graft;
+                            }
+                            _ => {}
+                        }
+                        Ok(())
+                    })();
+                    self.result(result);
+                }
+            }
             self.finish_stroke();
             return;
         }
@@ -1450,6 +1558,15 @@ impl App {
             .find(|h| h.contains(x, y))
             .map(|h| h.action);
         if let Some(action) = action {
+            self.resource_drag = if x < self.left() {
+                if let view::Action::Entry(i) = action {
+                    Some((self.library_id, i, [x, y]))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
             self.act(action);
         } else {
             self.menu = None;
@@ -1457,6 +1574,12 @@ impl App {
         }
     }
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
+        if let Some((_, _, start)) = self.resource_drag {
+            if (x - start[0]).abs() + (y - start[1]).abs() > 6 {
+                self.status = "Drop on a LIB to copy / same-type entry to graft".into();
+            }
+        }
+
         if self.painting {
             if self.mode == Mode::Model {
                 if let Some((face, uv)) = self.model_hit(x, y) {
@@ -1485,6 +1608,17 @@ impl App {
         self.mouse = [x, y];
     }
     pub fn wheel(&mut self, delta: i32) {
+        if self
+            .prompt
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, PromptKind::TransferReview))
+        {
+            let len = self.transfer_plan.as_ref().map_or(0, |p| p.items.len());
+            self.transfer_scroll = (self.transfer_scroll as i32 - delta * 3)
+                .clamp(0, len.saturating_sub(1) as i32) as usize;
+            return;
+        }
+
         if self
             .prompt
             .as_ref()
@@ -1561,7 +1695,7 @@ impl App {
         }
         if self.mouse[0] < self.left() {
             let count = self.tree_rows().len();
-            let rows = ((self.height - 132) / 20).max(1) as usize;
+            let rows = ((self.height - self.tree_start() - 54) / 20).max(1) as usize;
             self.scroll = (self.scroll as i32 - delta * 3)
                 .clamp(0, count.saturating_sub(rows) as i32) as usize;
         } else if self.mouse[0] >= self.right() {
@@ -1738,3 +1872,6 @@ mod dependencies_ui;
 
 #[path = "ui_graft.rs"]
 mod grafting_ui;
+
+#[path = "ui_libraries.rs"]
+mod libraries_ui;

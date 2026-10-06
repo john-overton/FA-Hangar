@@ -24,6 +24,16 @@ pub(super) enum Action {
     Dock(u8),
     Validate,
     ClearSources,
+    Library(u64),
+    LibraryEntry(u64, usize),
+    NewLibrary,
+    CloseLibrary,
+    CopyResource,
+    PasteResources,
+    RenameResource(bool),
+    TransferChoice(usize, bool),
+    TransferDependencies,
+    TransferNote,
     PinDonor,
     GraftDonor(usize),
     GraftGroup(usize),
@@ -598,6 +608,66 @@ impl App {
                 self.refresh();
                 self.status = "Source catalogs cleared".into();
             }
+            Action::Library(id) => {
+                let result = self.switch_library(id);
+                self.result(result);
+            }
+            Action::LibraryEntry(id, i) => {
+                let result = self.switch_library(id);
+                if result.is_ok() {
+                    self.filter.clear();
+                    self.select_entry(i);
+                    self.dock = 4;
+                }
+                self.result(result);
+            }
+            Action::NewLibrary => {
+                let result = self.install_library(
+                    Document::new(Archive::empty()),
+                    format!("Untitled{}.LIB", self.next_library_id),
+                );
+                if result.is_ok() {
+                    self.mode = Mode::Browse;
+                    self.context_model = None;
+                    self.context_entry = None;
+                    self.refresh();
+                }
+                self.result(result);
+            }
+            Action::CloseLibrary => {
+                let result = self.close_library();
+                self.result(result);
+            }
+            Action::CopyResource => {
+                let result = self.copy_resource();
+                self.result(result);
+            }
+            Action::PasteResources => {
+                let result = self.paste_resources();
+                self.result(result);
+            }
+            Action::RenameResource(duplicate) => self.rename_prompt(duplicate),
+            Action::TransferChoice(i, take) => {
+                if let Some(item) = self.transfer_plan.as_mut().and_then(|p| p.items.get_mut(i)) {
+                    item.choice = if take {
+                        hangar_core::resource_ops::Choice::TakeSource
+                    } else {
+                        hangar_core::resource_ops::Choice::KeepTarget
+                    };
+                }
+            }
+            Action::TransferDependencies => {
+                self.include_dependencies = !self.include_dependencies;
+                let result = self.paste_resources();
+                self.result(result);
+            }
+            Action::TransferNote => {
+                self.transfer_note = (self.transfer_note + 1)
+                    % self
+                        .transfer_note_pages((self.width - 32).min(900))
+                        .len()
+                        .max(1);
+            }
             Action::PinDonor => {
                 let result = self.pin_donor();
                 self.result(result);
@@ -627,6 +697,22 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "libraries" || name == "transfer-review" {
+            self.path = "SOURCE.LIB".into();
+            self.select_entry(0);
+            self.copy_resource()?;
+            let mut target = Archive::empty();
+            let mut pic = picture::demo();
+            pic.push(0);
+            target.entries.push(Entry::new("DEMO.PIC", pic)?);
+            self.install_library(Document::new(target), "TARGET.LIB".into())?;
+            self.refresh();
+            self.mode = Mode::Browse;
+            if name == "transfer-review" {
+                self.paste_resources()?;
+            }
+            return Ok(());
+        }
         if name == "graft-review" {
             self.select_entry(1);
             self.pin_donor()?;
@@ -929,7 +1015,7 @@ impl App {
                 Mode::Model => "G Move   R Rotate   S Scale   MMB Orbit   Shift+MMB Pan",
                 Mode::Browse => "Click Select   Ctrl+F Filter   Ctrl+E Export   Delete Remove",
                 Mode::Properties => "Click value Edit   Wheel Scroll   Ctrl+Z Undo",
-                Mode::Graft => "Select field   Choose donor LIB   Review value   Apply",
+                Mode::Graft => "Choose donor   Select aspects   Review changes   Apply graft",
                 Mode::Package => {
                     "Ctrl+B Package   Retail names protected / custom saves keep backups"
                 }
@@ -982,10 +1068,17 @@ impl App {
                 && self.browser.is_some()
             {
                 self.browser_layout(&mut out);
+            } else if self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::TransferReview))
+            {
+                self.transfer_review(&mut out);
             } else {
                 self.prompt_layout(&mut out);
             }
         }
+
         out
     }
     fn outliner(&self, o: &mut Layout) {
@@ -1027,23 +1120,49 @@ impl App {
         o.tool(
             [l - 29, 29, 24, 23],
             Icon::Plus,
-            Action::File(FileAction::Import),
+            Action::File(FileAction::Open),
             true,
             false,
         );
+        for (row, library) in self.libraries.iter().enumerate() {
+            let yy = 55 + row as i32 * 22;
+            o.canvas.rect(0, yy, l, 22, c::GM_900);
+            chevron(&mut o.canvas, 8, yy + 8, false);
+            icon(&mut o.canvas, 24, yy + 2, Icon::Lib, c::INK_MUTED);
+            text_fit(
+                &mut o.canvas,
+                46,
+                yy + 16,
+                l - 64,
+                library
+                    .path
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(&library.path),
+                c::INK_MUTED,
+            );
+            if library.doc.dirty() {
+                o.canvas.rect(l - 13, yy + 8, 5, 5, c::AMBER);
+            }
+            o.hit([0, yy, l, 22], Action::Library(library.id));
+        }
+        let dy = self.libraries.len() as i32 * 22;
         let d = &mut o.canvas;
-        d.rect(0, 55, l, 22, c::GM_900);
-        chevron(d, 8, 63, true);
-        icon(d, 24, 57, Icon::Lib, c::INK_MUTED);
-        text_fit(d, 46, 71, l - 116, self.lib_name(), c::INK);
+        d.rect(0, 55 + dy, l, 22, c::GM_900);
+        chevron(d, 8, 63 + dy, true);
+        icon(d, 24, 57 + dy, Icon::Lib, c::INK_MUTED);
+        text_fit(d, 46, 71 + dy, l - 116, self.lib_name(), c::INK);
         text_fit(
             d,
             l - 57,
-            71,
+            71 + dy,
             52,
             &format!("{}", self.doc.archive.entries.len()),
             c::INK_MUTED,
         );
+        if self.doc.dirty() {
+            d.rect(l - 69, 64 + dy, 5, 5, c::AMBER);
+        }
         let mut counts = [0; 9];
         for e in &self.doc.archive.entries {
             counts[category_of(&e.name)] += 1;
@@ -1054,20 +1173,23 @@ impl App {
             .filter(|(_, entry)| self.scroll > 0 && entry.is_some())
             .map(|(cat, _)| *cat);
         if let Some(cat) = sticky {
-            o.canvas.rect(0, 78, l, 20, c::GM_700);
-            chevron(&mut o.canvas, 24, 84, true);
-            icon(&mut o.canvas, 40, 80, GROUPS[cat].2, c::INK_MUTED);
-            label_fit(&mut o.canvas, 62, 93, l - 144, GROUPS[cat].0, c::INK);
-            badge(&mut o.canvas, l - 36, 80, GROUPS[cat].1);
-            o.hit([0, 78, l, 20], Action::Category(cat));
+            o.canvas.rect(0, 78 + dy, l, 20, c::GM_700);
+            chevron(&mut o.canvas, 24, 84 + dy, true);
+            icon(&mut o.canvas, 40, 80 + dy, GROUPS[cat].2, c::INK_MUTED);
+            label_fit(&mut o.canvas, 62, 93 + dy, l - 144, GROUPS[cat].0, c::INK);
+            badge(&mut o.canvas, l - 36, 80 + dy, GROUPS[cat].1);
+            o.hit([0, 78 + dy, l, 20], Action::Category(cat));
         }
         for (row, (cat, entry)) in tree
             .iter()
             .skip(self.scroll)
-            .take((((h - 132) / 20).max(0) as usize).saturating_sub(usize::from(sticky.is_some())))
+            .take(
+                (((h - self.tree_start() - 54) / 20).max(0) as usize)
+                    .saturating_sub(usize::from(sticky.is_some())),
+            )
             .enumerate()
         {
-            let y = 78 + i32::from(sticky.is_some()) * 20 + row as i32 * 20;
+            let y = 78 + dy + i32::from(sticky.is_some()) * 20 + row as i32 * 20;
             let d = &mut o.canvas;
             if let Some(i) = entry {
                 let e = &self.doc.archive.entries[*i];
@@ -1413,6 +1535,15 @@ impl App {
         let shape = self
             .model_entry
             .map(|i| self.doc.archive.entries[i].name.as_str())
+            .or_else(|| {
+                self.external_model.and_then(|(id, i)| {
+                    self.libraries
+                        .iter()
+                        .find(|l| l.id == id)
+                        .and_then(|l| l.doc.archive.entries.get(i))
+                        .map(|e| e.name.as_str())
+                })
+            })
             .unwrap_or("No linked shape");
         o.canvas.label(r + 12, 78, "Shape", c::INK_MUTED);
         o.canvas.rect(r + 60, 62, w - 96, 22, c::GM_700);
@@ -1420,6 +1551,8 @@ impl App {
         icon(&mut o.canvas, r + 63, 65, Icon::Shape, c::INK_MUTED);
         if let Some(i) = self.model_entry {
             o.hit([r + 60, 62, w - 96, 22], Action::Entry(i));
+        } else if let Some((id, i)) = self.external_model {
+            o.hit([r + 60, 62, w - 96, 22], Action::LibraryEntry(id, i));
         }
         o.tool(
             [self.width - 30, 62, 24, 22],
@@ -1840,6 +1973,8 @@ impl App {
         let items: Vec<(&str, Action)> = match menu {
             0 => vec![
                 ("Open LIB        Ctrl+O", Action::File(FileAction::Open)),
+                ("New empty LIB", Action::NewLibrary),
+                ("Close active LIB", Action::CloseLibrary),
                 ("Package LIB     Ctrl+S", Action::File(FileAction::Save)),
                 ("Load synthetic demo", Action::Demo),
                 ("Close", Action::Close),
@@ -1855,6 +1990,10 @@ impl App {
                 ("Validate package", Action::Validate),
             ],
             3 => vec![
+                ("Copy resource   Ctrl+C", Action::CopyResource),
+                ("Paste resources Ctrl+V", Action::PasteResources),
+                ("Rename resource", Action::RenameResource(false)),
+                ("Duplicate resource", Action::RenameResource(true)),
                 ("References / users", Action::Dock(4)),
                 ("Export entry    Ctrl+E", Action::File(FileAction::Export)),
                 ("Replace entry", Action::File(FileAction::Replace)),
@@ -2006,6 +2145,7 @@ impl App {
         }
         self.smoke_dependencies();
         self.smoke_graft();
+        self.smoke_libraries();
         self.demo();
         self.width = 1280;
         self.height = 800;

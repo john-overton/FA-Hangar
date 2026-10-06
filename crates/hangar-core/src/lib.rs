@@ -16,6 +16,7 @@ pub mod dependencies;
 pub mod document;
 pub mod model;
 pub mod picture;
+pub mod resource_ops;
 pub mod save;
 #[allow(dead_code)]
 mod schema;

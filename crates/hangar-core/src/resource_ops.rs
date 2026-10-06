@@ -1,0 +1,463 @@
+//! Reviewed resource transfers and bounded filename rewrites.
+use crate::{
+    archive::{Archive, Entry},
+    brf::Brf,
+    dependencies::{self, Location},
+    document::Document,
+    invalid, Result,
+};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::String,
+    vec::Vec,
+};
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Choice {
+    Unresolved,
+    KeepTarget,
+    TakeSource,
+}
+#[derive(Clone, Debug)]
+pub struct Item {
+    pub entry: Entry,
+    pub previous: Option<Entry>,
+    pub choice: Choice,
+    pub conflict: bool,
+}
+#[derive(Clone, Debug, Default)]
+pub struct Plan {
+    pub items: Vec<Item>,
+    pub removals: Vec<String>,
+    removed_before: Vec<Entry>,
+    pub notes: Vec<String>,
+}
+impl Plan {
+    pub fn ready(&self) -> bool {
+        self.items.iter().all(|i| i.choice != Choice::Unresolved)
+    }
+    pub fn apply(&self, doc: &mut Document) -> Result<()> {
+        if !self.ready() {
+            return Err(invalid(
+                "Choose Keep target or Take source for every collision",
+            ));
+        }
+        for item in &self.items {
+            let current = doc
+                .archive
+                .find(&item.entry.name)
+                .map(|i| &doc.archive.entries[i]);
+            match (current, &item.previous) {
+                (None, None) => {}
+                (Some(a), Some(b)) if a.same_storage(b) => {}
+                _ => return Err(invalid("Target LIB changed; rebuild the review")),
+            }
+        }
+        for original in &self.removed_before {
+            if !doc
+                .archive
+                .find(&original.name)
+                .is_some_and(|i| doc.archive.entries[i].same_storage(original))
+            {
+                return Err(invalid("Removed resource changed; rebuild the review"));
+            }
+        }
+        let entries = self
+            .items
+            .iter()
+            .filter(|i| i.choice == Choice::TakeSource)
+            .map(|i| i.entry.clone())
+            .collect();
+        doc.transaction(entries, &self.removals)
+    }
+}
+fn same(a: &Entry, b: &Entry) -> bool {
+    // Compare stored representations without decompressing arbitrary collisions.
+    a.same_storage(b) || (a.flag() == b.flag() && a.stored() == b.stored())
+}
+/// Missing dependencies stay explicit in the review; thin mod libraries may
+/// intentionally rely on game resources. No source file is written.
+pub fn transfer(
+    source: &Archive,
+    target: &Archive,
+    root: &str,
+    include_dependencies: bool,
+) -> Result<Plan> {
+    transfer_from(&[source], target, root, include_dependencies)
+}
+pub fn transfer_from(
+    sources: &[&Archive],
+    target: &Archive,
+    root: &str,
+    include_dependencies: bool,
+) -> Result<Plan> {
+    let mut plan = Plan::default();
+    let mut catalog = BTreeSet::new();
+    for source in sources {
+        for e in &source.entries {
+            catalog.insert(e.name.clone());
+        }
+    }
+    if catalog.len() > 131072 {
+        return Err(invalid("Transfer source catalog exceeds 131072 names"));
+    }
+    let mut decoded = 0usize;
+    let mut visited = BTreeSet::new();
+    let mut pending = vec![root.to_ascii_uppercase()];
+    while let Some(name) = pending.pop() {
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        if visited.len() > 4096 {
+            return Err(invalid("Transfer exceeds 4096 resources"));
+        }
+        let primary = sources
+            .first()
+            .and_then(|a| a.find(&name).map(|i| &a.entries[i]));
+        let mut found = primary;
+        if found.is_none() {
+            for archive in sources.iter().skip(1) {
+                if let Some(i) = archive.find(&name) {
+                    let candidate = &archive.entries[i];
+                    if let Some(old) = found {
+                        if !same(old, candidate) {
+                            return Err(format!("Ambiguous dependency {name} in open source LIBs; close a conflicting source or copy from the intended owner"));
+                        }
+                    } else {
+                        found = Some(candidate);
+                    }
+                }
+            }
+        }
+        let Some(entry) = found.cloned() else {
+            if target.find(&name).is_none() {
+                plan.notes.push(format!(
+                    "External dependency {name} is absent from the open source LIBs and target"
+                ));
+            }
+            continue;
+        };
+        let previous = target.find(&name).map(|i| target.entries[i].clone());
+        let identical = previous.as_ref().is_some_and(|p| same(&entry, p));
+        let conflict = previous.is_some() && !identical;
+        plan.items.push(Item {
+            entry,
+            previous,
+            choice: if conflict {
+                Choice::Unresolved
+            } else if identical {
+                Choice::KeepTarget
+            } else {
+                Choice::TakeSource
+            },
+            conflict,
+        });
+        if include_dependencies && !dependencies::leaf(&name) {
+            match found.unwrap().read() {
+                Ok(bytes) => {
+                    decoded = decoded.saturating_add(bytes.len());
+                    if decoded > crate::archive::ARCHIVE_LIMIT {
+                        return Err(invalid("Transfer scan exceeds 128 MiB decoded data"));
+                    }
+                    let mut notes = BTreeSet::new();
+                    match dependencies::references(&name, &bytes, &catalog, &mut notes) {
+                        Ok(refs) => pending.extend(refs.into_iter().map(|r| r.target)),
+                        Err(issue) => plan
+                            .notes
+                            .push(format!("{name}: unverified dependencies: {issue}")),
+                    }
+                    pending.extend(
+                        dependencies::conventional(&name, &bytes, &catalog)
+                            .into_iter()
+                            .map(|l| l.target),
+                    );
+                    plan.notes.extend(notes);
+                }
+                Err(issue) => plan
+                    .notes
+                    .push(format!("{name}: dependencies unverified: {issue}")),
+            }
+        }
+    }
+    if plan.items.is_empty() {
+        return Err(invalid("No source resource"));
+    }
+    plan.notes.push(if include_dependencies{"Includes observed stored references and reviewed resource conventions; other runtime lookups remain external".into()}else{"Copies only the selected resource; its references remain shared or external".into()});
+    Ok(plan)
+}
+fn rewrite(
+    name: &str,
+    bytes: &[u8],
+    map: &BTreeMap<String, String>,
+    catalog: &BTreeSet<String>,
+) -> Result<Vec<u8>> {
+    let refs = dependencies::references(name, bytes, catalog, &mut BTreeSet::new())?;
+    let mut out = bytes.to_vec();
+    let mut edits = Vec::new();
+    for r in refs {
+        let Some(new) = map.get(&r.target) else {
+            continue;
+        };
+        match r.location {
+            Location::Text(i) => edits.push((i, format!("\"{new}\""))),
+            Location::Literal { at, len, stem_only } => {
+                let text = if stem_only {
+                    new.split('.').next().unwrap_or(new)
+                } else {
+                    new.as_str()
+                };
+                if text.len() > len {
+                    return Err(format!(
+                        "{name}: {new} exceeds a compiled filename slot ({len} bytes)"
+                    ));
+                }
+                let slot = out
+                    .get_mut(at..at + len + 1)
+                    .ok_or("Filename slot outside resource")?;
+                slot.fill(0);
+                slot[..text.len()].copy_from_slice(text.as_bytes());
+            }
+        }
+    }
+    if !edits.is_empty() {
+        out = Brf::parse(bytes, name.rsplit('.').next().unwrap_or(""))
+            .and_then(|b| b.edit_many(bytes, &edits, name.rsplit('.').next().unwrap_or("")))?;
+    }
+    Ok(out)
+}
+pub fn rename(archive: &Archive, old: &str, new: &str, duplicate: bool) -> Result<Plan> {
+    let old = old.to_ascii_uppercase();
+    let new = new.to_ascii_uppercase();
+    crate::archive::validate_name(&new)?;
+    if archive.find(&new).is_some() {
+        return Err(invalid("Destination name already exists"));
+    }
+    if old.rsplit('.').next() != new.rsplit('.').next() {
+        return Err(invalid("Keep the resource type extension"));
+    }
+    let selected = archive.find(&old).ok_or("Resource missing")?;
+    let mut catalog = BTreeSet::new();
+    for e in &archive.entries {
+        catalog.insert(e.name.clone());
+    }
+    // Implicit names cannot be fixed by patching a literal. Keep this case in
+    // the aircraft-family clone workflow until whole-family renaming is proven.
+    if !duplicate {
+        if old.ends_with("_S.SH") {
+            return Err(invalid(
+                "Shadow names define the damage family; use New aircraft for a private family",
+            ));
+        }
+        if old.ends_with(".PT")
+            && catalog.contains(&format!("{}.PAL", old.split('.').next().unwrap()))
+        {
+            return Err(invalid(
+                "Aircraft has a private palette binding; use New aircraft to preserve it",
+            ));
+        }
+        let mut inspected = 0usize;
+        for e in &archive.entries {
+            if !matches!(
+                e.name.rsplit('.').next(),
+                Some("PT" | "JT" | "SEE" | "ECM" | "GAS")
+            ) {
+                continue;
+            }
+            if let Ok(bytes) = e.read() {
+                inspected = inspected.saturating_add(bytes.len());
+                if inspected > crate::archive::ARCHIVE_LIMIT {
+                    return Err(invalid("Rename scan exceeds 128 MiB"));
+                }
+                for link in dependencies::conventional(&e.name, &bytes, &catalog) {
+                    if link.target == old
+                        || (e.name == old
+                            && matches!(
+                                link.evidence,
+                                "Default HUD convention" | "Store-icon convention"
+                            ))
+                    {
+                        return Err(format!(
+                            "{} participates in {}; use New aircraft for a private family",
+                            old, link.evidence
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let mut map = BTreeMap::new();
+    map.insert(old.clone(), new.clone());
+    let mut plan = Plan::default();
+    let mut renamed = archive.entries[selected].renamed(&new)?;
+    if !dependencies::leaf(&old) {
+        if let Ok(bytes) = archive.entries[selected].read() {
+            if bytes.starts_with(b"MZ") || bytes.starts_with(b"[brent's_relocatable_format]") {
+                let rewritten = rewrite(&old, &bytes, &map, &catalog)?;
+                if rewritten != bytes {
+                    renamed = Entry::new(&new, rewritten)?;
+                }
+            } else {
+                plan.notes
+                    .push(format!("{old}: opaque contents are unchanged"));
+            }
+        }
+    }
+    plan.items.push(Item {
+        entry: renamed,
+        previous: None,
+        choice: Choice::TakeSource,
+        conflict: false,
+    });
+    if !duplicate {
+        plan.removals.push(old.clone());
+        plan.removed_before.push(archive.entries[selected].clone());
+        let mut inspected = 0usize;
+        for e in &archive.entries {
+            if e.name == old || dependencies::leaf(&e.name) {
+                continue;
+            }
+            let bytes = match e.read() {
+                Ok(b) => b,
+                Err(issue) => {
+                    plan.notes
+                        .push(format!("{}: dependency scan unavailable: {issue}", e.name));
+                    continue;
+                }
+            };
+            inspected = inspected.saturating_add(bytes.len());
+            if inspected > crate::archive::ARCHIVE_LIMIT {
+                return Err(invalid("Rename scan exceeds 128 MiB"));
+            }
+            if bytes.starts_with(b"MZ") || bytes.starts_with(b"[brent's_relocatable_format]") {
+                let out = rewrite(&e.name, &bytes, &map, &catalog)?;
+                if out != bytes {
+                    plan.items.push(Item {
+                        entry: Entry::new(&e.name, out)?,
+                        previous: Some(e.clone()),
+                        choice: Choice::TakeSource,
+                        conflict: false,
+                    });
+                }
+            } else {
+                plan.notes
+                    .push(format!("{}: opaque dependency scan unavailable", e.name));
+            }
+        }
+    }
+    plan.notes.push(if duplicate{"Duplicate keeps shared resource references; New aircraft creates a private aircraft package".into()}else{"Only reviewed stored filename references are rewritten; game-generated names remain unverified".into()});
+    Ok(plan)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dependencies::Index;
+    fn source() -> Archive {
+        let mut a = Archive::empty();
+        a.entries = vec![
+            Entry::new("DEMO.SH", crate::model::demo_textured()).unwrap(),
+            Entry::new("DEMO.PIC", crate::picture::demo()).unwrap(),
+        ];
+        a
+    }
+    #[test]
+    fn transfers_require_collision_choices_and_undo_as_one_transaction() {
+        let source = source();
+        let mut target = Archive::empty();
+        target
+            .entries
+            .push(Entry::new("DEMO.PIC", vec![1, 2, 3]).unwrap());
+        let original = target.bytes().unwrap();
+        let mut doc = Document::new(target);
+        let mut plan = transfer(&source, &doc.archive, "DEMO.SH", true).unwrap();
+        assert_eq!(plan.items.len(), 2);
+        assert!(!plan.ready());
+        assert!(plan.apply(&mut doc).is_err());
+        assert_eq!(doc.archive.bytes().unwrap(), original);
+        let collision = plan.items.iter_mut().find(|i| i.conflict).unwrap();
+        collision.choice = Choice::KeepTarget;
+        plan.apply(&mut doc).unwrap();
+        assert!(doc.archive.find("DEMO.SH").is_some());
+        assert_eq!(
+            doc.archive.entries[doc.archive.find("DEMO.PIC").unwrap()]
+                .read()
+                .unwrap(),
+            vec![1, 2, 3]
+        );
+        assert!(doc.undo());
+        assert_eq!(doc.archive.bytes().unwrap(), original);
+        let mut plan = transfer(&source, &doc.archive, "DEMO.SH", true).unwrap();
+        plan.items.iter_mut().find(|i| i.conflict).unwrap().choice = Choice::TakeSource;
+        plan.apply(&mut doc).unwrap();
+        assert_eq!(
+            doc.archive.entries[doc.archive.find("DEMO.PIC").unwrap()].stored(),
+            source.entries[1].stored()
+        );
+        doc.undo();
+        assert_eq!(doc.archive.bytes().unwrap(), original);
+    }
+    #[test]
+    fn renaming_rewrites_references_and_checks_stale_removals() {
+        let mut doc = Document::new(source());
+        let original = doc.archive.bytes().unwrap();
+        let plan = rename(&doc.archive, "DEMO.PIC", "PAINT.PIC", false).unwrap();
+        plan.apply(&mut doc).unwrap();
+        assert!(doc.archive.find("DEMO.PIC").is_none());
+        assert!(doc.archive.find("PAINT.PIC").is_some());
+        let mut index = Index::default();
+        index.update(&doc.archive);
+        assert_eq!(index.incoming("PAINT.PIC").count(), 1);
+        doc.undo();
+        assert_eq!(doc.archive.bytes().unwrap(), original);
+        let plan = rename(&doc.archive, "DEMO.PIC", "PAINT.PIC", false).unwrap();
+        doc.replace(1, vec![1]).unwrap();
+        assert!(plan.apply(&mut doc).is_err());
+        let plan = rename(&doc.archive, "DEMO.PIC", "COPY.PIC", true).unwrap();
+        plan.apply(&mut doc).unwrap();
+        assert!(doc.archive.find("DEMO.PIC").is_some());
+    }
+    #[test]
+    fn too_long_compiled_name_and_implicit_family_rename_fail_before_editing() {
+        let mut a = source();
+        let mut shape = a.entries[0].read().unwrap();
+        shape.extend(b"\0DEMO.PIC\0");
+        let size = (shape.len() - 256) as u32;
+        shape[128..132].copy_from_slice(&size.to_le_bytes());
+        shape[136..140].copy_from_slice(&size.to_le_bytes());
+        a.entries[0] = Entry::new("DEMO.SH", shape).unwrap();
+        let before = a.bytes().unwrap();
+        assert!(rename(&a, "DEMO.PIC", "LONGNAME.PIC", false).is_err());
+        assert_eq!(a.bytes().unwrap(), before);
+        a.entries
+            .push(Entry::new("DEMO.PT", crate::brf::demo()).unwrap());
+        a.entries
+            .push(Entry::new("DEMO_A.SH", crate::model::demo_shape()).unwrap());
+        assert!(rename(&a, "DEMO_A.SH", "OTHER.SH", false).is_err());
+    }
+    #[test]
+    fn dependencies_resolve_across_source_libraries_without_guessing_conflicting_providers() {
+        let mut owner = source();
+        let picture = owner.entries.pop().unwrap();
+        let mut images = Archive::empty();
+        images.entries.push(picture);
+        let target = Archive::empty();
+        let plan = transfer_from(&[&owner, &images], &target, "DEMO.SH", true).unwrap();
+        assert_eq!(plan.items.len(), 2);
+        let mut conflicting = images.clone();
+        conflicting.entries[0] = Entry::new("DEMO.PIC", vec![1]).unwrap();
+        assert!(transfer_from(&[&owner, &images, &conflicting], &target, "DEMO.SH", true).is_err());
+        let plan =
+            transfer_from(&[&owner, &images, &conflicting], &target, "DEMO.SH", false).unwrap();
+        assert_eq!(plan.items.len(), 1);
+    }
+    #[test]
+    fn transaction_failure_is_atomic() {
+        let mut doc = Document::new(source());
+        let before = doc.archive.bytes().unwrap();
+        let e = Entry::new("NEW.PIC", vec![1]).unwrap();
+        assert!(doc
+            .transaction(vec![e.clone(), e], &["DEMO.SH".into()])
+            .is_err());
+        assert!(!doc.dirty());
+        assert_eq!(doc.archive.bytes().unwrap(), before);
+    }
+}

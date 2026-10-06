@@ -7,6 +7,7 @@ pub(super) struct Row {
     text: String,
     color: Rgb,
     entry: Option<usize>,
+    library: Option<u64>,
 }
 fn color(level: Level) -> Rgb {
     match level {
@@ -16,7 +17,7 @@ fn color(level: Level) -> Rgb {
         Level::Info => c::INK_MUTED,
     }
 }
-fn wrap(text: &str, columns: usize) -> Vec<String> {
+pub(super) fn wrap(text: &str, columns: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
     for word in text.split_whitespace() {
@@ -47,6 +48,14 @@ impl App {
                     .push(path.clone());
             }
         }
+        for library in &self.libraries {
+            for entry in &library.doc.archive.entries {
+                let paths = providers.entry(entry.name.clone()).or_default();
+                if !paths.contains(&library.path) {
+                    paths.push(library.path.clone());
+                }
+            }
+        }
         providers
     }
     pub(super) fn package_report(&mut self) -> hangar_core::validation::Report {
@@ -58,10 +67,25 @@ impl App {
         let mut rows = Vec::new();
         let providers = self.dependency_providers();
         let mut add = |text: String, name: Option<&str>, color| {
+            let local = name.and_then(|n| self.doc.archive.find(n));
+            let external: Vec<_> = name
+                .map(|n| {
+                    self.libraries
+                        .iter()
+                        .filter_map(|l| l.doc.archive.find(n).map(|i| (l.id, i)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let (library, entry) = if local.is_none() && external.len() == 1 {
+                (Some(external[0].0), Some(external[0].1))
+            } else {
+                (None, local)
+            };
             rows.push(Row {
                 text,
                 color,
-                entry: name.and_then(|n| self.doc.archive.find(n)),
+                entry,
+                library,
             });
         };
         if let Some(scan) = self.dependencies.get(self.name()) {
@@ -116,6 +140,24 @@ impl App {
                 c::INK_MUTED,
             );
         }
+        for library in &self.libraries {
+            for source in library.dependencies.incoming(self.name()) {
+                rows.push(Row {
+                    text: format!(
+                        "{} / user in {}",
+                        source,
+                        library
+                            .path
+                            .rsplit(['/', '\\'])
+                            .next()
+                            .unwrap_or(&library.path)
+                    ),
+                    color: c::STEEL,
+                    entry: library.doc.archive.find(source),
+                    library: Some(library.id),
+                });
+            }
+        }
         rows
     }
     pub(super) fn references_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
@@ -144,7 +186,11 @@ impl App {
             }
             text_fit(&mut o.canvas, x + 14, yy + 15, w - 28, &row.text, row.color);
             if let Some(entry) = row.entry {
-                o.hit([x + 8, yy, w - 16, 21], Action::Related(entry));
+                o.hit(
+                    [x + 8, yy, w - 16, 21],
+                    row.library
+                        .map_or(Action::Related(entry), |id| Action::LibraryEntry(id, entry)),
+                );
             }
         }
         if rows.len() > visible {
@@ -169,6 +215,7 @@ impl App {
                         check.level.label(),
                         check.entry.as_deref().unwrap_or("Package")
                     ),
+                    library: None,
                     color: color(check.level),
                     entry: check.entry.as_ref().and_then(|n| self.doc.archive.find(n)),
                 });
@@ -177,12 +224,14 @@ impl App {
                         text,
                         color: c::INK_MUTED,
                         entry: None,
+                        library: None,
                     });
                 }
                 lines.push(Row {
                     text: String::new(),
                     color: c::INK_MUTED,
                     entry: None,
+                    library: None,
                 });
             }
             if report.omitted > 0 {
@@ -190,6 +239,7 @@ impl App {
                     text: format!("{} further results omitted", report.omitted),
                     color: c::AMBER,
                     entry: None,
+                    library: None,
                 });
             }
         }
@@ -356,6 +406,7 @@ impl App {
 
 impl App {
     pub(super) fn smoke_dependencies(&mut self) {
+        self.libraries.clear();
         self.demo();
         self.width = 1280;
         self.height = 800;

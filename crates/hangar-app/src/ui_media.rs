@@ -560,7 +560,7 @@ impl App {
         });
         let colors = picture
             .map(|p| p.colors(&self.base_palette))
-            .unwrap_or(self.base_palette);
+            .unwrap_or(*self.base_palette);
         let mut y = 70;
         if let Some((i, f)) = self.selected_face.and_then(|i| {
             self.model_for_paint()

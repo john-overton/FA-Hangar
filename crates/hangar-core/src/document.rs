@@ -152,6 +152,60 @@ impl Document {
             self.undo.remove(0);
         }
     }
+    /// Preflight the complete transaction against a shared-buffer draft. Failed
+    /// validation leaves both bytes and history untouched.
+    pub fn transaction(&mut self, entries: Vec<Entry>, removals: &[String]) -> Result<()> {
+        let mut draft = self.archive.clone();
+        let mut changes = Vec::new();
+        let mut seen = BTreeSet::new();
+        for name in removals {
+            if !seen.insert(name.to_ascii_uppercase()) {
+                return Err(invalid("Duplicate removal"));
+            }
+            let at = draft
+                .find(name)
+                .ok_or("Resource to remove no longer exists")?;
+            let old = draft.entries.remove(at);
+            changes.push(Change {
+                at,
+                before: Some(old),
+                after: None,
+            });
+        }
+        seen.clear();
+        for entry in entries {
+            crate::archive::validate_name(&entry.name)?;
+            if !seen.insert(entry.name.clone()) {
+                return Err(invalid("Duplicate transaction entry"));
+            }
+            if let Some(at) = draft.find(&entry.name) {
+                if draft.entries[at].same_storage(&entry) {
+                    continue;
+                }
+                let old = core::mem::replace(&mut draft.entries[at], entry.clone());
+                changes.push(Change {
+                    at,
+                    before: Some(old),
+                    after: Some(entry),
+                });
+            } else {
+                let at = draft.entries.len();
+                draft.entries.push(entry.clone());
+                changes.push(Change {
+                    at,
+                    before: None,
+                    after: Some(entry),
+                });
+            }
+        }
+        if changes.is_empty() {
+            return Ok(());
+        }
+        draft.changed();
+        draft.bytes()?;
+        self.change_batch(changes);
+        Ok(())
+    }
     pub fn replace(&mut self, at: usize, bytes: Vec<u8>) -> Result<()> {
         let old = self
             .archive

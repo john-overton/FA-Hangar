@@ -102,6 +102,29 @@ separately. No retail data is included in the test package.
    users. Counts cover observed stored names in the current LIB only; resources
    outside this LIB are not evidence that the installed game is missing them.
 
+## Multiple LIBs and structured grafts
+
+1. Open two disposable LIBs. Edit a field in the first, switch roots, edit the
+   second, and switch back. Confirm each selection/camera and its own undo
+   history survive. Ctrl+Z must affect only the active LIB. Closing the app must
+   warn even when only an inactive LIB has edits.
+2. Select a shape, Ctrl+C, switch to the other LIB, Ctrl+V. Inspect the dependency
+   list. Different same-name resources must require Keep target or Take source.
+   Cancel must change nothing; Apply resources must be one undo operation.
+3. Repeat by dragging an entry onto the other LIB root. Also drag a definition
+   onto a same-type definition in the active LIB to prepare a graft.
+4. In Flight, select a group and inspect recognized linked hardpoint/envelope
+   rows. Pin a donor, select a differently named compatible target and choose
+   Weights or Propulsion in Graft. Verify the before/after values, Apply, then
+   undo once. Identity, shape names and unselected groups must remain unchanged.
+5. Rename a disposable texture from Entry > Rename resource. Review its shape
+   reference updates, apply, reopen and verify them. Undo must restore both name
+   and references together. An overlong compiled name or known implicit-family
+   rename must fail without modifying the LIB.
+6. At 800x600, inspect library roots, field groups, graft review, copy collisions,
+   and paginated notes. Try New empty LIB, Ctrl+W, and Save As to another open
+   library's path; the latter must be rejected.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

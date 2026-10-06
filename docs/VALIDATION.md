@@ -28,6 +28,9 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
 - `model.rs`: PL/PE CODE lookup and bounded SH data traversal. Imported modules
   are never loaded as libraries or executed. Integer source coordinates and
   integer camera math keep the legacy runtime free of floating-point helpers.
+- `resource_ops.rs`: bounded transfer graphs, explicit collision decisions,
+  filename-slot-aware renaming and duplicate plans. `Document::transaction`
+  validates a shared-buffer draft before applying a single undo batch.
 - `document.rs`: entry-granular reversible operations. Original source buffers
   are reference counted. Saving tracks a revision; undo after save shows dirty.
 - `picture.rs` / `audio.rs`: bounded indexed PIC and PCM readers adapted from
@@ -36,6 +39,10 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
   `ui_browser.rs` lists platform-provided files/roots and recent LIBs.
   `ui_dependencies.rs` places resource navigation beside the viewport and
   renders scrollable package checks and the added/modified/removed build list.
+  `ui_libraries.rs` parks complete document/history objects and view state,
+  manages source snapshots and resource reviews, and protects inactive dirty
+  documents. The active `doc` remains the target for existing editor operations.
+  Palettes are heap-backed to keep native Win32 stack frames small.
   `ui_media.rs` handles stroke transactions and a CPU triangle rasterizer with
   per-pixel face/UV hit buffers. Those buffers drive model painting; live strokes
   overlay the texture cache until mouse release commits one document operation.
@@ -112,9 +119,10 @@ named `<new ID>.PAL`; game-global palette lookup is not overridden.
 
 The References dock indexes the current document with optional directory-only
 source catalogs (64 LIBs / 131072 catalog entries). It shares the clone scanner
-and adds reviewed damage-family, default-HUD and store-icon conventions;
-other runtime-derived families remain unverified. It excludes self-name literals from user navigation and follows
-reverse edges with cycle protection to find observed aircraft users. Scans are
+and adds reviewed damage-family, default-HUD and store-icon conventions.
+Other open documents contribute provider names and cached reverse-user links;
+other runtime-derived families remain unverified. It excludes self-name literals
+from user navigation and follows reverse edges with cycle protection to find observed aircraft users. Scans are
 limited to 4096 reference operands per resource, 65536 indexed links and 128 MiB
 of decoded non-leaf input. Budget failures and opaque resources are explicit;
 an incomplete scan must not be presented as proof that a resource has no users.
@@ -208,3 +216,26 @@ by another process. Windows uses `MoveFileA`; Linux uses same-directory hard
 link/unlink. Failures preserve the old bytes; failed rollback reports both
 recovery paths. This is recoverable replacement, not a crash-atomic transaction.
 No background backup pruning or retail unlock switch is provided.
+
+## Multi-library transaction boundaries
+
+Opening a LIB adds a document; path normalization reselects an already-open
+file. Library IDs remain stable when the active document is swapped with a
+parked one. Each document owns its saved baseline and undo/redo history, camera,
+selection, field group and palette override. Save As rejects a path owned by
+another open file. Closing the application considers every document's dirty
+state. Limits are eight open documents and 256 MiB of stored resource data;
+shared clipboard/history buffers can outlive a closed document.
+
+A resource copy snapshots the source and other open LIBs. The source owns its
+local names; other providers must agree on stored bytes or the review fails
+with an ambiguity diagnostic. The graph has a 4096-resource and 128 MiB decoded
+scan limit. Target collisions require explicit keep/take decisions. The review
+records original target entries so stale plans fail rather than overwrite later
+edits. Missing game-supplied resources remain review notes and package warnings.
+
+Rename plans rewrite recognized BRF and module literals only, preserving fixed
+compiled slots and unknown bytes. They refuse known damage/HUD/store/palette
+conventions that need family-wide identity changes, and known external users
+without a local resource in another open LIB. Unknown runtime names remain
+unverified. Aircraft-family creation stays in the dedicated New aircraft wizard.

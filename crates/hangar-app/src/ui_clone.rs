@@ -93,6 +93,11 @@ impl App {
         for e in &self.doc.archive.entries {
             catalog.insert(e.name.clone());
         }
+        for library in &self.libraries {
+            for entry in &library.doc.archive.entries {
+                catalog.insert(entry.name.clone());
+            }
+        }
         let mut sources = Vec::new();
         let mut seen = BTreeSet::new();
         seen.insert(normalized(&self.path));
@@ -142,8 +147,47 @@ impl App {
                 if let Some(i) = self.doc.archive.find(name) {
                     return self.doc.archive.entries[i].read();
                 }
+                // Explicit source choices win; an open document supplies its in-memory bytes.
+                for source in sources.iter().filter(|s| s.explicit) {
+                    if let Some(library) = self
+                        .libraries
+                        .iter()
+                        .find(|l| normalized(&l.path) == normalized(&source.path))
+                    {
+                        if let Some(i) = library.doc.archive.find(name) {
+                            return library.doc.archive.entries[i].read();
+                        }
+                    } else if let Some(e) = source.entries.iter().find(|e| e.name == name) {
+                        return archive::decode_payload(
+                            e.flag,
+                            crate::platform::read_range(&source.path, e.offset, e.size)?,
+                        );
+                    }
+                }
                 let mut selected: Option<(Vec<u8>, &str)> = None;
+                for library in &self.libraries {
+                    if let Some(i) = library.doc.archive.find(name) {
+                        let bytes = library.doc.archive.entries[i].read()?;
+                        if let Some((old, path)) = &selected {
+                            if old != &bytes {
+                                return Err(format!("Conflicting open {name} in {path} and {}; choose an explicit source",library.path));
+                            }
+                        } else {
+                            selected = Some((bytes, &library.path));
+                        }
+                    }
+                }
+                if let Some((bytes, _)) = selected.take() {
+                    return Ok(bytes);
+                }
                 for source in &sources {
+                    if self
+                        .libraries
+                        .iter()
+                        .any(|l| normalized(&l.path) == normalized(&source.path))
+                    {
+                        continue;
+                    }
                     if let Some(e) = source.entries.iter().find(|e| e.name == name) {
                         let stored = crate::platform::read_range(&source.path, e.offset, e.size)?;
                         let bytes = archive::decode_payload(e.flag, stored)?;

@@ -28,6 +28,15 @@ impl Entry {
             source: Rc::new(bytes),
         })
     }
+    pub fn renamed(&self, name: &str) -> Result<Self> {
+        let name = name.to_ascii_uppercase();
+        validate_name(&name)?;
+        let mut entry = self.clone();
+        entry.name = name;
+        entry.directory[..13].fill(0);
+        entry.directory[..entry.name.len()].copy_from_slice(entry.name.as_bytes());
+        Ok(entry)
+    }
     pub fn same_storage(&self, other: &Self) -> bool {
         self.directory == other.directory
             && self.start == other.start

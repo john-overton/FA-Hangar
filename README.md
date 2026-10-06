@@ -16,6 +16,8 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
+Version 0.5 adds structured characteristic grafts, source-aware package reports,
+and multiple open LIBs with independent edits, view state and undo history.
 Version 0.4.1 protects retail LIB filenames and saves custom LIBs with backups.
 Version 0.4 duplicates a selected aircraft directly into its own privately named
 LIB. The editor also provides an in-app file browser and recent LIBs, audio playback/WAV
@@ -25,8 +27,10 @@ read-only, history still works for the current session.
 
 ## What works
 
-- Browse folders/drives and reopen recent LIBs. Click directories to enter,
-  select a file, then Open; the editable path field also accepts a directory.
+- Browse folders/drives and reopen recent LIBs. Open up to eight LIBs together,
+  switching through outliner roots without discarding edits. Each LIB retains
+  selection, camera, definition group and undo history. File > New empty LIB
+  provides a destination for assembling resources.
 - Preview raw `.5K` / `.11K` PCM8 audio and PCM8 mono WAVs; Play/Stop and WAV
   export. Windows uses its built-in WinMM service. Linux playback uses `aplay`.
 - Preview and export PIC images as PNG with transparency. Paint existing
@@ -159,8 +163,8 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 ```
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
-build targets modern Windows. Each is a portable executable, currently about
-350–420 KiB. Copy it to a writable location and run it. No installer or runtime
+build targets modern Windows. Each is a portable executable, currently
+roughly half a megabyte. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -191,10 +195,11 @@ is a draft; cancelling it keeps the source open. Cancelling the final output
 picker leaves the new unsaved LIB open for later packaging. Save source edits
 before beginning the workflow.
 
-The current document has first priority. Other LIBs in its folder are indexed
-for dependencies and naming collisions; only needed payloads are read. Added
-source LIBs resolve missing/ambiguous external resources. Conflicting external
-copies require an explicit source choice. New entries are written in name order.
+The current document has first priority, followed by explicit source choices
+and unambiguous open documents (including their in-memory edits). Other LIBs
+in its folder are indexed for dependencies and naming collisions; only needed
+payloads are read. Conflicting external copies require an explicit source
+choice. New entries are written in name order, and the donor stays open.
 
 The clone includes explicit BRF resource references, catalog-resolved filename
 literals in module data/code sections, the shadow-derived A/B/C/D/S family,
@@ -221,6 +226,38 @@ cargo run --locked -- clone-aircraft FA_2.LIB A10.PT A10V1 "My A-10" A10V1.LIB F
 ```
 
 See [the Windows test checklist](docs/WINDOWS-TEST.md).
+
+## Work across LIBs
+
+1. **Ctrl+O** opens another LIB. Click an inactive root in the outliner to switch;
+   the active root expands into its categorized entries. The **+** opens a LIB.
+2. Select a resource and press **Ctrl+C**, switch to a destination LIB, then
+   **Ctrl+V**. Alternatively, drag an entry onto another LIB root. The review
+   includes discovered dependencies by default, using snapshots of open source
+   LIBs. Turn the option off for an intentional single-resource copy.
+3. Resolve different same-name resources with **Keep target** or **Take source**.
+   Review the notes, then **Apply resources**. One undo in the target reverses
+   the entire copy; source LIBs are unchanged. Ambiguous external source copies
+   require choosing the intended owner or closing a conflicting source.
+4. **Entry > Rename resource** previews changes to decoded stored references in
+   the active LIB. Compiled filename capacity is checked before applying. Known
+   implicit-family bindings and users in other open LIBs can block a rename;
+   use **New aircraft** for private aircraft families. **Ctrl+D** duplicates one
+   resource under a new name, retaining its shared dependencies.
+5. Pin a definition with **Entry > Use as graft donor**, switch LIBs and select
+   a target. Graft's selectable groups work across library boundaries. Dragging
+   onto a same-type definition in the active outliner also prepares a graft.
+6. **Ctrl+S** saves the active LIB with the existing protection/backup policy.
+   **Ctrl+W** closes the active LIB. Closing the application checks every open
+   document for unsaved edits. Save As cannot overwrite another open LIB path.
+
+Open documents also provide dependency names for package checks. Unique model,
+texture and palette resources can be previewed from other open LIBs. References
+link to a unique open provider and list observed users in other open LIBs; the
+editor does not guess among conflicting providers or infer game load order.
+The workspace limits stored resources to 256 MiB across eight documents. Undo
+and copy snapshots retain shared source buffers, so actual memory usage can be
+higher. No automatic writes occur when switching libraries or preparing copies.
 
 ## Paint a livery
 
@@ -261,6 +298,8 @@ not imply PNG import, arbitrary audio-format conversion or re-UV tools.
 | --- | --- |
 | Open LIB / package new LIB | Ctrl+O / Ctrl+S, or File menu |
 | Add entry / export selected entry | Ctrl+I / Ctrl+E |
+| Copy / paste resources | Ctrl+C / Ctrl+V, or drag to another LIB root |
+| Duplicate resource / close active LIB | Ctrl+D / Ctrl+W |
 | Replace / export OBJ | Inspector buttons |
 | Search entry names | Ctrl+F or search field; Esc leaves search |
 | Select entry | Click or Up/Down; wheel scrolls the outliner |
