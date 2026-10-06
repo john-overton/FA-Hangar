@@ -276,3 +276,63 @@ mod tests {
         assert!(a.bytes().is_err());
     }
 }
+
+/// Directory-only view for resolving dependencies in large sibling LIBs without
+/// retaining their payloads. Offsets remain relative to the source file.
+#[derive(Clone, Debug)]
+pub struct IndexedEntry {
+    pub name: String,
+    pub flag: u8,
+    pub offset: usize,
+    pub size: usize,
+}
+pub fn directory(bytes: &[u8], file_size: usize) -> Result<Vec<IndexedEntry>> {
+    if slice(bytes, 0, 5)? != b"EALIB" {
+        return Err(invalid("Not an EALIB archive"));
+    }
+    let count = u16_at(bytes, 5)?;
+    let end = 7 + (count + 1) * 18;
+    slice(bytes, 0, end)?;
+    let last = 7 + count * 18;
+    if bytes[last..last + 14].iter().any(|b| *b != 0) || u32_at(bytes, last + 14)? != file_size {
+        return Err(invalid("Invalid EOF directory sentinel"));
+    }
+    let mut out = Vec::with_capacity(count);
+    let mut names = BTreeSet::new();
+    for i in 0..count {
+        let at = 7 + i * 18;
+        let raw = &bytes[at..at + 13];
+        let name = core::str::from_utf8(raw.split(|b| *b == 0).next().unwrap())
+            .map_err(|_| invalid("Non-ASCII resource name"))?
+            .to_ascii_uppercase();
+        validate_name(&name)?;
+        if !names.insert(name.clone()) {
+            return Err(invalid("Duplicate resource name"));
+        }
+        let offset = u32_at(bytes, at + 14)?;
+        let next = u32_at(bytes, at + 32)?;
+        if offset < end || next < offset || next > file_size {
+            return Err(invalid("Resource outside archive"));
+        }
+        out.push(IndexedEntry {
+            name,
+            flag: bytes[at + 13],
+            offset,
+            size: next - offset,
+        });
+    }
+    Ok(out)
+}
+pub fn decode_payload(flag: u8, bytes: Vec<u8>) -> Result<Vec<u8>> {
+    match flag {
+        0 if bytes.len() <= RESOURCE_LIMIT => Ok(bytes),
+        4 => dcl::explode(
+            slice(&bytes, 4, bytes.len().saturating_sub(4))?,
+            u32_at(&bytes, 0)?,
+            RESOURCE_LIMIT,
+        ),
+        _ => Err(invalid(
+            "Unsupported compression or resource exceeds 16 MiB",
+        )),
+    }
+}

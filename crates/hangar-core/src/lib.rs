@@ -9,6 +9,7 @@ pub mod archive;
 pub mod audio;
 pub mod authoring;
 pub mod brf;
+pub mod clone_aircraft;
 mod dcl;
 pub mod document;
 pub mod model;
