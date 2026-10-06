@@ -46,6 +46,7 @@ impl App {
                             FileAction::Open
                             | FileAction::Save
                             | FileAction::Graft
+                            | FileAction::GraftLibrary
                             | FileAction::CloneSource
                             | FileAction::ReferenceSource => Some("LIB"),
                             FileAction::VariantSh => Some("SH"),

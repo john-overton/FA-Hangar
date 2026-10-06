@@ -24,6 +24,11 @@ pub(super) enum Action {
     Dock(u8),
     Validate,
     ClearSources,
+    PinDonor,
+    GraftDonor(usize),
+    GraftGroup(usize),
+    ApplyGraft,
+    FieldGroup(usize),
     Apply,
     Cancel,
     CloneBack,
@@ -593,12 +598,52 @@ impl App {
                 self.refresh();
                 self.status = "Source catalogs cleared".into();
             }
+            Action::PinDonor => {
+                let result = self.pin_donor();
+                self.result(result);
+            }
+            Action::GraftDonor(i) => {
+                let result = self.choose_graft_donor(i);
+                self.result(result);
+            }
+            Action::GraftGroup(i) => {
+                if let Some(group) = hangar_core::definition::ASPECTS.get(i) {
+                    self.graft_mask ^= group.bit();
+                    self.refresh_graft();
+                }
+            }
+            Action::ApplyGraft => {
+                let result = self.apply_graft();
+                self.result(result);
+            }
+            Action::FieldGroup(i) => {
+                self.field_group = hangar_core::definition::ASPECTS.get(i).copied();
+                self.field_scroll = 0;
+                self.mode = Mode::Properties;
+            }
             Action::Apply => self.key(Key::Enter, false, false),
             Action::Cancel => self.key(Key::Escape, false, false),
         }
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "graft-review" {
+            self.select_entry(1);
+            self.pin_donor()?;
+            let b = self.brf.as_ref().ok_or("No definition")?;
+            let weight = b
+                .fields
+                .iter()
+                .position(|f| f.label == "object.weight")
+                .ok_or("No weight")?;
+            let bytes = b.edit(&self.data, weight, "23456", "PT")?;
+            self.doc.import("TARGET.PT", bytes)?;
+            self.select_entry(self.doc.archive.entries.len() - 1);
+            self.mode = Mode::Graft;
+            self.graft_mask = hangar_core::definition::Aspect::Weights.bit();
+            self.refresh_graft();
+            return Ok(());
+        }
         if name == "references" {
             self.mode = if self.pic.is_some() {
                 Mode::Media
@@ -859,7 +904,11 @@ impl App {
             } else {
                 self.graft_layout(&mut out);
             }
-            if self.mode == Mode::Media || self.selected_face.is_some() {
+            if self.mode == Mode::Graft {
+                self.graft_inspector(&mut out);
+            } else if self.mode == Mode::Properties {
+                self.definition_inspector(&mut out);
+            } else if self.mode == Mode::Media || self.selected_face.is_some() {
                 self.media_inspector(&mut out);
             } else {
                 self.inspector(&mut out);
@@ -1610,6 +1659,12 @@ impl App {
             .fields
             .iter()
             .enumerate()
+            .filter(|(_, f)| {
+                !full
+                    || self.field_group.is_none_or(|group| {
+                        hangar_core::definition::aspect(&f.label) == Some(group)
+                    })
+            })
             .skip(self.field_scroll)
             .take(((y + h - start) / rowh).max(0) as usize)
             .enumerate()
@@ -1779,72 +1834,6 @@ impl App {
             );
         }
     }
-    fn graft_layout(&self, o: &mut Layout) {
-        let l = self.left();
-        let w = self.right() - l;
-        let d = &mut o.canvas;
-        d.rect(l + 1, 26, w - 2, 28, c::GM_800);
-        d.label(l + 12, 44, "Graft / definition field", c::INK);
-
-        let cw = (w - 36) / 2;
-        for (x, title, color) in [
-            (l + 12, "SOURCE", c::STEEL),
-            (l + 24 + cw, "TARGET", c::AMBER),
-        ] {
-            d.rect(x, 68, cw, 94, c::GM_900);
-            border(d, x, 68, cw, 94, c::LINE_STRONG);
-            d.label(x + 12, 90, title, color);
-        }
-        label_fit(d, l + 24, 120, cw - 24, "Choose donor LIB", c::INK_MUTED);
-        text_fit(d, l + 36 + cw, 120, cw - 24, self.name(), c::INK);
-        label_fit(
-            d,
-            l + 24,
-            197,
-            w - 48,
-            "Copy one matching field; review its value before applying.",
-            c::INK_MUTED,
-        );
-        if let Some(f) = self
-            .brf
-            .as_ref()
-            .and_then(|b| b.fields.get(self.field_selected))
-        {
-            text_fit(d, l + 24, 229, w - 48, &f.label, c::INK);
-            text_fit(
-                d,
-                l + 24,
-                253,
-                w - 48,
-                &format!("Target: {} ({})", f.value, f.kind),
-                c::AMBER,
-            );
-            o.button(
-                [l + 24, 275, w - 48, 26],
-                "Choose donor and review value",
-                Action::File(FileAction::Graft),
-                true,
-            );
-        } else {
-            o.canvas.label(
-                l + 24,
-                235,
-                "Select an aircraft definition and a field below.",
-                c::INK_FAINT,
-            );
-        }
-        let y = (self.dock_y() - 70).max(326);
-        let d = &mut o.canvas;
-        icon(d, l + 18, y, Icon::Warn, c::AMBER);
-        label_fit(
-            d,
-            l + 42,
-            y + 12,
-            w - 60,
-            "Geometry / LOD / hardpoint grafting is not available yet.",
-            c::INK_FAINT,
-        );
-    }
     fn menu_layout(&self, o: &mut Layout, menu: usize) {
         let xs = [86, 124, 163, 196, 243, 286, 333];
         let x = xs[menu];
@@ -1870,7 +1859,8 @@ impl App {
                 ("Export entry    Ctrl+E", Action::File(FileAction::Export)),
                 ("Replace entry", Action::File(FileAction::Replace)),
                 ("Export geometry as OBJ", Action::File(FileAction::Obj)),
-                ("Copy donor field", Action::Mode(Mode::Graft)),
+                ("Use as graft donor", Action::PinDonor),
+                ("Graft characteristics", Action::Mode(Mode::Graft)),
                 ("Preview / Paint media", Action::Mode(Mode::Media)),
                 ("Recolor face palette", Action::Recolor),
             ],
@@ -1885,7 +1875,8 @@ impl App {
             5 => vec![
                 ("Duplicate aircraft", Action::File(FileAction::Variant)),
                 ("From loose SH file...", Action::File(FileAction::VariantSh)),
-                ("Graft field", Action::Mode(Mode::Graft)),
+                ("Graft characteristics", Action::Mode(Mode::Graft)),
+                ("Copy one donor field", Action::File(FileAction::Graft)),
             ],
             _ => vec![
                 ("Controls           F1", Action::Help),
@@ -2014,6 +2005,7 @@ impl App {
             );
         }
         self.smoke_dependencies();
+        self.smoke_graft();
         self.demo();
         self.width = 1280;
         self.height = 800;

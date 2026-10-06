@@ -14,6 +14,7 @@ pub struct Field {
 #[derive(Clone, Debug)]
 pub struct Brf {
     pub fields: Vec<Field>,
+    pub issues: Vec<String>,
 }
 fn number(kind: &str, value: &str) -> Result<()> {
     let n = if let Some(s) = value.strip_prefix('$') {
@@ -191,7 +192,40 @@ impl Brf {
                 f.label = format!("{prefix}.{name}");
             }
         }
-        Ok(Self { fields })
+        let issues = crate::definition::annotate(&mut fields);
+        Ok(Self { fields, issues })
+    }
+    pub fn edit_many(
+        &self,
+        bytes: &[u8],
+        edits: &[(usize, String)],
+        extension: &str,
+    ) -> Result<Vec<u8>> {
+        let mut ordered = edits.to_vec();
+        ordered.sort_unstable_by_key(|(i, _)| core::cmp::Reverse(*i));
+        let mut output = bytes.to_vec();
+        let mut previous = None;
+        for (i, value) in ordered {
+            if previous == Some(i) {
+                return Err(invalid("Duplicate field edit"));
+            }
+            previous = Some(i);
+            let f = self.fields.get(i).ok_or("No selected field")?;
+            if value.contains(['\r', '\n', ';']) {
+                return Err(invalid("A field value must be one operand"));
+            }
+            if matches!(f.kind.as_str(), "byte" | "word" | "dword") {
+                number(&f.kind, &value)?;
+            } else if !matches!(f.kind.as_str(), "string" | "ptr") {
+                return Err(invalid("Symbols are read-only"));
+            }
+            if f.end > output.len() || f.start > f.end {
+                return Err(invalid("Stale field offsets"));
+            }
+            output.splice(f.start..f.end, value.bytes());
+        }
+        Self::parse(&output, extension)?;
+        Ok(output)
     }
     pub fn edit(
         &self,
@@ -247,6 +281,57 @@ pub fn demo() -> Vec<u8> {
     }
     s.push_str(":ot_names\r\nstring \"Demo\"\r\nstring \"Synthetic aircraft\"\r\nstring \"DEMO.PT\"\r\n:shape\r\nstring \"DEMO.SH\"\r\n:shadowShape\r\nstring \"DEMO_S.SH\"\r\nend\r\n");
     s.into_bytes()
+}
+
+/// Synthetic linked station/envelope records for the structured editor demo.
+pub fn demo_with_records() -> Vec<u8> {
+    let mut text = String::from_utf8(demo())
+        .unwrap()
+        .replace("dword 0 ; hards", "ptr stations ; hards")
+        .replace("byte 0 ; numHards", "byte 2 ; numHards")
+        .replace("dword 0 ; env", "ptr envelope ; env")
+        .replace("word 0 ; envMin", "word -1 ; envMin")
+        .replace("word 0 ; envMax", "word 1 ; envMax");
+    text.truncate(text.rfind("end\r\n").unwrap());
+    text.push_str(":stations\r\n");
+    for station in 0..2 {
+        for (kind, name) in schema::HARDPOINT {
+            let (kind, value) = if *kind == "ptr" {
+                ("dword", String::from("0"))
+            } else {
+                (
+                    *kind,
+                    match *name {
+                        "pos.x" => {
+                            if station == 0 {
+                                String::from("-50")
+                            } else {
+                                String::from("50")
+                            }
+                        }
+                        "maxItems" => String::from("1"),
+                        "name" => format!("{station}"),
+                        _ => String::from("0"),
+                    },
+                )
+            };
+            text.push_str(&format!("{kind} {value} ; {name}\r\n"));
+        }
+    }
+    text.push_str(":envelope\r\n");
+    for g in -1..=1 {
+        for (kind, name) in schema::ENVELOPE {
+            let value = match *name {
+                "gload" => format!("{g}"),
+                "count" => String::from("3"),
+                _ if name.starts_with("speed[") => String::from("100"),
+                _ => String::from("0"),
+            };
+            text.push_str(&format!("{kind} {value} ; {name}\r\n"));
+        }
+    }
+    text.push_str("end\r\n");
+    text.into_bytes()
 }
 
 #[cfg(test)]

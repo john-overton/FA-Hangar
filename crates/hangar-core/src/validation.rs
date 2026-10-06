@@ -95,7 +95,15 @@ pub fn text(doc: &Document, report: &Report) -> String {
 }
 fn payload(name: &str, bytes: &[u8]) -> Option<Result<()>> {
     if bytes.starts_with(b"[brent's_relocatable_format]") {
-        return Some(Brf::parse(bytes, name.rsplit('.').next().unwrap_or("")).map(|_| ()));
+        return Some(
+            Brf::parse(bytes, name.rsplit('.').next().unwrap_or("")).and_then(|b| {
+                if b.issues.is_empty() {
+                    Ok(())
+                } else {
+                    Err(b.issues.join("; "))
+                }
+            }),
+        );
     }
     match name.rsplit('.').next().unwrap_or("") {
         "SH" => Some(Model::parse(bytes).map(|_| ())),

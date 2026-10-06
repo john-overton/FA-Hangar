@@ -59,9 +59,15 @@ read-only, history still works for the current session.
   family, textures, cockpit/HUD, equipment, weapons, sounds and private palette,
   then rewrite references. Review every old-to-new filename before exporting.
 - Keep loose-SH authoring available separately under Lib > From loose SH file.
-- Copy a selected field from the same named entry in another LIB, with an
-  editable value preview before applying it. Entry replacement can transfer
-  complete objects through export/import.
+- Filter recognized definition values by envelope, propulsion, handling,
+  weights, damage, hardpoints, systems, seeker, motor or warhead. Linked station
+  and envelope records receive semantic labels only when their layouts match.
+- Pin any compatible definition as a donor, or choose a differently named
+  entry from a donor LIB. Select aspects, review target-to-donor differences,
+  and Apply graft as one undo step. Conflicting layouts/types/scaling require
+  deselecting that aspect or correcting the records. Hardpoint grafts transfer
+  numeric station values; store references remain with the target.
+- Keep single-field donor copying under Tools > Copy one donor field.
 - View a bounded static pose from SH data, orbit/pan/zoom, use front/side/top
   views, and export geometry-only OBJ files.
 - Move, rotate and scale the supported straight-line SH subset. Shapes with
@@ -260,7 +266,8 @@ not imply PNG import, arbitrary audio-format conversion or re-UV tools.
 | Select entry | Click or Up/Down; wheel scrolls the outliner |
 | Edit a definition operand | Click its field; Ctrl+A clears the input |
 | Scroll fields | Wheel over inspector, Flight workspace or Raw fields |
-| Copy a donor field | Select a field, open Graft, then Choose donor |
+| Graft characteristic groups | Entry > Use as graft donor, select target, open Graft |
+| Copy one donor field | Select a field, Tools > Copy one donor field |
 | Remove selected entry | Delete; Ctrl+Z restores it |
 | Undo / redo | Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y |
 | Orbit / pan | Middle-drag / Shift+middle-drag |

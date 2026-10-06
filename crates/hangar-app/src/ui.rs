@@ -73,6 +73,7 @@ pub enum FileAction {
     Palette,
     ReferenceSource,
     Report,
+    GraftLibrary,
 }
 #[derive(Clone)]
 enum PromptKind {
@@ -136,6 +137,12 @@ pub struct App {
     scroll: usize,
     field_scroll: usize,
     field_selected: usize,
+    field_group: Option<hangar_core::definition::Aspect>,
+    graft_donor: Option<grafting_ui::Donor>,
+    graft_library: Option<(String, Archive)>,
+    graft_mask: u16,
+    graft_preview: hangar_core::definition::Graft,
+    graft_scroll: usize,
     mode: Mode,
     data: Vec<u8>,
     brf: Option<Brf>,
@@ -223,6 +230,12 @@ impl App {
             scroll: 0,
             field_scroll: 0,
             field_selected: 0,
+            field_group: None,
+            graft_donor: None,
+            graft_library: None,
+            graft_mask: 0,
+            graft_preview: Default::default(),
+            graft_scroll: 0,
             mode: Mode::Model,
             data: vec![],
             brf: None,
@@ -298,7 +311,7 @@ impl App {
         a.entries
             .push(Entry::new("DEMO.SH", model::demo_textured()).unwrap());
         a.entries
-            .push(Entry::new("DEMO.PT", hangar_core::brf::demo()).unwrap());
+            .push(Entry::new("DEMO.PT", hangar_core::brf::demo_with_records()).unwrap());
         for suffix in ["A", "B", "C", "D", "S"] {
             a.entries
                 .push(Entry::new(&format!("DEMO_{suffix}.SH"), model::demo_shape()).unwrap());
@@ -386,6 +399,7 @@ impl App {
         self.paint_enabled = false;
         self.model_paint = false;
 
+        self.field_group = None;
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
         self.collapsed[view::category_of(self.name())] = false;
         self.category = Some(view::category_of(self.name()));
@@ -579,6 +593,7 @@ impl App {
                 }
             }
         }
+        self.refresh_graft();
         self.frame();
     }
     fn frame(&mut self) {
@@ -655,6 +670,7 @@ impl App {
             }
         }
         let title = match a {
+            FileAction::GraftLibrary => "Choose donor LIB, then choose any compatible entry",
             FileAction::ReferenceSource => "Add source LIB catalog for dependency checks",
             FileAction::Report => "Export package report as text",
             FileAction::Png => "Export picture as PNG",
@@ -726,6 +742,14 @@ impl App {
             return Err("Enter a file path".into());
         }
         match a {
+            FileAction::GraftLibrary => {
+                let a = Archive::parse(crate::platform::read(path)?)?;
+                self.graft_library = Some((path.into(), a));
+                self.graft_scroll = 0;
+                self.mode = Mode::Graft;
+                self.status = "Select a donor entry; the current entry remains the target".into();
+                Ok(())
+            }
             FileAction::Open => self.open(path),
             FileAction::ReferenceSource => {
                 let entries = cloning_ui::index(path)?.ok_or("Choose an EALIB source")?;
@@ -1479,6 +1503,16 @@ impl App {
             }
             return;
         }
+        if self.mode == Mode::Graft
+            && self.mouse[0] > self.left()
+            && self.mouse[0] < self.right()
+            && self.mouse[1] < self.dock_y()
+        {
+            self.graft_scroll = (self.graft_scroll as i32 - delta * 3)
+                .clamp(0, self.graft_row_count().saturating_sub(1) as i32)
+                as usize;
+            return;
+        }
         if self.mode == Mode::Package {
             if self.mouse[0] < self.left() {
                 let rows = ((self.height - 220) / 24).max(1) as usize;
@@ -1536,7 +1570,18 @@ impl App {
         } else if self.mouse[1] > self.dock_y()
             || matches!(self.mode, Mode::Properties | Mode::Graft)
         {
-            let n = self.brf.as_ref().map_or(0, |b| b.fields.len());
+            let n = self.brf.as_ref().map_or(0, |b| {
+                b.fields
+                    .iter()
+                    .filter(|f| {
+                        self.mode != Mode::Properties
+                            || self.mouse[1] >= self.dock_y()
+                            || self.field_group.is_none_or(|group| {
+                                hangar_core::definition::aspect(&f.label) == Some(group)
+                            })
+                    })
+                    .count()
+            });
             self.field_scroll = (self.field_scroll as i32 - delta * 3)
                 .clamp(0, n.saturating_sub(1) as i32) as usize;
         } else if self.mode == Mode::Browse {
@@ -1690,3 +1735,6 @@ mod cloning_ui;
 
 #[path = "ui_dependencies.rs"]
 mod dependencies_ui;
+
+#[path = "ui_graft.rs"]
+mod grafting_ui;

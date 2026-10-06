@@ -162,8 +162,12 @@ payload preservation, supported changed payloads and observed stored names.
 It does not establish full semantic or animation dependency closure.
 
 The animation timeline and geometric graft controls remain unimplemented and
-are not shown as working controls. Graft supports the existing single-field
-donor operation. Typed path dialogs, fixed panel splits and a wireframe viewport
+are not shown as working controls. `definition.rs` annotates linked station and
+envelope blocks only after kind/count validation. `ui_graft.rs` exposes semantic
+field groups, donor snapshots, explicit conflicts and target-to-donor previews.
+Grouped numeric grafts match labels, kinds and scaling; they preserve identity,
+resource pointers and all unselected operands, applying in one document undo
+transaction. Record-size changes and geometric grafting are separate work. Typed path dialogs, fixed panel splits and a wireframe viewport
 remain; vertex Edit mode and bitmap fonts are future work. File selection now uses an
 in-app directory/drive browser with recent LIBs.
 

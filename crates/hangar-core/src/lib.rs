@@ -11,6 +11,7 @@ pub mod authoring;
 pub mod brf;
 pub mod clone_aircraft;
 mod dcl;
+pub mod definition;
 pub mod dependencies;
 pub mod document;
 pub mod model;
