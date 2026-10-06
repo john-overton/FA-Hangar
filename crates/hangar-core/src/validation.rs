@@ -42,7 +42,7 @@ pub struct Report {
     pub omitted: usize,
 }
 impl Report {
-    fn add(&mut self, level: Level, entry: Option<&str>, message: String) {
+    pub fn add(&mut self, level: Level, entry: Option<&str>, message: String) {
         self.errors += usize::from(level == Level::Error);
         self.warnings += usize::from(level == Level::Warning);
         // Bound report memory even for archives with thousands of broken links.
@@ -71,6 +71,28 @@ impl Report {
         )
     }
 }
+pub fn text(doc: &Document, report: &Report) -> String {
+    let mut out = format!(
+        "T.O.R.E Hangar package report\n{}\n\nChanges\n",
+        report.summary()
+    );
+    for (name, kind) in doc.changes() {
+        out.push_str(&format!("{} {name}\n", kind.label()));
+    }
+    out.push_str("\nChecks\n");
+    for check in &report.checks {
+        out.push_str(&format!(
+            "{} {}: {}\n",
+            check.level.label(),
+            check.entry.as_deref().unwrap_or("Package"),
+            check.message
+        ));
+    }
+    if report.omitted > 0 {
+        out.push_str(&format!("{} further results omitted\n", report.omitted));
+    }
+    out
+}
 fn payload(name: &str, bytes: &[u8]) -> Option<Result<()>> {
     if bytes.starts_with(b"[brent's_relocatable_format]") {
         return Some(Brf::parse(bytes, name.rsplit('.').next().unwrap_or("")).map(|_| ()));
@@ -86,7 +108,20 @@ fn payload(name: &str, bytes: &[u8]) -> Option<Result<()>> {
 /// Updates the supplied index. Checks do not modify source data or prohibit
 /// packages which intentionally use external resources.
 pub fn inspect(doc: &Document, index: &mut Index) -> Report {
-    index.update(&doc.archive);
+    inspect_with(doc, index, &alloc::collections::BTreeMap::new())
+}
+/// External catalogs identify providers; they do not prove game load order.
+pub fn inspect_with(
+    doc: &Document,
+    index: &mut Index,
+    providers: &alloc::collections::BTreeMap<String, Vec<String>>,
+) -> Report {
+    let mut catalog = alloc::collections::BTreeSet::new();
+    for name in providers.keys() {
+        catalog.insert(name.clone());
+    }
+    index.update_with(&doc.archive, &catalog);
+
     let mut report = Report::default();
     match doc.archive.bytes().and_then(Archive::parse) {
         Ok(output) => {
@@ -146,11 +181,33 @@ pub fn inspect(doc: &Document, index: &mut Index) -> Report {
             for link in &scan.links {
                 if names.contains(link.target.as_str()) {
                     local += 1;
+                } else if let Some(sources) = providers.get(&link.target) {
+                    report.add(
+                        if sources.len() == 1 {
+                            Level::Info
+                        } else {
+                            Level::Warning
+                        },
+                        Some(&e.name),
+                        format!(
+                            "{} / {}: {} / catalog only, payload unverified",
+                            link.target,
+                            if sources.len() == 1 {
+                                "external provider"
+                            } else {
+                                "ambiguous providers"
+                            },
+                            sources.join(", ")
+                        ),
+                    );
                 } else {
                     report.add(
                         Level::Warning,
                         Some(&e.name),
-                        format!("{} not in this LIB / {}", link.target, link.evidence),
+                        format!(
+                            "{} not in this LIB or source catalogs / {}",
+                            link.target, link.evidence
+                        ),
                     );
                 }
             }
@@ -203,7 +260,7 @@ pub fn inspect(doc: &Document, index: &mut Index) -> Report {
         None,
         format!("{local} observed references resolve inside this LIB"),
     );
-    report.add(Level::Info, None, "Scope: stored names in this LIB; game-generated lookups, implicit families and runtime behavior are unverified".into());
+    report.add(Level::Info, None, "Scope: stored names and reviewed damage/HUD/store conventions; other runtime lookups and game behavior remain unverified".into());
     report
 }
 
@@ -289,5 +346,55 @@ mod tests {
         assert_eq!(report.errors, 2050);
         assert_eq!(report.checks.len(), 2048);
         assert!(report.omitted > 0);
+    }
+}
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use crate::archive::Entry;
+    use alloc::collections::BTreeMap;
+    #[test]
+    fn external_providers_and_conventions_remain_distinct_from_local_payload_checks() {
+        let mut archive = Archive::empty();
+        archive
+            .entries
+            .push(Entry::new("DEMO.PT", crate::brf::demo()).unwrap());
+        let doc = Document::new(archive);
+        let mut index = Index::default();
+        let initial = inspect(&doc, &mut index);
+        assert_eq!(initial.warnings, 6); // main, shadow and four damage companions
+        let mut sources = BTreeMap::new();
+        for name in [
+            "DEMO.SH",
+            "DEMO_S.SH",
+            "DEMO_A.SH",
+            "DEMO_B.SH",
+            "DEMO_C.SH",
+            "DEMO_D.SH",
+            "DEMO.HUD",
+        ] {
+            sources.insert(name.into(), vec!["SOURCE.LIB".into()]);
+        }
+        let report = inspect_with(&doc, &mut index, &sources);
+        assert_eq!(report.warnings, 0);
+        assert!(index
+            .get("DEMO.PT")
+            .unwrap()
+            .links
+            .iter()
+            .any(|l| l.target == "DEMO.HUD" && l.evidence == "Default HUD convention"));
+        sources.get_mut("DEMO.SH").unwrap().push("OTHER.LIB".into());
+        let report = inspect_with(&doc, &mut index, &sources);
+        assert_eq!(report.warnings, 1);
+        assert!(text(&doc, &report).contains("ambiguous providers"));
+        let report = inspect(&doc, &mut index);
+        assert_eq!(report.warnings, 6);
+        assert!(!index
+            .get("DEMO.PT")
+            .unwrap()
+            .links
+            .iter()
+            .any(|l| l.target == "DEMO.HUD"));
     }
 }

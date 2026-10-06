@@ -228,6 +228,60 @@ pub(crate) fn references(
     Ok(out)
 }
 
+/// Reviewed filename conventions, distinct from literal references. Optional
+/// companions are included only when catalogued; a PT's damage family is required.
+pub(crate) fn conventional(name: &str, bytes: &[u8], catalog: &BTreeSet<String>) -> Vec<Link> {
+    let mut links = Vec::new();
+    let stem = name.split('.').next().unwrap_or(name);
+    if name.ends_with(".PT") {
+        if let Ok(brf) = Brf::parse(bytes, "PT") {
+            if let Some(pointer) = brf
+                .fields
+                .iter()
+                .find(|f| f.label == "object.shadowShape" && f.kind == "ptr")
+            {
+                if let Some(field) = brf
+                    .fields
+                    .iter()
+                    .find(|f| f.block == pointer.value && f.kind == "string")
+                {
+                    let shadow = unquote(&field.value).to_ascii_uppercase();
+                    if let Some(base) = shadow.strip_suffix("_S.SH") {
+                        for suffix in ["A", "B", "C", "D"] {
+                            links.push(Link {
+                                target: format!("{base}_{suffix}.SH"),
+                                evidence: "Damage-family convention",
+                            });
+                        }
+                    }
+                }
+            }
+            let hud = format!("{stem}.HUD");
+            if brf
+                .fields
+                .iter()
+                .any(|f| f.label == "object.hudName" && f.kind == "dword" && f.value == "0")
+                && catalog.contains(&hud)
+            {
+                links.push(Link {
+                    target: hud,
+                    evidence: "Default HUD convention",
+                });
+            }
+        }
+    }
+    if matches!(ext(name), "JT" | "SEE" | "ECM" | "GAS") {
+        let icon = format!("${stem}.PIC");
+        if catalog.contains(&icon) {
+            links.push(Link {
+                target: icon,
+                evidence: "Store-icon convention",
+            });
+        }
+    }
+    links
+}
+
 /// A unique observed filename. A stored literal is evidence of a reference,
 /// not proof that the original executable will visit it in every state.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -253,10 +307,20 @@ struct Cached {
 pub struct Index {
     entries: BTreeMap<String, Cached>,
     incoming: BTreeMap<String, BTreeSet<String>>,
+    catalog: BTreeSet<String>,
 }
 impl Index {
     pub fn update(&mut self, archive: &Archive) -> bool {
-        if self.entries.len() == archive.entries.len()
+        self.update_with(archive, &BTreeSet::new())
+    }
+    pub fn update_with(&mut self, archive: &Archive, external: &BTreeSet<String>) -> bool {
+        let mut catalog = external.clone();
+        for e in &archive.entries {
+            catalog.insert(e.name.clone());
+        }
+        let catalog_changed = catalog != self.catalog;
+        if !catalog_changed
+            && self.entries.len() == archive.entries.len()
             && archive.entries.iter().all(|e| {
                 self.entries
                     .get(&e.name)
@@ -265,14 +329,7 @@ impl Index {
         {
             return false;
         }
-        // Insert directly: FromIterator uses a stable sort with large stack
-        // scratch space, which pulls in CRT stack probes on the legacy target.
-        let mut catalog = BTreeSet::new();
-        for e in &archive.entries {
-            catalog.insert(e.name.clone());
-        }
-        let catalog_changed = catalog.len() != self.entries.len()
-            || catalog.iter().any(|n| !self.entries.contains_key(n));
+        self.catalog = catalog.clone();
         let mut entries = BTreeMap::new();
         let mut decoded = 0usize;
         let mut links = 0usize;
@@ -317,6 +374,9 @@ impl Index {
                                                     },
                                                 );
                                             }
+                                        }
+                                        for link in conventional(&e.name, &bytes, &catalog) {
+                                            unique.entry(link.target).or_insert(link.evidence);
                                         }
                                         if links + unique.len() > 65536 {
                                             inspection.unavailable = Some("Reference scan exceeds 65536 links; dependencies not inspected".into());

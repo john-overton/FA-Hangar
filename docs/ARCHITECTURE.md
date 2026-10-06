@@ -110,9 +110,10 @@ names, 4096 copied resources and 128 MiB decoded output. The source files can
 be up to 2 GiB without being loaded wholesale. The editor's private palette is
 named `<new ID>.PAL`; game-global palette lookup is not overridden.
 
-The general References dock deliberately uses the current document only. It
-shares the clone scanner, but does not infer the clone wizard's damage/cockpit/
-store families. It excludes self-name literals from user navigation and follows
+The References dock indexes the current document with optional directory-only
+source catalogs (64 LIBs / 131072 catalog entries). It shares the clone scanner
+and adds reviewed damage-family, default-HUD and store-icon conventions;
+other runtime-derived families remain unverified. It excludes self-name literals from user navigation and follows
 reverse edges with cycle protection to find observed aircraft users. Scans are
 limited to 4096 reference operands per resource, 65536 indexed links and 128 MiB
 of decoded non-leaf input. Budget failures and opaque resources are explicit;

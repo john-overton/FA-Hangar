@@ -46,7 +46,8 @@ impl App {
                             FileAction::Open
                             | FileAction::Save
                             | FileAction::Graft
-                            | FileAction::CloneSource => Some("LIB"),
+                            | FileAction::CloneSource
+                            | FileAction::ReferenceSource => Some("LIB"),
                             FileAction::VariantSh => Some("SH"),
                             FileAction::Palette => Some("PAL"),
                             _ => None,
@@ -79,6 +80,7 @@ impl App {
                                     | FileAction::Wav
                                     | FileAction::Export
                                     | FileAction::Obj
+                                    | FileAction::Report
                             )
                         );
                         let leaf = if save && !crate::platform::is_dir(&p.value) {

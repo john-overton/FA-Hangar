@@ -37,8 +37,26 @@ fn wrap(text: &str, columns: usize) -> Vec<String> {
     lines
 }
 impl App {
+    pub(super) fn dependency_providers(&self) -> BTreeMap<String, Vec<String>> {
+        let mut providers = BTreeMap::<String, Vec<String>>::new();
+        for (path, names) in &self.dependency_catalogs {
+            for name in names {
+                providers
+                    .entry(name.clone())
+                    .or_default()
+                    .push(path.clone());
+            }
+        }
+        providers
+    }
+    pub(super) fn package_report(&mut self) -> hangar_core::validation::Report {
+        let providers = self.dependency_providers();
+        hangar_core::validation::inspect_with(&self.doc, &mut self.dependencies, &providers)
+    }
+
     pub(super) fn reference_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
+        let providers = self.dependency_providers();
         let mut add = |text: String, name: Option<&str>, color| {
             rows.push(Row {
                 text,
@@ -56,8 +74,10 @@ impl App {
                         link.target,
                         if present {
                             link.evidence
+                        } else if providers.contains_key(&link.target) {
+                            "external / see Package"
                         } else {
-                            "not in this LIB"
+                            "not in source catalogs"
                         }
                     ),
                     Some(&link.target),
@@ -313,6 +333,17 @@ impl App {
         d.label(r + 18, 216, "Checks are advisory.", c::INK);
         for (i, line) in wrap("References outside this LIB can be supplied by other game libraries. Runtime-generated names and implicit families are not fully checked. Test the result in Fighters Anthology.", ((w - r - 36) / 7) as usize).iter().enumerate() {
             text_fit(d, r + 18, 242 + i as i32 * 20, w - r - 36, line, c::INK_MUTED);
+        }
+        for (offset, title, action) in [
+            (
+                161,
+                "Add source LIB catalog",
+                Action::File(FileAction::ReferenceSource),
+            ),
+            (131, "Clear source catalogs", Action::ClearSources),
+            (101, "Export report", Action::File(FileAction::Report)),
+        ] {
+            o.button([r + 12, h - offset, w - r - 24, 24], title, action, false);
         }
         o.button(
             [r + 12, h - 63, w - r - 24, 28],

@@ -71,6 +71,8 @@ pub enum FileAction {
     Png,
     Wav,
     Palette,
+    ReferenceSource,
+    Report,
 }
 #[derive(Clone)]
 enum PromptKind {
@@ -170,6 +172,7 @@ pub struct App {
     model_entry: Option<usize>,
     validation: Option<hangar_core::validation::Report>,
     dependencies: hangar_core::dependencies::Index,
+    dependency_catalogs: Vec<(String, Vec<String>)>,
     aircraft_users: Vec<String>,
     reference_scroll: usize,
     validation_scroll: usize,
@@ -256,6 +259,7 @@ impl App {
             model_entry: None,
             validation: None,
             dependencies: Default::default(),
+            dependency_catalogs: Vec::new(),
             aircraft_users: Vec::new(),
             reference_scroll: 0,
             validation_scroll: 0,
@@ -464,7 +468,12 @@ impl App {
         self.validation_scroll = 0;
         self.changes_scroll = 0;
         self.reference_scroll = 0;
-        self.dependencies.update(&self.doc.archive);
+        let providers = self.dependency_providers();
+        let mut names = alloc::collections::BTreeSet::new();
+        for name in providers.keys() {
+            names.insert(name.clone());
+        }
+        self.dependencies.update_with(&self.doc.archive, &names);
         self.preview = None;
         self.data.clear();
         self.field_scroll = 0;
@@ -646,6 +655,8 @@ impl App {
             }
         }
         let title = match a {
+            FileAction::ReferenceSource => "Add source LIB catalog for dependency checks",
+            FileAction::Report => "Export package report as text",
             FileAction::Png => "Export picture as PNG",
             FileAction::Wav => "Export sound as WAV",
             FileAction::Palette => "Load display palette (.PAL or a LIB containing PALETTE.PAL)",
@@ -675,6 +686,7 @@ impl App {
                     "HANGAR.LIB".into()
                 }
             }),
+            FileAction::Report => "HANGAR-REPORT.txt".into(),
             FileAction::Png => format!("{}.png", self.name().split('.').next().unwrap()),
             FileAction::Wav => format!("{}.wav", self.name().split('.').next().unwrap()),
             FileAction::Export => self.name().into(),
@@ -715,6 +727,39 @@ impl App {
         }
         match a {
             FileAction::Open => self.open(path),
+            FileAction::ReferenceSource => {
+                let entries = cloning_ui::index(path)?.ok_or("Choose an EALIB source")?;
+                if entries.len()
+                    + self
+                        .dependency_catalogs
+                        .iter()
+                        .filter(|(p, _)| p != path)
+                        .map(|(_, n)| n.len())
+                        .sum::<usize>()
+                    > 131072
+                {
+                    return Err("Source catalogs exceed 131072 entries".into());
+                }
+                if self.dependency_catalogs.len() >= 64 {
+                    return Err("At most 64 source catalogs".into());
+                }
+                self.dependency_catalogs.retain(|(p, _)| p != path);
+                self.dependency_catalogs
+                    .push((path.into(), entries.into_iter().map(|e| e.name).collect()));
+                self.refresh();
+                self.status = "Source catalog added; re-run package checks".into();
+                Ok(())
+            }
+            FileAction::Report => {
+                let report = self.package_report();
+                crate::platform::write_new(
+                    path,
+                    hangar_core::validation::text(&self.doc, &report).as_bytes(),
+                )?;
+                self.validation = Some(report);
+                self.status = format!("Exported package report to {path}");
+                Ok(())
+            }
             FileAction::Png => {
                 let p = self.pic.as_ref().ok_or("Select a PIC first")?;
                 crate::platform::write_new(path, &p.png(&self.base_palette))?;

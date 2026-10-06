@@ -23,6 +23,7 @@ pub(super) enum Action {
     Transform(char),
     Dock(u8),
     Validate,
+    ClearSources,
     Apply,
     Cancel,
     CloneBack,
@@ -581,11 +582,16 @@ impl App {
             Action::Dock(n) => self.dock = n,
             Action::Validate => {
                 self.finish_stroke();
-                let report = hangar_core::validation::inspect(&self.doc, &mut self.dependencies);
+                let report = self.package_report();
                 self.status = report.summary();
                 self.validation = Some(report);
                 self.validation_scroll = 0;
                 self.mode = Mode::Package;
+            }
+            Action::ClearSources => {
+                self.dependency_catalogs.clear();
+                self.refresh();
+                self.status = "Source catalogs cleared".into();
             }
             Action::Apply => self.key(Key::Enter, false, false),
             Action::Cancel => self.key(Key::Escape, false, false),

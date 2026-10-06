@@ -284,18 +284,22 @@ resizable editor splits and bitmap fonts.
 There are no inactive timeline controls pretending these features work.
 
 The References dock indexes observed BRF strings and bounded module filename
-literals throughout the current LIB, including names outside the displayed
-pose. Self-name literals are excluded from navigation. It does not scan sibling
-LIBs, infer every implicit family, or execute game procedures. "Not in this LIB"
-can mean a resource is supplied by another game library. Unavailable scans are
-reported explicitly; user counts are observed counts, not a guarantee of every
-possible runtime user. The aircraft-cloning wizard retains its broader source
-catalog and damage/cockpit/store-family rules.
+literals, including names outside the displayed pose. It also identifies the
+reviewed PT damage family, same-name default HUD and available store icons.
+Use **Package > Add source LIB catalog** to locate dependencies in other LIBs;
+these catalogs are directory-only and do not load their payloads. Multiple
+external providers are reported as ambiguous. **Export report** writes the
+change list and all retained check results to a new text file.
+
+Self-name literals are excluded from navigation. Counts cover observed users
+in the current LIB, not every possible runtime lookup. External catalog matches
+identify possible providers, not game load order or verified external payloads.
+The aircraft-cloning wizard retains its broader source and aliasing rules.
 
 Package checks are advisory. Supported payload checks apply to changed entries;
-unknown encodings and incomplete dependency scans remain unverified. Opening a
-saved LIB establishes a new baseline, so CLI `validate` checks its archive and
-stored reference graph without treating every existing payload as newly edited.
+unknown encodings and incomplete scans remain unverified. Opening a saved LIB
+establishes a new baseline, so CLI `validate` checks its archive and references
+without treating every existing payload as newly edited.
 
 The loader never executes code from a resource. Unsupported records produce
 an explicit diagnostic. The current model reader is a static-pose projection,
