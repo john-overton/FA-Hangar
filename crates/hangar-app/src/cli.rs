@@ -14,7 +14,10 @@ pub fn run() -> Result<()> {
     match args.first().map(String::as_str) {
         Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nAll output paths must be new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
-            app.demo();let before=app.doc.archive.bytes()?;app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('0'),false,false);app.key(Key::Enter,false,false);assert!(app.doc.dirty());assert_ne!(app.doc.archive.bytes()?,before);app.key(Key::Char('z'),true,false);assert!(!app.doc.dirty());assert_eq!(app.doc.archive.bytes()?,before);
+            app.demo();let before=app.doc.archive.bytes()?;
+            app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
+            assert!(!app.doc.dirty());assert_eq!(app.doc.archive.bytes()?,before);app.key(Key::Escape,false,false);
+            app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('0'),false,false);app.key(Key::Enter,false,false);assert!(app.doc.dirty());assert_ne!(app.doc.archive.bytes()?,before);app.key(Key::Char('z'),true,false);assert!(!app.doc.dirty());assert_eq!(app.doc.archive.bytes()?,before);
             app.click(20,145,1,true);assert_eq!(app.selected,1);app.key(Key::Enter,false,false);app.key(Key::Char('a'),true,false);app.key(Key::Char('6'),false,false);app.key(Key::Enter,false,false);assert!(app.doc.dirty());assert!(!app.draw().commands.is_empty());
             app.key(Key::Char('z'),true,false);
             let temp=std::env::temp_dir().join(format!("hangar-smoke-{}",std::process::id()));

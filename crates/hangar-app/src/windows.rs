@@ -331,9 +331,11 @@ static mut APP: *mut App = ptr::null_mut();
 fn color(rgb: u32) -> u32 {
     (rgb & 255) << 16 | (rgb & 0xff00) | (rgb >> 16) & 255
 }
-unsafe fn paint(hwnd: Handle, app: &App) {
+unsafe fn paint(hwnd: Handle) {
     let mut ps: Paint = core::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut ps);
+    // BeginPaint can synchronously deliver WM_ERASEBKGND. Borrow state afterward.
+    let app = &*APP;
     let back = CreateCompatibleDC(dc);
     let bitmap = CreateCompatibleBitmap(dc, app.width, app.height);
     if back.is_null() || bitmap.is_null() {
@@ -407,26 +409,35 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
     if APP.is_null() {
         return DefWindowProcA(hwnd, msg, wp, lp);
     }
-    let app = &mut *APP;
-    let shift = GetKeyState(0x10) < 0;
-    let ctrl = GetKeyState(0x11) < 0;
+    // These messages may be delivered synchronously by GDI or mouse capture.
+    // Handle them before taking an exclusive reference to editor state.
     match msg {
         0x24 => {
             let m = &mut *(lp as *mut MinMax);
             m.min_track = Point { x: 816, y: 639 };
             return 0;
         }
+        0x0f => {
+            paint(hwnd);
+            return 0;
+        }
+        0x14 | 0x215 => return 1,
+        0x02 => {
+            PostQuitMessage(0);
+            return 0;
+        }
+        _ => {}
+    }
+    let app = &mut *APP;
+    let shift = GetKeyState(0x10) < 0;
+    let ctrl = GetKeyState(0x11) < 0;
+    match msg {
         0x05 => {
             let mut rect: Rect = core::mem::zeroed();
             GetClientRect(hwnd, &mut rect);
             app.width = rect.right.max(800);
             app.height = rect.bottom.max(600);
         }
-        0x0f => {
-            paint(hwnd, app);
-            return 0;
-        }
-        0x14 => return 1,
         0x10 => {
             app.close();
             if app.quit {
@@ -434,10 +445,6 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
             } else {
                 InvalidateRect(hwnd, ptr::null(), 0);
             }
-            return 0;
-        }
-        0x02 => {
-            PostQuitMessage(0);
             return 0;
         }
         0x100 => {
@@ -475,13 +482,6 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
                 0x207 => (2, true),
                 _ => (2, false),
             };
-            if button == 2 {
-                if down {
-                    SetCapture(hwnd);
-                } else {
-                    ReleaseCapture();
-                }
-            }
             app.click(x, y, button, down);
         }
         0x200 => app.motion(
@@ -492,7 +492,15 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
         0x20a => app.wheel((wp >> 16) as u16 as i16 as i32 / 120),
         _ => return DefWindowProcA(hwnd, msg, wp, lp),
     }
-    if app.quit {
+    let quit = app.quit;
+    // Capture can reenter the window procedure; the editor borrow ends above.
+    if msg == 0x207 {
+        SetCapture(hwnd);
+    }
+    if msg == 0x208 {
+        ReleaseCapture();
+    }
+    if quit {
         DestroyWindow(hwnd);
     } else {
         InvalidateRect(hwnd, ptr::null(), 0);

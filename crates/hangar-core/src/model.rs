@@ -372,6 +372,20 @@ impl Model {
         if !self.writable {
             return Err(self.reason.clone());
         }
+        let original = Self::parse(source)?;
+        if original.vertices.len() != self.vertices.len()
+            || original.faces.len() != self.faces.len()
+        {
+            return Err(invalid("Model does not match its source"));
+        }
+        if original
+            .vertices
+            .iter()
+            .zip(&self.vertices)
+            .all(|(a, b)| a.offset == b.offset && a.point == b.point)
+        {
+            return Ok(source.to_vec());
+        }
         let mut out = source.to_vec();
         for v in &self.vertices {
             for (j, n) in v.point.iter().enumerate() {
@@ -509,6 +523,7 @@ mod tests {
         let b = demo_shape();
         let m = Model::parse(&b).unwrap();
         assert!(m.writable);
+        assert_eq!(m.write(&b).unwrap(), b);
         assert_eq!(m.faces.len(), 8);
         let changed = m
             .transformed(Transform::Move(0, 10))

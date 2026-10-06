@@ -454,7 +454,11 @@ impl App {
         } else {
             match p.value.parse::<i32>() {
                 Ok(n) => n,
-                Err(_) => return,
+                Err(_) => {
+                    self.preview = None;
+                    self.status = "Error: enter an integer transform value".into();
+                    return;
+                }
             }
         };
         let t = match op {
