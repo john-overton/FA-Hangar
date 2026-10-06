@@ -14,6 +14,7 @@ mod dcl;
 pub mod document;
 pub mod model;
 pub mod picture;
+pub mod save;
 #[allow(dead_code)]
 mod schema;
 pub type Result<T> = core::result::Result<T, alloc::string::String>;

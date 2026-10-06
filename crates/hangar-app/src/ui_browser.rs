@@ -243,7 +243,15 @@ impl App {
         o.canvas.label(
             x + side,
             y + h - 122,
-            "Click a folder to enter; select a file, then Open / Apply.",
+            if matches!(p.kind, PromptKind::File(FileAction::Save)) {
+                if hangar_core::save::protected_name(&p.value).is_some() {
+                    "Protected retail name: choose a different LIB filename."
+                } else {
+                    "Save custom LIB; an existing file gets a numbered .bak backup."
+                }
+            } else {
+                "Click a folder to enter; select a file, then Open / Apply."
+            },
             c::INK_FAINT,
         );
         o.canvas.label(
@@ -285,6 +293,8 @@ impl App {
             [x + w - 116, y + h - 46, 104, 29],
             if matches!(p.kind, PromptKind::File(FileAction::Open)) {
                 "Open LIB"
+            } else if matches!(p.kind, PromptKind::File(FileAction::Save)) {
+                "Save LIB"
             } else {
                 "Apply"
             },

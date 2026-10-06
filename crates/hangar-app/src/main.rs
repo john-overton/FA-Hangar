@@ -10,6 +10,7 @@ mod platform;
 #[cfg(not(windows))]
 #[path = "linux.rs"]
 mod platform;
+mod saving;
 mod ui;
 #[cfg(not(windows))]
 fn main() {

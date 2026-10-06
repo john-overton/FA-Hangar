@@ -788,7 +788,15 @@ impl App {
                 w - 220,
                 18,
                 204,
-                self.lib_name(),
+                &format!(
+                    "{}{}",
+                    self.lib_name(),
+                    if hangar_core::save::protected_name(&self.path).is_some() {
+                        " [Protected]"
+                    } else {
+                        ""
+                    }
+                ),
                 c::INK_MUTED,
             );
             if self.doc.dirty() {
@@ -833,7 +841,9 @@ impl App {
                 Mode::Browse => "Click Select   Ctrl+F Filter   Ctrl+E Export   Delete Remove",
                 Mode::Properties => "Click value Edit   Wheel Scroll   Ctrl+Z Undo",
                 Mode::Graft => "Select field   Choose donor LIB   Review value   Apply",
-                Mode::Package => "Ctrl+B Package   Output files are created new",
+                Mode::Package => {
+                    "Ctrl+B Package   Retail names protected / custom saves keep backups"
+                }
                 Mode::Media => "Paint indexed colors / one stroke per undo / Ctrl+S package",
             }
         };
@@ -1836,12 +1846,24 @@ impl App {
             c::INK_MUTED,
         );
         d.label(14, h - 83, "OUTPUT MODE", c::INK_FAINT);
-        d.label(14, h - 55, "New LIB / preserve entry order", c::INK_MUTED);
+        label_fit(
+            d,
+            14,
+            h - 55,
+            l - 28,
+            if hangar_core::save::protected_name(&self.path).is_some() {
+                "Protected / save a copy"
+            } else {
+                "Custom LIB / save with backup"
+            },
+            c::INK_MUTED,
+        );
         let checks = [
-            ("Untouched payloads retain their original bytes.", true),
-            ("New and edited entries use stored compression.", true),
-            ("Existing files are protected from overwrite.", true),
-            ("Original-game loading requires a game test.", false),
+            ("Original payloads kept intact.", true),
+            ("Edited entries stored unpacked.", true),
+            ("Retail LIB names are protected.", true),
+            ("Custom saves keep .bak backups.", true),
+            ("Test new LIBs in the game.", false),
         ];
         for (i, (text, pass)) in checks.into_iter().enumerate() {
             let yy = 69 + i as i32 * 58;
@@ -1866,7 +1888,7 @@ impl App {
         label_fit(
             d,
             l + 14,
-            338,
+            378,
             mid - 28,
             self.validation
                 .as_deref()
@@ -1882,30 +1904,34 @@ impl App {
             },
         );
         o.button(
-            [l + 14, 361, mid - 28, 24],
+            [l + 14, 396, mid - 28, 24],
             "Re-run directory checks",
             Action::Validate,
             false,
         );
         let d = &mut o.canvas;
-        d.label(l + 14, 421, "DETAILS", c::INK_FAINT);
-        d.rect(l + 12, 436, mid - 24, (h - 475).max(40), c::GM_950);
-        text_fit(d, l + 24, 458, mid - 48, &self.status, c::INK_MUTED);
+        d.label(l + 14, 448, "DETAILS", c::INK_FAINT);
+        d.rect(l + 12, 462, mid - 24, (h - 501).max(40), c::GM_950);
+        text_fit(d, l + 24, 484, mid - 48, &self.status, c::INK_MUTED);
         d.rect(r + 9, 65, w - r - 18, 145, c::GM_900);
         border(d, r + 9, 65, w - r - 18, 145, c::GM_1000);
         d.label(r + 22, 87, "Destination", c::INK);
-        d.label(
-            r + 22,
-            116,
-            "Choose a new path when packaging.",
-            c::INK_MUTED,
-        );
+        d.label(r + 22, 116, "Choose a custom .LIB filename.", c::INK_MUTED);
         d.label(r + 22, 144, "Mode", c::INK_MUTED);
-        d.text(r + 116, 144, "New file", c::INK);
+        d.text(
+            r + 116,
+            144,
+            if hangar_core::save::protected_name(&self.path).is_some() {
+                "Save a copy"
+            } else {
+                "Save + backup"
+            },
+            c::INK,
+        );
         d.label(
             r + 22,
             181,
-            "No source file will be replaced.",
+            "Retail filenames cannot be written.",
             c::INK_FAINT,
         );
         o.button(

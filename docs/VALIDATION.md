@@ -19,7 +19,7 @@ screenshots are committed or uploaded in build artifacts.
   opened for this check.
 - Local Rust formatting, strict Clippy, Linux build, and both Windows release
   cross-builds pass. Both PE import/header audits pass; the executables import
-  58 functions across Kernel32/User32/GDI32/WinMM, with no CRT dependency.
+  59 functions across Kernel32/User32/GDI32/WinMM, with no CRT dependency.
 - Windows CI passed for both architectures on Windows Server 2022, including
   running each custom-runtime executable's headless smoke path. These checks
   exercise the allocator, integer math, drawing commands, transform and undo.
@@ -74,3 +74,22 @@ Remaining acceptance: the [manual Windows checklist](WINDOWS-TEST.md), actual
 Windows 98/ME operation, and loading/flying the new variant in original FA.
 General SH part grafting, generic object creation and complete animation/LOD
 texture dependency closure are not implemented.
+
+
+The 0.4.1 save-policy pass adds five portable tests: all 17 reserved filenames
+and Win32 aliases, repeated saves with retained backups, staged-write/rename/
+rollback failures, concurrent destination collisions, and first-time saves.
+The 28 core tests, Linux smoke and strict Clippy checks pass. Shared executable
+smoke now also writes/replaces/reopens synthetic custom LIBs, checks two backup
+generations, rejects a retail output name, verifies dirty state survives
+rejection, and checks that Ctrl+S suggests the current custom path.
+
+A disposable FA_2.LIB copy was used for CLI QA: protected writes were rejected,
+A10.PT extraction succeeded, a custom copy was edited/replaced and reopened, and
+both numbered backup hashes matched the expected previous versions. Read-only
+and symlink destinations were rejected; replacing a hard-linked custom copy
+left its retail-named sibling intact. The actual retail source SHA-256 stayed
+unchanged. Package layouts were rendered locally at 1280x800 and 800x600.
+Both Windows cross-builds and import audits pass (59 reviewed imports, no CRT).
+Windows 98/ME execution and interrupted-save recovery on those OSes remain
+manual acceptance checks.

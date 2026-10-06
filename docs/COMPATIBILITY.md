@@ -41,9 +41,13 @@ compiler-generated instructions or runtime behavior work on Windows 98.
   32 MiB. Original archive storage is shared. Large archives still require RAM
   for input, edited resources, and packaging output; on small machines, edit a
   smaller mod LIB rather than a whole retail library.
-- Output is create-new, flushed before success. A failed write removes the
-  partial new output where the operating system permits it. Existing files
-  are not replaced. Abrupt power failure is not a transactional save guarantee.
+- Retail LIB filenames are reserved across directories and letter case. Custom
+  LIBs are staged and flushed, then the old file is moved to an unused numbered
+  `.bak` name before installing the replacement. Failed installation attempts
+  restore the backup; a failed restore reports both recovery paths. Abrupt power
+  failure between moves can require manually restoring the backup. Raw resource
+  exports remain create-new. Read-only files and symlink/reparse outputs are
+  rejected; no existing file is truncated.
 - No registry entries, installer or network calls. A recent-file sidecar is
   stored beside the EXE; it can be deleted to clear history. System fonts
   are used. ASCII paths on Windows; LIB entry names retain ASCII 8.3 syntax,
@@ -55,7 +59,7 @@ compiler-generated instructions or runtime behavior work on Windows 98.
   device check; CI does not assume an audio device. Linux uses ALSA `aplay`.
 
 The additional Windows APIs are `FindFirstFileA`/`FindNextFileA`/`FindClose`,
-path/drive queries, `SetFilePointer` for bounded source reads, `StretchDIBits` and `PlaySoundA`, all from the existing Win32
+path/drive queries, `MoveFileA` for same-directory non-replacing moves, `SetFilePointer` for bounded source reads, `StretchDIBits` and `PlaySoundA`, all from the existing Win32
 API family. The audio buffer stays owned until playback is stopped before
 release ([PlaySound memory lifetime](https://learn.microsoft.com/en-us/previous-versions/dd743680(v=vs.85))).
 No WinMM DLL is bundled; Windows supplies it.

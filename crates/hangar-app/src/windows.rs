@@ -103,6 +103,7 @@ unsafe extern "system" {
     fn FlushFileBuffers(file: Handle) -> i32;
     fn CloseHandle(handle: Handle) -> i32;
     fn DeleteFileA(name: *const c_char) -> i32;
+    fn MoveFileA(from: *const c_char, to: *const c_char) -> i32;
     fn GetLastError() -> u32;
 }
 #[cfg_attr(not(target_arch = "x86"), link(name = "user32", kind = "raw-dylib"))]
@@ -237,7 +238,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe {
         MessageBoxA(
             ptr::null_mut(),
-            c"Hangar stopped after an internal error. The source LIB was not overwritten.".as_ptr(),
+            c"Hangar stopped after an internal error. If saving, check the LIB and its .bak/.tmp files.".as_ptr(),
             c"TORE Hangar".as_ptr(),
             0x10,
         );
@@ -298,6 +299,7 @@ pub fn read(name: &str) -> Result<Vec<u8>> {
     }
 }
 pub fn write_new(name: &str, bytes: &[u8]) -> Result<()> {
+    hangar_core::save::guard_output(name)?;
     let name = path(name)?;
     unsafe {
         let file = CreateFileA(
@@ -341,6 +343,37 @@ pub fn write_new(name: &str, bytes: &[u8]) -> Result<()> {
             Ok(())
         }
     }
+}
+pub fn save_exists(name: &str) -> Result<bool> {
+    let name = path(name)?;
+    unsafe {
+        let attr = GetFileAttributesA(name.as_ptr());
+        if attr == u32::MAX {
+            return match GetLastError() {
+                2 | 3 => Ok(false),
+                _ => Err(error("Cannot inspect output path")),
+            };
+        }
+        if attr & (0x10 | 0x400) != 0 {
+            return Err("LIB output, backup and temporary paths must be regular files, not links/directories".into());
+        }
+        Ok(true)
+    }
+}
+pub fn move_new(from: &str, to: &str) -> Result<()> {
+    save_exists(from)?;
+    let from = path(from)?;
+    let to = path(to)?;
+    unsafe {
+        if GetFileAttributesA(from.as_ptr()) & 1 != 0 {
+            return Err("Cannot replace a read-only LIB".into());
+        }
+        // MoveFileA fails if the destination exists; no NT-only replace API.
+        if MoveFileA(from.as_ptr(), to.as_ptr()) == 0 {
+            return Err(error("Cannot move LIB"));
+        }
+    }
+    Ok(())
 }
 static mut APP: *mut App = ptr::null_mut();
 fn color(rgb: u32) -> u32 {
@@ -614,6 +647,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
             app.smoke_layout();
             app.smoke_media();
             app.smoke_clone();
+            crate::saving::smoke();
+            app.smoke_save_policy();
             ExitProcess(0);
         }
         if rest == "--demo" {
@@ -1054,7 +1089,7 @@ pub fn read_range(name: &str, at: usize, size: usize) -> Result<Vec<u8>> {
     }
 }
 
-pub fn remove_test_file(name: &str) -> Result<()> {
+pub fn remove_file(name: &str) -> Result<()> {
     let name = path(name)?;
     if unsafe { DeleteFileA(name.as_ptr()) } == 0 {
         Err(error("Cannot remove test file"))

@@ -23,6 +23,7 @@ pub fn read(path: &str) -> Result<Vec<u8>> {
     Ok(b)
 }
 pub fn write_new(path: &str, bytes: &[u8]) -> Result<()> {
+    hangar_core::save::guard_output(path)?;
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -35,6 +36,28 @@ pub fn write_new(path: &str, bytes: &[u8]) -> Result<()> {
         return Err(e.to_string());
     }
     Ok(())
+}
+pub fn save_exists(path: &str) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() => Ok(true),
+        Ok(_) => Err(
+            "LIB output, backup and temporary paths must be regular files, not links/directories"
+                .into(),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(e.to_string()),
+    }
+}
+pub fn move_new(from: &str, to: &str) -> Result<()> {
+    save_exists(from)?;
+    let m = std::fs::metadata(from).map_err(|e| e.to_string())?;
+    if m.permissions().readonly() {
+        return Err("Cannot replace a read-only LIB".into());
+    }
+    // Same-directory hard link + unlink gives no-clobber moves without a crate
+    // or Linux-only rename flags. A failed unlink leaves both copies intact.
+    std::fs::hard_link(from, to).map_err(|e| e.to_string())?;
+    std::fs::remove_file(from).map_err(|e| e.to_string())
 }
 #[repr(C)]
 struct XKeyEvent {
@@ -525,6 +548,6 @@ pub fn read_range(path: &str, at: usize, size: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-pub fn remove_test_file(path: &str) -> Result<()> {
+pub fn remove_file(path: &str) -> Result<()> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
 }

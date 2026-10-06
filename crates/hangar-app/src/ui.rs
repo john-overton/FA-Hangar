@@ -353,9 +353,14 @@ impl App {
         self.frame();
         self.remember(path);
         self.status = format!(
-            "Opened {} | {} entries",
+            "Opened {} | {} entries | {}",
             path,
-            self.doc.archive.entries.len()
+            self.doc.archive.entries.len(),
+            if hangar_core::save::protected_name(path).is_some() {
+                "Protected source: extract or save a copy"
+            } else {
+                "Custom LIB: save with backup"
+            }
         );
         Ok(())
     }
@@ -563,6 +568,46 @@ impl App {
             self.status = format!("Error: {e}");
         }
     }
+    pub fn smoke_save_policy(&mut self) {
+        *self = Self::new();
+        self.demo();
+        self.path = "FA_2.LIB".into();
+        self.doc.mark_unsaved();
+        let before = self.doc.archive.bytes().unwrap();
+        self.file_prompt(FileAction::Save);
+        assert!(self.prompt.as_ref().unwrap().value.ends_with("HANGAR.LIB"));
+        assert!(self
+            .perform_file(FileAction::Save, "fa_2.lib")
+            .unwrap_err()
+            .contains("protected retail LIB"));
+        assert!(self.doc.dirty());
+        assert_eq!(self.doc.archive.bytes().unwrap(), before);
+        let path = format!(
+            "{}/HGUI.LIB",
+            crate::platform::current_dir().trim_end_matches(['/', '\\'])
+        );
+        let backup = format!("{path}.bak");
+        for p in [&path, &backup, &format!("{path}.tmp")] {
+            assert!(!crate::platform::save_exists(p).unwrap());
+        }
+        self.perform_file(FileAction::Save, &path).unwrap();
+        assert!(!self.doc.dirty());
+        self.doc
+            .replace(0, hangar_core::model::demo_shape())
+            .unwrap();
+        self.file_prompt(FileAction::Save);
+        assert_eq!(self.prompt.as_ref().unwrap().value, path);
+        self.perform_file(FileAction::Save, &path).unwrap();
+        assert!(self.status.contains("Backup:"));
+        assert!(!self.doc.dirty());
+        assert_eq!(crate::platform::read(&backup).unwrap(), before);
+        self.prompt = None;
+        self.browser = None;
+        self.open(&path).unwrap();
+        for p in [&path, &backup] {
+            crate::platform::remove_file(p).unwrap();
+        }
+    }
     pub fn file_prompt(&mut self, a: FileAction) {
         if matches!(a, FileAction::Variant | FileAction::VariantSh)
             && (self.doc.dirty() || !self.name().ends_with(".PT"))
@@ -593,7 +638,7 @@ impl App {
             FileAction::Variant => "New aircraft",
             FileAction::VariantSh => "New aircraft from loose SH / step 1: select SH file",
             FileAction::CloneSource => "Additional source LIB for aircraft dependencies",
-            FileAction::Save => "Package LIB: new output path",
+            FileAction::Save => "Save LIB / retail names protected / custom LIBs saved with backup",
             FileAction::Import => "Add entry: path to a resource file",
             FileAction::Replace => "Replace selected entry: resource file path",
             FileAction::Export => "Export selected entry: new file path",
@@ -601,17 +646,29 @@ impl App {
             FileAction::Graft => "Copy selected field from same entry in donor LIB: donor path",
         };
         let value = match a {
-            FileAction::Save => self
-                .suggested_output
-                .clone()
-                .unwrap_or_else(|| "HANGAR.LIB".into()),
+            FileAction::Save => self.suggested_output.clone().unwrap_or_else(|| {
+                if !self.path.is_empty()
+                    && !self.path.starts_with("Synthetic")
+                    && hangar_core::save::protected_name(&self.path).is_none()
+                {
+                    self.path
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(&self.path)
+                        .into()
+                } else {
+                    "HANGAR.LIB".into()
+                }
+            }),
             FileAction::Png => format!("{}.png", self.name().split('.').next().unwrap()),
             FileAction::Wav => format!("{}.wav", self.name().split('.').next().unwrap()),
             FileAction::Export => self.name().into(),
             FileAction::Obj => format!("{}.obj", self.name().split('.').next().unwrap_or("model")),
             _ => String::new(),
         };
-        let folder = if let Some(p) = self.recent.first() {
+        let folder = if matches!(a, FileAction::Save) && self.path.contains(['/', '\\']) {
+            Self::parent_path(&self.path)
+        } else if let Some(p) = self.recent.first() {
             Self::parent_path(p)
         } else {
             crate::platform::current_dir()
@@ -703,8 +760,7 @@ impl App {
                     ));
                 }
                 let b = self.doc.archive.bytes()?;
-                Archive::parse(b.clone())?;
-                crate::platform::write_new(path, &b)?;
+                let backup = crate::saving::library(path, &b)?;
                 self.doc.mark_saved();
                 let field = self.field_selected;
                 let scroll = self.field_scroll;
@@ -712,10 +768,14 @@ impl App {
                 self.field_selected = field;
                 self.field_scroll = scroll;
                 self.path = path.into();
+                self.suggested_output = None;
                 self.remember(path);
                 self.status = format!(
-                    "Packaged {} entries into {path}",
-                    self.doc.archive.entries.len()
+                    "Saved {} entries into {path}{}",
+                    self.doc.archive.entries.len(),
+                    backup
+                        .map(|p| format!(" | Backup: {p}"))
+                        .unwrap_or_default()
                 );
                 Ok(())
             }

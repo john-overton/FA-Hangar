@@ -15,6 +15,7 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
+Version 0.4.1 protects retail LIB filenames and saves custom LIBs with backups.
 Version 0.4 duplicates a selected aircraft directly into its own privately named
 LIB. The editor also provides an in-app file browser and recent LIBs, audio playback/WAV
 export, PIC preview/PNG export, and linked model/texture painting. Recent paths
@@ -38,7 +39,7 @@ read-only, history still works for the current session.
   changing geometry, relative links or record sizes.
 - Open EALIB archives, search entries, inspect bytes, add, remove, replace and
   export resources. Stored and raw-literal DCL-compressed entries are readable.
-- Package a new LIB with the required EOF sentinel. Untouched entry payloads
+- Save a new or existing custom LIB with the required EOF sentinel. Untouched entry payloads
   keep their original compression and bytes. An unedited archive round-trips
   byte-for-byte, including padding. Modified entries are stored uncompressed.
 - Edit PT/JT/OT/SEE/ECM textual BRF operands. Recognized schemas get named
@@ -57,13 +58,45 @@ read-only, history still works for the current session.
 - Move, rotate and scale the supported straight-line SH subset. Shapes with
   unhandled spatial records, bounds, visibility logic or animation remain
   read-only. The synthetic demo exercises transforms without retail data.
-- Entry-level undo/redo, dirty state, explicit discard on close, and packaging
-  to a **new** file. Existing files are never overwritten.
+- Entry-level undo/redo, dirty state and explicit discard on close. Retail LIB
+  names are protected; custom LIBs can be replaced with numbered backups.
 
 This version uses numeric **source storage values**, not invented conversions
 to knots, pounds or Mach. A `^` marker is retained, not silently reinterpreted.
 Changing a field is not a guarantee of how the original game consumes it.
 Opaque binary definitions can be exported or replaced but are not guessed.
+
+## Protected LIBs and saving
+
+Retail names are reserved case-insensitively in **every folder**, in both the
+GUI and CLI. You can open, inspect, extract, clone aircraft and edit in memory;
+save those changes to a different LIB name. Ctrl+S suggests `HANGAR.LIB` for a
+retail source and the current filename for a custom LIB. The aircraft wizard
+continues to suggest its new aircraft ID. The browser lets you choose another
+name or destination on every save.
+
+The exact list comes from the supplied installer and discs:
+
+| Source | Protected filenames |
+| --- | --- |
+| Disc 1 `SETUP.ESA` installer | `FA_1.LIB`, `FA_2.LIB`, `FA_4B.LIB`, `FA_4D.LIB` |
+| Disc 1 loose archives | `FA_4C.LIB`, `FA_7.LIB` |
+| Disc 2 loose archives | `FA_3.LIB`, `FA_10.LIB`, `FA_10B.LIB`, `FA_11.LIB`, `FA_11B.LIB` |
+| Disc 1 bundled demo/installer | `LHX0.LIB`–`LHX4.LIB`, `_SETUP.LIB` |
+
+`SWPATCH.LIB` is a toolkit/mod archive in the supplied installation, so it stays
+writable. This is an explicit filename list, not a blanket `FA_*.LIB` rule or
+content fingerprint. Renaming a retail copy to a custom name makes that copy
+writable. The reserved names cannot be used for new output files either.
+
+Saving an existing custom `MYMOD.LIB` keeps the previous file as
+`MYMOD.LIB.bak`, then `.bak.1`, `.bak.2`, and so on without replacing earlier
+backups. The new file is written and flushed before the old file is moved.
+If installation of the new file fails, Hangar tries to restore the old name;
+if restoration fails, the error identifies the backup and staged file. A power
+loss between moves can require restoring the backup manually. Backups are kept
+beside the LIB until you remove them. Resource/PNG/WAV/OBJ exports remain
+create-new. Retail name protection does not affect reading from game discs.
 
 ## Run locally on Linux
 

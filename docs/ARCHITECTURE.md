@@ -159,3 +159,21 @@ indexed texture lookup. UV V is flipped against the source PIC height, as in
 the reviewed Fighters exporter/renderer. Rendering and picking use the same
 mapping. It is unlit and orthographic, with fan triangulation, not game renderer
 parity. Brush size is measured in texture pixels, not world-space distance.
+
+## Retail protection and recoverable saves
+
+`hangar-core/src/save.rs` owns the explicit installer/disc filename list and
+storage-independent save protocol. Matching ignores case, recognizes both path
+separators and Windows drive prefixes, and catches trailing-dot/space and stream
+aliases. LIB destinations reject ambiguous Win32/device syntax. No hash or
+folder-based exemption is used. The low-level create-new writer also refuses
+reserved names, covering resource export destinations.
+
+GUI and CLI archive writers share `saving.rs`: validate the destination and
+serialized EALIB, create/flush a fresh same-directory stage, move an existing
+custom LIB to an unused backup name, then install the staged file. All moves
+refuse an existing destination; rollback also refuses to clobber a file created
+by another process. Windows uses `MoveFileA`; Linux uses same-directory hard
+link/unlink. Failures preserve the old bytes; failed rollback reports both
+recovery paths. This is recoverable replacement, not a crash-atomic transaction.
+No background backup pruning or retail unlock switch is provided.

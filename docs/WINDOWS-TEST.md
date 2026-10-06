@@ -14,12 +14,23 @@ The EXE is portable; the other files are documentation and licensing.
    Ctrl+Z should restore Saved. Try R/Z/30 and S/X/120, then undo.
 4. Select DEMO.PT, click Flight, edit a numeric field. Ctrl+A clears the
    value before typing. Verify amber highlighting, saved values and undo/redo.
-5. Ctrl+S, enter a **new full output path**, and press Enter. Reopen the LIB
-   with Ctrl+O and confirm the changes. Reusing an existing output path should
-   display an error without changing that file.
+5. Ctrl+S, save as `MYMOD.LIB`, then edit and save again to the same path.
+   Confirm the new edits reopen and `MYMOD.LIB.bak` contains the previous
+   version. A third save should keep `.bak` and add `.bak.1`.
 6. Close with unsaved edits. Esc should return; typing DISCARD should close.
 
 The synthetic demo is only an editor test; do not install it in the game.
+
+## Protected sources
+
+1. Open a disposable copy named `FA_2.LIB`; check the Protected label/status.
+   Export an entry and start New aircraft: reading and extraction must work.
+2. Edit a field. Ctrl+S should suggest `HANGAR.LIB`. Enter `FA_2.LIB`, then
+   `fa_2.lib` in another folder: both must report a protected retail name.
+   The document should remain Modified and the original file unchanged.
+3. Save as `MYJET.LIB` instead. Edit and save again; check the backup and reopen.
+4. Try a read-only custom LIB and an unwritable folder. A failed save must keep
+   the original bytes and leave edits available to save elsewhere.
 
 ## Real LIB and new-aircraft workflow
 

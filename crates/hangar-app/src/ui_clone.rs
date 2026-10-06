@@ -284,7 +284,7 @@ impl App {
                 .read()
                 .unwrap()
         );
-        crate::platform::remove_test_file("HGC_SRC.LIB").unwrap();
+        crate::platform::remove_file("HGC_SRC.LIB").unwrap();
         self.file_prompt(FileAction::Variant);
         assert!(matches!(
             self.prompt.as_ref().unwrap().kind,
