@@ -35,7 +35,7 @@ Mark Adler    madler@alumni.caltech.edu
 
 ## T.O.R.E-Fighters
 
-The DCL decoder and BRF field-order tables are adapted from the GPL-3.0
+The DCL decoder, bounded PIC/PCM readers and BRF field-order tables are adapted from the GPL-3.0
 T.O.R.E-Fighters project. The bounded shape reader and archive writer were
 implemented with its readers, exporter, and format notes as references.
 Source: https://github.com/john-overton/T.O.R.E-Fighters

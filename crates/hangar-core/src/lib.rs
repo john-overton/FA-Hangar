@@ -6,11 +6,13 @@ extern crate std;
 #[macro_use]
 extern crate alloc as alloc_macros;
 pub mod archive;
+pub mod audio;
 pub mod authoring;
 pub mod brf;
 mod dcl;
 pub mod document;
 pub mod model;
+pub mod picture;
 #[allow(dead_code)]
 mod schema;
 pub type Result<T> = core::result::Result<T, alloc::string::String>;

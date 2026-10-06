@@ -16,8 +16,8 @@ struct Change {
 }
 pub struct Document {
     pub archive: Archive,
-    undo: Vec<Change>,
-    redo: Vec<Change>,
+    undo: Vec<Vec<Change>>,
+    redo: Vec<Vec<Change>>,
     revision: u64,
     saved_revision: Option<u64>,
     saved: BTreeMap<String, Entry>,
@@ -87,11 +87,16 @@ impl Document {
         }
     }
     fn change(&mut self, c: Change) {
+        self.change_batch(vec![c]);
+    }
+    fn change_batch(&mut self, changes: Vec<Change>) {
         if !self.redo.is_empty() && self.saved_revision.is_some_and(|r| r > self.revision) {
             self.saved_revision = None;
         }
-        self.apply(c.clone());
-        self.undo.push(c);
+        for c in &changes {
+            self.apply(c.clone());
+        }
+        self.undo.push(changes);
         self.redo.clear();
         self.revision += 1;
         // Cap retained changed payloads, while retaining at least the last operation.
@@ -100,6 +105,7 @@ impl Document {
                 || self
                     .undo
                     .iter()
+                    .flatten()
                     .map(|c| c.after.as_ref().map_or(0, Entry::stored_len))
                     .sum::<usize>()
                     > 32 * 1024 * 1024)
@@ -150,14 +156,48 @@ impl Document {
         });
         Ok(())
     }
+    pub fn clone_texture(
+        &mut self,
+        name: &str,
+        pixels: Vec<u8>,
+        shape_index: usize,
+        shape: Vec<u8>,
+    ) -> Result<()> {
+        if self.archive.find(name).is_some() {
+            return Err(invalid("Texture name already exists"));
+        }
+        let old = self
+            .archive
+            .entries
+            .get(shape_index)
+            .ok_or_else(|| invalid("Shape missing"))?
+            .clone();
+        let new_shape = Entry::new(&old.name, shape)?;
+        let new_texture = Entry::new(name, pixels)?;
+        self.change_batch(vec![
+            Change {
+                at: shape_index,
+                before: Some(old),
+                after: Some(new_shape),
+            },
+            Change {
+                at: self.archive.entries.len(),
+                before: None,
+                after: Some(new_texture),
+            },
+        ]);
+        Ok(())
+    }
     pub fn undo(&mut self) -> bool {
-        if let Some(c) = self.undo.pop() {
-            self.apply(Change {
-                at: c.at,
-                before: c.after.clone(),
-                after: c.before.clone(),
-            });
-            self.redo.push(c);
+        if let Some(changes) = self.undo.pop() {
+            for c in changes.iter().rev() {
+                self.apply(Change {
+                    at: c.at,
+                    before: c.after.clone(),
+                    after: c.before.clone(),
+                });
+            }
+            self.redo.push(changes);
             self.revision -= 1;
             true
         } else {
@@ -165,9 +205,11 @@ impl Document {
         }
     }
     pub fn redo(&mut self) -> bool {
-        if let Some(c) = self.redo.pop() {
-            self.apply(c.clone());
-            self.undo.push(c);
+        if let Some(changes) = self.redo.pop() {
+            for c in &changes {
+                self.apply(c.clone());
+            }
+            self.undo.push(changes);
             self.revision += 1;
             true
         } else {
@@ -208,5 +250,44 @@ mod tests {
         assert!(d.archive.entries.is_empty());
         d.undo();
         assert_eq!(d.archive.entries[0].read().unwrap(), vec![3]);
+    }
+}
+#[cfg(test)]
+mod texture_tests {
+    use super::*;
+    #[test]
+    fn cloned_texture_and_reference_are_one_undo_step() {
+        let mut archive = Archive::empty();
+        archive
+            .entries
+            .push(Entry::new("DEMO.SH", crate::model::demo_textured()).unwrap());
+        archive
+            .entries
+            .push(Entry::new("DEMO.PIC", crate::picture::demo()).unwrap());
+        let before = archive.bytes().unwrap();
+        let original = archive.entries[1].read().unwrap();
+        let (shape, count) = crate::model::Model::retarget_texture(
+            &archive.entries[0].read().unwrap(),
+            "DEMO.PIC",
+            "NEW.PIC",
+        )
+        .unwrap();
+        assert_eq!(count, 1);
+        let mut d = Document::new(archive);
+        d.clone_texture("NEW.PIC", original.clone(), 0, shape)
+            .unwrap();
+        assert_eq!(d.archive.entries.len(), 3);
+        assert!(
+            crate::model::Model::parse(&d.archive.entries[0].read().unwrap())
+                .unwrap()
+                .textures
+                .contains("NEW.PIC")
+        );
+        assert_eq!(d.archive.entries[1].read().unwrap(), original);
+        assert!(d.undo());
+        assert!(!d.dirty());
+        assert_eq!(d.archive.bytes().unwrap(), before);
+        assert!(d.redo());
+        assert_eq!(d.archive.entries.len(), 3);
     }
 }

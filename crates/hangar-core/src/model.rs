@@ -16,12 +16,16 @@ pub struct Face {
     pub offset: usize,
     pub sub: u8,
     pub flags: u8,
+    pub color: u8,
+    pub texture: String,
+    pub uv: Vec<[i32; 2]>,
 }
 #[derive(Clone, Debug)]
 pub struct Model {
     pub vertices: Vec<Vertex>,
     pub faces: Vec<Face>,
     pub textures: BTreeSet<String>,
+    pub texture_records: BTreeMap<usize, String>,
     pub writable: bool,
     pub reason: String,
 }
@@ -105,15 +109,18 @@ impl Model {
             vertices: Vec::new(),
             faces: Vec::new(),
             textures: BTreeSet::new(),
+            texture_records: BTreeMap::new(),
             writable: true,
             reason: String::new(),
         };
         let mut slots = BTreeMap::<usize, usize>::new();
         let mut seen = BTreeSet::new();
+        let mut texture = String::new();
         let mut p = 0;
         let mut end = None;
         let mut trans = [0; 3];
-        let mut stack: Vec<(usize, Option<usize>, [i32; 3])> = Vec::new();
+        type Frame = (usize, Option<usize>, [i32; 3], Option<String>);
+        let mut stack: Vec<Frame> = Vec::new();
         let mut done = false;
         for _ in 0..30000 {
             if stack.len() > 64 {
@@ -121,10 +128,13 @@ impl Model {
             }
             let op = slice(c, p, 1)?[0];
             if op == 0 || (op == 0x1e && end.is_none_or(|e| p >= e)) {
-                if let Some((ret, e, t)) = stack.pop() {
+                if let Some((ret, e, t, old_texture)) = stack.pop() {
                     p = ret;
                     end = e;
                     trans = t;
+                    if let Some(name) = old_texture {
+                        texture = name;
+                    }
                     continue;
                 }
                 done = true;
@@ -143,7 +153,7 @@ impl Model {
                 0x12 => {
                     out.writable = false;
                     let t = target(p + 4, word(c, p + 2)?, len)?;
-                    stack.push((p + 4, end, trans));
+                    stack.push((p + 4, end, trans, None));
                     p = t;
                     end = None;
                 }
@@ -154,7 +164,7 @@ impl Model {
                 0xc4 => {
                     out.writable = false;
                     let t = target(p + 16, word(c, p + 14)?, len)?;
-                    stack.push((p + 16, end, trans));
+                    stack.push((p + 16, end, trans, Some(texture.clone())));
                     trans[0] += word(c, p + 2)?;
                     trans[1] += word(c, p + 6)?;
                     trans[2] += word(c, p + 4)?;
@@ -256,8 +266,18 @@ impl Model {
                                 .ok_or_else(|| invalid("Unresolved SH vertex"))?,
                         );
                     }
+                    let mut uv = Vec::new();
                     if sub & 4 != 0 {
-                        p += count * if flags & 1 != 0 { 2 } else { 4 };
+                        for _ in 0..count {
+                            if flags & 1 != 0 {
+                                let b = slice(c, p, 2)?;
+                                uv.push([b[0] as i32, b[1] as i32]);
+                                p += 2;
+                            } else {
+                                uv.push([u16_at(c, p)? as i32, u16_at(c, p + 2)? as i32]);
+                                p += 4;
+                            }
+                        }
                     }
                     slice(c, addr, p - addr)?;
                     if seen.insert((addr, trans)) {
@@ -266,6 +286,9 @@ impl Model {
                             offset: start + addr,
                             sub,
                             flags,
+                            color: c[addr + 3],
+                            texture: texture.clone(),
+                            uv,
                         });
                     }
                 }
@@ -275,11 +298,17 @@ impl Model {
                         .map_err(|_| invalid("Non-ASCII texture reference"))?
                         .to_ascii_uppercase();
                     if !name.is_empty() {
+                        out.texture_records.insert(start + p + 2, name.clone());
+                        texture = name.clone();
                         out.textures.insert(name);
                     }
                     p += 16;
                 }
-                0xe0 | 0xca => p += 4,
+                0xe0 => {
+                    texture.clear();
+                    p += 4;
+                }
+                0xca => p += 4,
                 0x42 => {
                     let rest = slice(c, p + 2, len.saturating_sub(p + 2))?;
                     p += 3 + rest
@@ -444,6 +473,55 @@ impl Model {
         Self::parse(&out)?;
         Ok(out)
     }
+    /// Change only reviewed FC palette bytes, never geometry/links/relocations.
+    /// Scope is untextured faces reached by this static-pose traversal.
+    pub fn retarget_texture(source: &[u8], from: &str, to: &str) -> Result<(Vec<u8>, usize)> {
+        crate::archive::validate_name(to)?;
+        if !to.to_ascii_uppercase().ends_with(".PIC") {
+            return Err(invalid("Texture name must end in .PIC"));
+        }
+        let model = Self::parse(source)?;
+        let mut out = source.to_vec();
+        let mut n = 0;
+        for (at, name) in model.texture_records {
+            let full = if name.contains('.') {
+                name
+            } else {
+                format!("{name}.PIC")
+            };
+            if full.eq_ignore_ascii_case(from) {
+                out[at..at + 14].fill(0);
+                out[at..at + to.len()].copy_from_slice(to.as_bytes());
+                n += 1;
+            }
+        }
+        if n == 0 {
+            return Err(invalid("No decoded texture references matched"));
+        }
+        Self::parse(&out)?;
+        Ok((out, n))
+    }
+    pub fn recolor(source: &[u8], from: u8, to: u8) -> Result<(Vec<u8>, usize)> {
+        let model = Self::parse(source)?;
+        let mut out = source.to_vec();
+        let mut seen = BTreeSet::new();
+        for f in &model.faces {
+            if f.sub & 4 == 0
+                && u16_at(source, f.offset + 3)? == from as usize
+                && seen.insert(f.offset)
+            {
+                out[f.offset + 3] = to;
+            }
+        }
+        let n = seen.len();
+        if n == 0 {
+            return Err(invalid(
+                "No matching untextured face colors in the decoded pose",
+            ));
+        }
+        Self::parse(&out)?;
+        Ok((out, n))
+    }
     pub fn obj(&self) -> String {
         let mut out =
             String::from("# TORE Hangar static pose; geometry only, no textures or animation\n");
@@ -555,5 +633,61 @@ mod tests {
         b[256] = 0xff;
         b[257] = 0xff;
         assert!(Model::parse(&b).is_err());
+    }
+}
+
+/// Synthetic textured geometry for UI and paint-coordinate tests.
+pub fn demo_textured() -> Vec<u8> {
+    let original = demo_shape();
+    let mut code = vec![0xe2, 0];
+    code.extend(b"DEMO.PIC\0\0\0\0\0\0");
+    code.extend(&original[256..298]);
+    for face in original[298..original.len() - 1].chunks_exact(9) {
+        let mut f = face.to_vec();
+        f[1] = 4;
+        f[2] = 1;
+        code.extend(f);
+        code.extend([0, 0, 31, 0, 16, 31]);
+    }
+    code.push(0);
+    let mut out = original[..256].to_vec();
+    for at in [128, 136] {
+        out[at..at + 4].copy_from_slice(&(code.len() as u32).to_le_bytes());
+    }
+    out.extend(code);
+    out
+}
+#[cfg(test)]
+mod material_tests {
+    use super::*;
+    #[test]
+    fn face_color_changes_only_reviewed_palette_byte() {
+        let b = demo_shape();
+        let (after, n) = Model::recolor(&b, 32, 150).unwrap();
+        assert_eq!(n, 8);
+        let m = Model::parse(&b).unwrap();
+        let changed: Vec<_> = b
+            .iter()
+            .zip(&after)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            changed,
+            m.faces.iter().map(|f| f.offset + 3).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            Model::parse(&after).unwrap().vertices[0].point,
+            m.vertices[0].point
+        );
+    }
+    #[test]
+    fn uv_texture_decode() {
+        let b = demo_textured();
+        let m = Model::parse(&b).unwrap();
+        assert_eq!(m.faces[0].texture, "DEMO.PIC");
+        assert_eq!(m.faces[0].uv, vec![[0, 0], [31, 0], [16, 31]]);
+        assert!(Model::recolor(&b, 32, 2).is_err());
     }
 }
