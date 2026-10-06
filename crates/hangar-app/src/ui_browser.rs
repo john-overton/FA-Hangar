@@ -1,6 +1,18 @@
 use super::view::{border, icon, label_fit, text_fit, Action, Icon, Layout};
 use super::*;
 impl App {
+    pub(super) fn browser_path(&self, value: &str) -> String {
+        let value = value.trim();
+        if !value.is_empty()
+            && !value.contains(['/', '\\'])
+            && value.as_bytes().get(1) != Some(&b':')
+        {
+            if let Some(b) = &self.browser {
+                return format!("{}/{}", b.folder.trim_end_matches(['/', '\\']), value);
+            }
+        }
+        value.into()
+    }
     pub(super) fn parent_path(path: &str) -> String {
         let p = path.trim_end_matches(['/', '\\']);
         match p.rsplit_once(['/', '\\']) {
@@ -54,7 +66,22 @@ impl App {
                 });
                 if let Some(p) = &mut self.prompt {
                     if matches!(p.kind, PromptKind::File(_)) {
-                        p.value = format!("{}/", path.trim_end_matches(['/', '\\']));
+                        let save = matches!(
+                            p.kind,
+                            PromptKind::File(
+                                FileAction::Save
+                                    | FileAction::Png
+                                    | FileAction::Wav
+                                    | FileAction::Export
+                                    | FileAction::Obj
+                            )
+                        );
+                        let leaf = if save && !crate::platform::is_dir(&p.value) {
+                            p.value.rsplit(['/', '\\']).next().unwrap_or("").to_string()
+                        } else {
+                            String::new()
+                        };
+                        p.value = format!("{}/{}", path.trim_end_matches(['/', '\\']), leaf);
                     }
                 }
             }

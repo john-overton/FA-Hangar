@@ -797,9 +797,9 @@ impl App {
                 Key::Enter => {
                     if let Some(p) = &self.prompt {
                         if matches!(p.kind, PromptKind::File(_))
-                            && crate::platform::is_dir(p.value.trim())
+                            && crate::platform::is_dir(&self.browser_path(&p.value))
                         {
-                            let folder = p.value.trim().to_string();
+                            let folder = self.browser_path(&p.value);
                             self.browse_folder(&folder);
                             return;
                         }
@@ -940,7 +940,10 @@ impl App {
                                 Err("Type DISCARD or press Esc".into())
                             }
                         }
-                        PromptKind::File(a) => self.perform_file(a, p.value.trim()),
+                        PromptKind::File(a) => {
+                            let path = self.browser_path(&p.value);
+                            self.perform_file(a, &path)
+                        }
                         PromptKind::Field(index) => {
                             let r = self
                                 .brf

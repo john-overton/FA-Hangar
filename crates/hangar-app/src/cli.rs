@@ -32,7 +32,8 @@ pub fn run() -> Result<()> {
             assert!(app.doc.archive.find("NEWJET.PT").is_some(),"{}",app.status);
             assert!(app.doc.dirty());
             app.file_prompt(FileAction::Save);app.key(Key::Char('a'),true,false);
-            for c in output.to_str().unwrap().chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);
+            for c in temp.to_str().unwrap().chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);app.key(Key::Char('a'),true,false);
+            for c in "NEW.LIB".chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);
             assert!(!app.doc.dirty(),"{}",app.status);
             app.open(output.to_str().unwrap())?;assert_eq!(app.doc.archive.entries.len(),7);
             std::fs::remove_dir_all(temp).map_err(|e|e.to_string())?;

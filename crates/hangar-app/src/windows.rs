@@ -248,7 +248,7 @@ fn path(path: &str) -> Result<CString> {
     if !path.is_ascii() {
         return Err("This build requires ASCII file paths".into());
     }
-    CString::new(path).map_err(|_| "Path contains a NUL byte".into())
+    CString::new(path.replace('/', "\\")).map_err(|_| "Path contains a NUL byte".into())
 }
 fn error(action: &str) -> String {
     format!("{} (Windows error {})", action, unsafe { GetLastError() })
