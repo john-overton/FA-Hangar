@@ -1,0 +1,65 @@
+name: Windows executables
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: i686-pc-windows-msvc
+            package: tore-hangar-win98-me-pentium4
+            legacy: '--legacy'
+          - target: x86_64-pc-windows-msvc
+            package: tore-hangar-win64
+            legacy: ''
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.91.1 --profile minimal --component rustfmt,clippy --target ${{ matrix.target }}
+      - name: Format and test portable core
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Core tests use the runner's standard test runtime, not our GUI entry point.
+          $env:RUSTFLAGS = '-C target-feature=+crt-static'
+          cargo test --locked -p hangar-core
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Lint and build native executable
+        shell: pwsh
+        run: |
+          cargo clippy --locked --release --target ${{ matrix.target }} -- -D warnings
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo build --locked --release --target ${{ matrix.target }}
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Audit executable and run shared editor smoke test
+        shell: pwsh
+        run: |
+          $exe = 'target/${{ matrix.target }}/release/tore-hangar.exe'
+          python tools/check_pe.py $exe ${{ matrix.legacy }}
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $process = Start-Process $exe -ArgumentList '--smoke-test' -PassThru
+          if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Smoke test timed out' }
+          if ($process.ExitCode -ne 0) { throw "Smoke test failed: $($process.ExitCode)" }
+      - name: Make portable package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/tore-hangar.exe package/
+          Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md package/
+          Copy-Item docs/COMPATIBILITY.md,docs/WINDOWS-TEST.md package/
+          Get-FileHash package/tore-hangar.exe -Algorithm SHA256 | Format-List | Out-File package/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: package/
+          if-no-files-found: error
