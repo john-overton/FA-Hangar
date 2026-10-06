@@ -9,14 +9,32 @@ Blender-inspired workspace.
 BRF editing work; general animated aircraft geometry remains read-only until
 its spatial and control records can be rewritten safely. No game data ships.
 
-The 0.2 UI follows the supplied concept: one menu/workspace bar, categorized
+The UI follows the supplied concept: one menu/workspace bar, categorized
 outliner with type icons, linked aircraft/shape selection, grouped source-value
-properties, and Browse/Model/Flight/Graft/Package workspaces. Raw fields show
+properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields show
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
+Version 0.3 adds an in-app file browser and recent LIBs, audio playback/WAV
+export, PIC preview/PNG export, and linked model/texture painting. Recent paths
+are kept in `tore-hangar-recent.txt` beside the executable; if that location is
+read-only, history still works for the current session.
+
 ## What works
 
+- Browse folders/drives and reopen recent LIBs. Click directories to enter,
+  select a file, then Open; the editable path field also accepts a directory.
+- Preview raw `.5K` / `.11K` PCM8 audio and PCM8 mono WAVs; Play/Stop and WAV
+  export. Windows uses its built-in WinMM service. Linux playback uses `aplay`.
+- Preview and export PIC images as PNG with transparency. Paint existing
+  opaque raster pixels with original palette indices, including span-coded
+  PICs. Headers, palettes, row/span tables and unknown bytes are preserved.
+- Pick a model face, inspect its UV footprint on the named texture, and paint
+  the atlas with a live model preview, or brush directly on the model. Each
+  stroke is one undo operation. Zoom/pan the atlas for individual pixels.
+- Clone a PIC and retarget the current shape's decoded named references in
+  one undo step. Remap palette indices on decoded untextured FC faces without
+  changing geometry, relative links or record sizes.
 - Open EALIB archives, search entries, inspect bytes, add, remove, replace and
   export resources. Stored and raw-literal DCL-compressed entries are readable.
 - Package a new LIB with the required EOF sentinel. Untouched entry payloads
@@ -89,7 +107,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently about
-160–200 KB. Copy it to a writable location and run it. No installer or runtime
+230–285 KB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -124,6 +142,39 @@ This creates a **mod candidate**, not a guarantee that any arbitrary SH will
 fly correctly. Generic OT object creation and geometric part grafting are not
 implemented. See [the Windows test checklist](docs/WINDOWS-TEST.md).
 
+## Paint a livery
+
+1. Select a PT/SH and choose **Textured** (or View > Textured / wireframe).
+2. Click a visible panel. The inspector identifies its face and named PIC.
+3. For a separate livery, first use a new aircraft variant, then **Clone texture
+   for this shape** with a new 8.3 PIC name. This protects the original PIC;
+   only decoded references in that SH are changed. Other LODs/damage shapes
+   may still use the original texture and must be reviewed separately.
+4. Click **UV / paint …**. Amber outlines show that face's footprint on the
+   atlas. Choose a palette swatch and **Brush**. The lower **3D preview** updates
+   during the stroke. Wheel zooms the atlas; middle-drag pans it. Middle-drag
+   and wheel over the model preview orbit and zoom the model.
+5. Alternatively, stay in Model and enable **Paint selected panel on model**.
+   Mouse hits map back to texture coordinates. Dragging remains on the selected
+   face; release commits the stroke. Ctrl+Z undoes it; Esc cancels a live stroke.
+6. Use **Export PNG** for an external image, or **Package LIB** to save the
+   edited PIC in game format. Reopen the new LIB, inspect and test it in FA.
+
+The brush radius is in texture pixels. Shared/mirrored UVs and shared PIC names
+mean other panels or models can change too. The preview is an unlit,
+orthographic static pose with named textures; runtime-selected decals,
+unvisited LODs/animations and game lighting are not reproduced. A "panel" here
+is one decoded polygon, not a semantic group of aircraft parts. Surface recolor
+acts on matching untextured face color indices in the decoded pose; it does not
+rewrite Gouraud vertex colors or textured materials.
+
+A full embedded PIC palette or a base palette is needed for painting. Hangar
+loads `PALETTE.PAL` from the current LIB, or you can load a 768-byte 6-bit RGB
+PAL for preview. Missing colors are shown in grayscale and painting is blocked
+until a complete palette is available. Span holes are preserved; this brush
+does not create new opaque pixels outside existing spans. PNG/WAV export does
+not imply PNG import, arbitrary audio-format conversion or re-UV tools.
+
 ## Controls
 
 | Action | Control |
@@ -146,15 +197,15 @@ implemented. See [the Windows test checklist](docs/WINDOWS-TEST.md).
 | Close with unsaved edits | Close window; type DISCARD or Esc to return |
 
 Scale currently acts on the selected axis in percent; rotation is in degrees,
-translation in integer source coordinates. File dialogs currently use a typed
-path. They do not create missing directories. A packaging error leaves edits
+translation in integer source coordinates. The file browser has directory
+rows, drive roots, recent LIBs and an editable path. It does not create missing directories. A packaging error leaves edits
 in memory and displays its cause. The app writes only when explicitly asked.
 
 ## Scope still ahead
 
-A complete animated SH writer, vertex/face selection, topology changes,
-texture and palette editing, hardpoint tools, animation playback, dependency
-closure, richer grafting, unit-aware gameplay controls, native file pickers,
+A complete animated SH writer, geometric vertex/face editing, topology changes,
+UV layout editing, palette RGB editing, hardpoint tools, animation playback,
+complete dependency closure, richer grafting, unit-aware gameplay controls,
 resizable editor splits and bitmap fonts.
 There are no inactive timeline controls pretending these features work.
 

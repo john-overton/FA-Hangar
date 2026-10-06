@@ -24,6 +24,21 @@ pub(super) enum Action {
     Validate,
     Apply,
     Cancel,
+    BrowserUp,
+    BrowserRoots,
+    BrowserPick(usize),
+    Recent(usize),
+    PlayAudio,
+    StopAudio,
+    PaintToggle,
+    PickColor,
+    Brush(u8),
+    Radius(usize),
+    OpenTexture(usize),
+    Recolor,
+    Textured,
+    ModelPaint,
+    Isolate,
 }
 pub(super) struct Hit {
     rect: [i32; 4],
@@ -43,7 +58,7 @@ pub(super) struct Layout {
     pub hits: Vec<Hit>,
 }
 #[derive(Clone, Copy)]
-enum Icon {
+pub(super) enum Icon {
     Logo,
     Lib,
     Aircraft,
@@ -90,7 +105,7 @@ pub(super) fn category_of(name: &str) -> usize {
         _ => 8,
     }
 }
-fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
+pub(super) fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
     let paths: &[&[(i32, i32)]] = match i {
         Icon::Logo => &[
             &[(8, 1), (15, 8), (8, 15), (1, 8), (8, 1)],
@@ -238,19 +253,19 @@ fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
         }
     }
 }
-fn border(d: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Rgb) {
+pub(super) fn border(d: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Rgb) {
     d.line(x, y, x + w - 1, y, color);
     d.line(x, y + h - 1, x + w - 1, y + h - 1, color);
     d.line(x, y, x, y + h - 1, color);
     d.line(x + w - 1, y, x + w - 1, y + h - 1, color);
 }
-fn text_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
+pub(super) fn text_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
     d.text(x, y, &short(s, (w.max(0) / 7) as usize), color);
 }
-fn label_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
+pub(super) fn label_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
     d.label(x, y, &short(s, (w.max(0) / 7) as usize), color);
 }
-fn badge(d: &mut Canvas, x: i32, y: i32, s: &str) {
+pub(super) fn badge(d: &mut Canvas, x: i32, y: i32, s: &str) {
     let w = s.len() as i32 * 7 + 8;
     d.rect(x, y, w, 16, c::GM_600);
     d.text(x + 4, y + 12, s, c::INK_MUTED);
@@ -265,10 +280,10 @@ fn chevron(d: &mut Canvas, x: i32, y: i32, open: bool) {
     }
 }
 impl Layout {
-    fn hit(&mut self, rect: [i32; 4], action: Action) {
+    pub(super) fn hit(&mut self, rect: [i32; 4], action: Action) {
         self.hits.push(Hit { rect, action });
     }
-    fn button(&mut self, rect: [i32; 4], title: &str, action: Action, active: bool) {
+    pub(super) fn button(&mut self, rect: [i32; 4], title: &str, action: Action, active: bool) {
         let [x, y, w, h] = rect;
         let d = &mut self.canvas;
         d.rect(
@@ -300,7 +315,14 @@ impl Layout {
         );
         self.hit(rect, action);
     }
-    fn tool(&mut self, rect: [i32; 4], i: Icon, action: Action, enabled: bool, active: bool) {
+    pub(super) fn tool(
+        &mut self,
+        rect: [i32; 4],
+        i: Icon,
+        action: Action,
+        enabled: bool,
+        active: bool,
+    ) {
         let [x, y, w, h] = rect;
         self.canvas.rect(
             x,
@@ -347,8 +369,111 @@ impl App {
             self.filter_focus = false;
         }
         match a {
+            Action::BrowserUp => {
+                if let Some(b) = &self.browser {
+                    let p = Self::parent_path(&b.folder);
+                    self.browse_folder(&p);
+                }
+            }
+            Action::BrowserRoots => {
+                self.browser = Some(Browser {
+                    folder: "Drives / locations".into(),
+                    files: crate::platform::roots()
+                        .into_iter()
+                        .map(|p| FileItem {
+                            name: p.clone(),
+                            path: p,
+                            directory: true,
+                        })
+                        .collect(),
+                    scroll: 0,
+                });
+            }
+            Action::BrowserPick(i) => self.browse_pick(i),
+            Action::Recent(i) => self.recent_open(i),
+            Action::PlayAudio => {
+                let result = Pcm::parse(self.name(), &self.data)
+                    .map(|p| p.wav())
+                    .and_then(crate::platform::play_audio);
+                match result {
+                    Ok(()) => self.status = "Audio preview started".into(),
+                    Err(e) => self.status = format!("Error: {e}"),
+                };
+            }
+            Action::StopAudio => crate::platform::stop_audio(),
+            Action::PaintToggle => {
+                self.paint_enabled = !self.paint_enabled;
+                self.pick_color = false;
+            }
+            Action::PickColor => {
+                self.pick_color = !self.pick_color;
+                self.paint_enabled = false;
+            }
+            Action::Brush(i) => self.brush = i,
+            Action::Radius(n) => self.brush_radius = n,
+            Action::OpenTexture(i) => self.open_texture(i),
+            Action::Textured => {
+                self.textured = !self.textured;
+                self.perspective = false;
+            }
+            Action::ModelPaint => {
+                self.model_paint = !self.model_paint;
+                self.perspective = false;
+                self.textured = true;
+            }
+            Action::Isolate => {
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::Isolate,
+                    title: "Clone PIC and retarget this shape's decoded references (new 8.3 name)"
+                        .into(),
+                    value: "LIVERY.PIC".into(),
+                    axis: 0,
+                });
+            }
+            Action::Recolor => {
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::Recolor,
+                    title: "Surface palette remap: FROM TO (0..255), decoded untextured faces"
+                        .into(),
+                    value: format!(
+                        "{} {}",
+                        self.selected_face
+                            .and_then(|i| self.model.as_ref().and_then(|m| m.faces.get(i)))
+                            .map_or(self.brush, |f| f.color),
+                        self.brush
+                    ),
+                    axis: 0,
+                });
+            }
             Action::Menu(n) => self.menu = if self.menu == Some(n) { None } else { Some(n) },
-            Action::Mode(m) => self.mode = m,
+            Action::Mode(m) => {
+                if m == Mode::Model && self.model.is_none() {
+                    if let Some(i) = self.context_entry {
+                        let face = self.selected_face;
+                        self.select_entry(i);
+                        self.selected_face = face;
+                    }
+                }
+                if m == Mode::Media && self.pic.is_none() {
+                    if let Some(name) = self
+                        .model
+                        .as_ref()
+                        .and_then(|m| m.textures.iter().next())
+                        .cloned()
+                    {
+                        let name = if name.contains('.') {
+                            name
+                        } else {
+                            format!("{name}.PIC")
+                        };
+                        if let Some(i) = self.doc.archive.find(&name) {
+                            self.open_texture(i);
+                            return;
+                        }
+                    }
+                }
+                self.mode = m;
+            }
             Action::File(f) => self.file_prompt(f),
             Action::Demo => self.demo(),
             Action::Close => self.close(),
@@ -421,12 +546,41 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "textured" {
+            self.mode = Mode::Model;
+            self.textured = true;
+            return Ok(());
+        }
+        if name == "browser" {
+            self.file_prompt(FileAction::Open);
+            return Ok(());
+        }
+        if name == "uv" {
+            if let Some((fi, face)) = self.model.as_ref().and_then(|m| {
+                m.faces
+                    .iter()
+                    .enumerate()
+                    .find(|(_, f)| !f.uv.is_empty() && !f.texture.is_empty())
+            }) {
+                let name = if face.texture.contains('.') {
+                    face.texture.clone()
+                } else {
+                    format!("{}.PIC", face.texture)
+                };
+                if let Some(i) = self.doc.archive.find(&name) {
+                    self.selected_face = Some(fi);
+                    self.open_texture(i);
+                    return Ok(());
+                }
+            }
+        }
         self.mode = match name {
             "browse" => Mode::Browse,
             "model" => Mode::Model,
             "flight" => Mode::Properties,
             "graft" => Mode::Graft,
             "package" => Mode::Package,
+            "media" => Mode::Media,
             _ => return Err("Unknown workspace".into()),
         };
         Ok(())
@@ -572,6 +726,7 @@ impl App {
             ("Flight", Mode::Properties, 56),
             ("Graft", Mode::Graft, 54),
             ("Package", Mode::Package, 70),
+            ("Paint", Mode::Media, 52),
         ];
         let mut tx = 386;
         for (name, m, width) in tabs {
@@ -612,10 +767,16 @@ impl App {
                 self.browse_layout(&mut out);
             } else if self.mode == Mode::Properties {
                 self.fields_layout(&mut out, l + 1, 26, r - l - 2, dock - 26, true);
+            } else if self.mode == Mode::Media {
+                self.media_layout(&mut out);
             } else {
                 self.graft_layout(&mut out);
             }
-            self.inspector(&mut out);
+            if self.mode == Mode::Media || self.selected_face.is_some() {
+                self.media_inspector(&mut out);
+            } else {
+                self.inspector(&mut out);
+            }
             self.dock_layout(&mut out, l + 1, dock, r - l - 2, h - dock - 22);
             out.canvas.line(l, 26, l, h - 22, c::GM_1000);
             out.canvas.line(r, 26, r, h - 22, c::GM_1000);
@@ -634,6 +795,7 @@ impl App {
                 Mode::Properties => "Click value Edit   Wheel Scroll   Ctrl+Z Undo",
                 Mode::Graft => "Select field   Choose donor LIB   Review value   Apply",
                 Mode::Package => "Ctrl+B Package   Output files are created new",
+                Mode::Media => "Paint indexed colors / one stroke per undo / Ctrl+S package",
             }
         };
         text_fit(
@@ -672,7 +834,13 @@ impl App {
             self.menu_layout(&mut out, menu);
         }
         if self.prompt.is_some() {
-            self.prompt_layout(&mut out);
+            if matches!(self.prompt.as_ref().unwrap().kind, PromptKind::File(_))
+                && self.browser.is_some()
+            {
+                self.browser_layout(&mut out);
+            } else {
+                self.prompt_layout(&mut out);
+            }
         }
         out
     }
@@ -850,6 +1018,16 @@ impl App {
         d.label(l + 152, 44, "Static pose", c::INK_FAINT);
         if width > 420 {
             o.button(
+                [r - 254, 29, 94, 22],
+                if self.textured {
+                    "Wireframe"
+                } else {
+                    "Textured"
+                },
+                Action::Textured,
+                self.textured,
+            );
+            o.button(
                 [r - 153, 29, 65, 22],
                 "Top",
                 Action::View(7),
@@ -858,7 +1036,11 @@ impl App {
             o.button([r - 84, 29, 77, 22], "Frame", Action::View(0), false);
         }
         if let Some(m) = self.preview.as_ref().or(self.model.as_ref()) {
-            self.viewport(&mut o.canvas, m, l + 1, 54, width - 2, dock - 54);
+            if self.textured {
+                self.draw_model(o, l + 1, 54, width - 2, dock - 54);
+            } else {
+                self.viewport(&mut o.canvas, m, l + 1, 54, width - 2, dock - 54);
+            }
         } else {
             let d = &mut o.canvas;
             d.label(l + 32, 144, "A workshop for Fighters Anthology", c::INK);
@@ -1178,11 +1360,41 @@ impl App {
                     false,
                 );
             }
-            o.canvas.label(r + 16, 400, "VIEWPORT", c::INK_FAINT);
-            o.canvas
-                .label(r + 16, 426, "MMB orbit / Shift+MMB pan", c::INK_MUTED);
-            o.canvas
-                .label(r + 16, 450, "Wheel zoom / Home frame", c::INK_MUTED);
+            if let Some(m) = &self.model {
+                let mut y = 390;
+                for name in m.textures.iter().take(6) {
+                    let n = if name.contains('.') {
+                        name.clone()
+                    } else {
+                        format!("{name}.PIC")
+                    };
+                    if let Some(i) = self.doc.archive.find(&n) {
+                        o.button(
+                            [r + 10, y, w - 20, 23],
+                            &format!("Paint {n}"),
+                            Action::OpenTexture(i),
+                            false,
+                        );
+                    } else {
+                        label_fit(
+                            &mut o.canvas,
+                            r + 16,
+                            y + 15,
+                            w - 32,
+                            &format!("Missing: {n}"),
+                            c::AMBER,
+                        );
+                    }
+                    y += 28;
+                }
+            }
+            if h > 680 {
+                o.canvas.label(r + 16, 580, "VIEWPORT", c::INK_FAINT);
+                o.canvas
+                    .label(r + 16, 606, "MMB orbit / Shift+MMB pan", c::INK_MUTED);
+                o.canvas
+                    .label(r + 16, 630, "Wheel zoom / Home frame", c::INK_MUTED);
+            }
         }
     }
     fn entry_inspector(&self, o: &mut Layout) {
@@ -1391,7 +1603,15 @@ impl App {
             Action::Dock(2),
             self.dock == 2,
         );
-        if w > 450 {
+        if self.mode == Mode::Media && self.context_model.is_some() {
+            o.button(
+                [x + 227, y + 4, 86, 22],
+                "3D preview",
+                Action::Dock(3),
+                self.dock == 3,
+            );
+        }
+        if w > 450 && !(self.mode == Mode::Media && self.context_model.is_some()) {
             text_fit(
                 &mut o.canvas,
                 x + 239,
@@ -1401,7 +1621,17 @@ impl App {
                 c::INK_MUTED,
             );
         }
-        if self.dock == 0 && self.brf.is_some() {
+        if self.dock == 3 && self.context_model.is_some() {
+            self.draw_model(o, x, y + 30, w, h - 30);
+            label_fit(
+                &mut o.canvas,
+                x + 12,
+                y + 49,
+                w - 24,
+                "Live model / MMB orbit / wheel zoom",
+                c::INK_FAINT,
+            );
+        } else if self.dock == 0 && self.brf.is_some() {
             self.fields_layout(o, x, y + 30, w, h - 30, false);
         } else if self.dock == 1 || (self.dock == 0 && self.brf.is_none()) {
             o.canvas.rect(x, y + 30, w, h - 30, c::GM_950);
@@ -1664,6 +1894,8 @@ impl App {
                 ("Replace entry", Action::File(FileAction::Replace)),
                 ("Export geometry as OBJ", Action::File(FileAction::Obj)),
                 ("Copy donor field", Action::Mode(Mode::Graft)),
+                ("Preview / Paint media", Action::Mode(Mode::Media)),
+                ("Recolor face palette", Action::Recolor),
             ],
             4 => vec![
                 ("Frame all        Home", Action::View(0)),
@@ -1671,6 +1903,7 @@ impl App {
                 ("Side                3", Action::View(3)),
                 ("Top                 7", Action::View(7)),
                 ("Toggle projection   5", Action::View(5)),
+                ("Textured / wireframe", Action::Textured),
             ],
             5 => vec![
                 ("New aircraft from SH", Action::File(FileAction::Variant)),

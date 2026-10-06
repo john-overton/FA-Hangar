@@ -6,3 +6,5 @@
 *.PT
 *.exe
 __pycache__/
+
+tore-hangar-recent.txt

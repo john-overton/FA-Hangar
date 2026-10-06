@@ -7,7 +7,7 @@ The EXE is portable; the other files are documentation and licensing.
 
 ## Quick application check
 
-1. Choose **File > Load synthetic demo** (or click the Hangar logo). Confirm a wireframe and seven synthetic entries appear.
+1. Choose **File > Load synthetic demo** (or click the Hangar logo). Confirm a wireframe and nine synthetic entries appear.
 2. Orbit with middle mouse, pan with Shift+middle mouse, zoom with the wheel.
    Try 1/3/7 views and Home to frame.
 3. With DEMO.SH selected, press G, X, type 10, Enter. Confirm Modified.
@@ -45,6 +45,29 @@ import can substitute another compatible SH. Hardpoints, flight properties,
 damaged shapes and shadow remain donor-derived until deliberately changed.
 Part grafting is not available yet. General retail shapes are read-only in
 the geometry editor, but can be imported intact into a new aircraft package.
+
+## File browser, audio and painting
+
+1. Ctrl+O: navigate a folder, try Up and Drives, select a LIB and Open.
+   Restart and verify it appears under Recent LIBs. A missing recent file
+   should show an error and retain the current document.
+2. Select DEMO.5K or a retail 5K/11K sound. Test Play, Stop and switching entries.
+   Export WAV and play it in a separate audio player.
+3. Select DEMO.PIC or a retail texture. Export PNG, inspect its dimensions/colors,
+   then paint a stroke with the indexed brush. Confirm one undo restores it.
+4. Select a textured SH, click a visible panel, then UV / paint its PIC. Confirm
+   the amber UV outline and live lower model preview. Zoom and pan the atlas.
+5. Paint on the atlas and watch the model; return to Model and enable Paint
+   selected panel on model. Test brush strokes, cancel with Esc, and undo/redo.
+6. Clone a texture to a new name and verify the original PIC stays unchanged.
+   One undo should restore the shape references and remove the clone together.
+7. Package to a new LIB, reopen and check the painted pixels. Test the livery
+   in the original game, including other LODs, damage and shared textures.
+
+Painting requires an embedded full palette or a loaded PALETTE.PAL. The synthetic
+PIC includes its palette; retail textures often rely on the LIB's base palette.
+Clone/paint scope is the decoded static pose, so check the remaining model states
+separately. No retail data is included in the test package.
 
 ## Please report
 

@@ -26,6 +26,7 @@ pub fn run() -> Result<()> {
             platform::write_new(shape.to_str().unwrap(), &hangar_core::model::demo_shape())?;
             app.file_prompt(FileAction::Variant);
             for value in [shape.to_str().unwrap(),"NEWJET","New test aircraft","CREATE"] {
+                app.key(Key::Char('a'),true,false);
                 for c in value.chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);
             }
             assert!(app.doc.archive.find("NEWJET.PT").is_some(),"{}",app.status);
@@ -36,8 +37,11 @@ pub fn run() -> Result<()> {
             app.open(output.to_str().unwrap())?;assert_eq!(app.doc.archive.entries.len(),7);
             std::fs::remove_dir_all(temp).map_err(|e|e.to_string())?;
             app.smoke_layout();
+            app.smoke_media();
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
+        Some("--paint-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Shape not found")?;app.select_entry(at);println!("{}",app.check_real_paint()?);},
+        Some(cmd @ ("export-png"|"export-wav"))=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Entry not found")?;app.select_entry(at);app.file_prompt(if cmd=="export-png"{FileAction::Png}else{FileAction::Wav});app.key(Key::Char('a'),true,false);for c in argument(&args,3)?.chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);if app.status.starts_with("Error:"){return Err(app.status);}println!("{}",app.status);},
         Some("--native-snapshot") => {
             if let Some(path)=args.get(2).filter(|p|p.as_str()!="-") { app.open(path)?; if let Some(name)=args.get(3) { let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at); } } else { app.demo(); }
             if let Some(workspace)=args.get(4){app.workspace(workspace)?;}
@@ -51,7 +55,7 @@ pub fn run() -> Result<()> {
             if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
             let mut s=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">",app.width,app.height);
             fn escape(s:&str)->String{s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;")}
-            for d in app.draw().commands{match d{Draw::Rect(x,y,w,h,c)=>s.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>")),Draw::Line(x,y,a,b,c)=>s.push_str(&format!("<path d=\"M{x} {y} L{a} {b}\" stroke=\"#{c:06x}\"/>")),Draw::Label(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t))),Draw::Text(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"monospace\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t)))}}s.push_str("</svg>");platform::write_new(argument(&args,1)?,s.as_bytes())?;
+            for d in app.draw().commands{match d{Draw::Bitmap(x,y,w,h,pixels)=>{for yy in 0..h {let mut xx=0;while xx<w {let color=pixels[yy*w+xx];let mut end=xx+1;while end<w&&pixels[yy*w+end]==color{end+=1;}s.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"1\" fill=\"#{color:06x}\"/>",x+xx as i32,y+yy as i32,end-xx));xx=end;}}},Draw::Rect(x,y,w,h,c)=>s.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>")),Draw::Line(x,y,a,b,c)=>s.push_str(&format!("<path d=\"M{x} {y} L{a} {b}\" stroke=\"#{c:06x}\"/>")),Draw::Label(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t))),Draw::Text(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"monospace\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t)))}}s.push_str("</svg>");platform::write_new(argument(&args,1)?,s.as_bytes())?;
         },
         Some("variant") => {
             let source=Archive::parse(platform::read(argument(&args,1)?)?)?;

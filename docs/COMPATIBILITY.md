@@ -17,7 +17,7 @@ Hangar deliberately bypasses their Windows `std` runtime:
 - `no_std` application and core, `alloc`, aborting panics, single UI thread.
 - Own process entry point, aligned allocator backed by `GetProcessHeap`, and
   small memory/integer compiler helpers. No C runtime or Rust `std` imports.
-- ANSI Win32 and GDI. No DirectX, OpenGL, DWM, COM, Unicode shim or TLS.
+- ANSI Win32, GDI bitmap drawing and WinMM PCM playback. No DirectX, OpenGL, DWM, COM, Unicode shim or TLS.
 - Legacy PE32 OS/subsystem version 4.0, without ASLR/NX flags. These are legacy
   loader settings, not a claim that all modern exploit mitigations apply.
 - Stable Rust `raw-dylib` declarations create import libraries, and bundled
@@ -44,12 +44,21 @@ compiler-generated instructions or runtime behavior work on Windows 98.
 - Output is create-new, flushed before success. A failed write removes the
   partial new output where the operating system permits it. Existing files
   are not replaced. Abrupt power failure is not a transactional save guarantee.
-- No registry entries, installer, config folder or network calls. System fonts
+- No registry entries, installer or network calls. A recent-file sidecar is
+  stored beside the EXE; it can be deleted to clear history. System fonts
   are used. ASCII paths on Windows; LIB entry names retain ASCII 8.3 syntax,
   including DOS punctuation such as `$` picture prefixes and `#`/`^` sounds.
 - Shared UI/format logic is tested on Linux. Windows smoke exercises the
   custom allocator, integer math, drawing command generation, model transform,
-  undo and archive serialization without displaying a window.
+  undo, directory enumeration, UV hit mapping, live texture painting and archive
+  serialization without displaying a window. Audible playback needs a manual
+  device check; CI does not assume an audio device. Linux uses ALSA `aplay`.
+
+The additional Windows APIs are `FindFirstFileA`/`FindNextFileA`/`FindClose`,
+path/drive queries, `StretchDIBits` and `PlaySoundA`, all from the existing Win32
+API family. The audio buffer stays owned until playback is stopped before
+release ([PlaySound memory lifetime](https://learn.microsoft.com/en-us/previous-versions/dd743680(v=vs.85))).
+No WinMM DLL is bundled; Windows supplies it.
 
 ## Manual legacy acceptance still required
 

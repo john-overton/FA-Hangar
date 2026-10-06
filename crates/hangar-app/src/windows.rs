@@ -151,6 +151,21 @@ unsafe extern "system" {
     link(name = "gdi32", kind = "raw-dylib", import_name_type = "undecorated")
 )]
 unsafe extern "system" {
+    fn StretchDIBits(
+        dc: Handle,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        sx: i32,
+        sy: i32,
+        sw: i32,
+        sh: i32,
+        bits: *const c_void,
+        info: *const BitmapInfo,
+        usage: u32,
+        rop: u32,
+    ) -> i32;
     fn CreateSolidBrush(color: u32) -> Handle;
     fn DeleteObject(obj: Handle) -> i32;
     fn CreatePen(style: i32, width: i32, color: u32) -> Handle;
@@ -331,6 +346,20 @@ static mut APP: *mut App = ptr::null_mut();
 fn color(rgb: u32) -> u32 {
     (rgb & 255) << 16 | (rgb & 0xff00) | (rgb >> 16) & 255
 }
+#[repr(C)]
+struct BitmapInfo {
+    size: u32,
+    width: i32,
+    height: i32,
+    planes: u16,
+    bpp: u16,
+    compression: u32,
+    bytes: u32,
+    xppm: i32,
+    yppm: i32,
+    used: u32,
+    important: u32,
+}
 unsafe fn paint(hwnd: Handle) {
     let mut ps: Paint = core::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut ps);
@@ -411,6 +440,36 @@ unsafe fn paint(hwnd: Handle) {
                 SelectObject(back, font);
                 SetTextColor(back, color(c));
                 TextOutA(back, x, y - 12, s.as_ptr().cast(), s.len() as i32);
+            }
+            Draw::Bitmap(x, y, w, h, pixels) => {
+                let info = BitmapInfo {
+                    size: 40,
+                    width: w as i32,
+                    height: -(h as i32),
+                    planes: 1,
+                    bpp: 32,
+                    compression: 0,
+                    bytes: 0,
+                    xppm: 0,
+                    yppm: 0,
+                    used: 0,
+                    important: 0,
+                };
+                StretchDIBits(
+                    back,
+                    x,
+                    y,
+                    w as i32,
+                    h as i32,
+                    0,
+                    0,
+                    w as i32,
+                    h as i32,
+                    pixels.as_ptr().cast(),
+                    &info,
+                    0,
+                    0x00cc0020,
+                );
             }
             Draw::Label(x, y, s, c) => {
                 SelectObject(back, ui_font);
@@ -517,10 +576,10 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
     }
     let quit = app.quit;
     // Capture can reenter the window procedure; the editor borrow ends above.
-    if msg == 0x207 {
+    if msg == 0x207 || msg == 0x201 {
         SetCapture(hwnd);
     }
-    if msg == 0x208 {
+    if msg == 0x208 || msg == 0x202 {
         ReleaseCapture();
     }
     if quit {
@@ -553,6 +612,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             app.key(Key::Char('z'), true, false);
             assert_eq!(app.doc.archive.bytes().unwrap(), before);
             app.smoke_layout();
+            app.smoke_media();
             ExitProcess(0);
         }
         if rest == "--demo" {
@@ -609,6 +669,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
+        stop_audio();
         drop(Box::from_raw(APP));
         ExitProcess(0)
     }
@@ -717,3 +778,194 @@ core::arch::global_asm!(
     "add esp, 16",
     "ret 16",
 );
+
+#[repr(C)]
+struct FindData {
+    attributes: u32,
+    times: [u32; 6],
+    size_high: u32,
+    size_low: u32,
+    reserved: [u32; 2],
+    name: [u8; 260],
+    alternate: [u8; 14],
+}
+#[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
+#[cfg_attr(
+    target_arch = "x86",
+    link(
+        name = "kernel32",
+        kind = "raw-dylib",
+        import_name_type = "undecorated"
+    )
+)]
+unsafe extern "system" {
+    fn GetCurrentDirectoryA(len: u32, buffer: *mut u8) -> u32;
+    fn GetLogicalDriveStringsA(len: u32, buffer: *mut u8) -> u32;
+    fn FindFirstFileA(pattern: *const c_char, data: *mut FindData) -> Handle;
+    fn FindNextFileA(handle: Handle, data: *mut FindData) -> i32;
+    fn FindClose(handle: Handle) -> i32;
+    fn GetFileAttributesA(name: *const c_char) -> u32;
+    fn GetModuleFileNameA(module: Handle, name: *mut u8, len: u32) -> u32;
+}
+#[cfg_attr(not(target_arch = "x86"), link(name = "winmm", kind = "raw-dylib"))]
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "winmm", kind = "raw-dylib", import_name_type = "undecorated")
+)]
+unsafe extern "system" {
+    fn PlaySoundA(sound: *const u8, module: Handle, flags: u32) -> i32;
+}
+pub fn current_dir() -> String {
+    let mut b = [0u8; 260];
+    let n = unsafe { GetCurrentDirectoryA(260, b.as_mut_ptr()) } as usize;
+    if n == 0 || n >= 260 {
+        "C:\\".into()
+    } else {
+        String::from_utf8_lossy(&b[..n]).into_owned()
+    }
+}
+pub fn roots() -> Vec<String> {
+    let mut b = [0u8; 128];
+    let n = unsafe { GetLogicalDriveStringsA(128, b.as_mut_ptr()) } as usize;
+    if n >= 128 {
+        return vec![];
+    }
+    b[..n]
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect()
+}
+pub fn is_dir(name: &str) -> bool {
+    let Ok(name) = path(name) else {
+        return false;
+    };
+    let attr = unsafe { GetFileAttributesA(name.as_ptr()) };
+    attr != u32::MAX && attr & 16 != 0
+}
+pub fn list_dir(folder: &str) -> Result<Vec<crate::ui::FileItem>> {
+    unsafe {
+        let pattern = path(&format!("{}\\*", folder.trim_end_matches(['/', '\\'])))?;
+        let mut data: FindData = core::mem::zeroed();
+        let handle = FindFirstFileA(pattern.as_ptr(), &mut data);
+        if handle as isize == -1 {
+            if GetLastError() == 2 && is_dir(folder) {
+                return Ok(Vec::new());
+            }
+            return Err(error("Cannot browse folder"));
+        }
+        let mut files = Vec::new();
+        loop {
+            let raw = data.name.split(|c| *c == 0).next().unwrap_or(&[]);
+            if let Ok(name) = core::str::from_utf8(raw) {
+                if name != "." && name != ".." && name.is_ascii() {
+                    files.push(crate::ui::FileItem {
+                        name: name.into(),
+                        path: format!("{}\\{}", folder.trim_end_matches(['/', '\\']), name),
+                        directory: data.attributes & 16 != 0,
+                    });
+                }
+            }
+            if files.len() > 8192 {
+                FindClose(handle);
+                return Err("Directory exceeds 8192 items; choose a smaller folder".into());
+            }
+            if FindNextFileA(handle, &mut data) == 0 {
+                let e = GetLastError();
+                FindClose(handle);
+                if e != 18 {
+                    return Err(format!("Folder enumeration failed: {e}"));
+                }
+                break;
+            }
+        }
+        files.sort_unstable_by(|a, b| {
+            b.directory.cmp(&a.directory).then_with(|| {
+                a.name
+                    .to_ascii_lowercase()
+                    .cmp(&b.name.to_ascii_lowercase())
+            })
+        });
+        Ok(files)
+    }
+}
+fn recent_path() -> String {
+    let mut b = [0u8; 260];
+    let n = unsafe { GetModuleFileNameA(ptr::null_mut(), b.as_mut_ptr(), 260) } as usize;
+    if n == 0 || n >= 260 {
+        return String::new();
+    }
+    let s = String::from_utf8_lossy(&b[..n]);
+    let dir = s.rsplit_once('\\').map_or(".", |(d, _)| d);
+    format!("{dir}\\tore-hangar-recent.txt")
+}
+pub fn load_recent() -> Vec<String> {
+    let p = recent_path();
+    if p.is_empty() {
+        return vec![];
+    }
+    read(&p)
+        .ok()
+        .filter(|b| b.len() <= 16384)
+        .and_then(|b| String::from_utf8(b).ok())
+        .map(|s| s.lines().take(8).map(String::from).collect())
+        .unwrap_or_default()
+}
+pub fn save_recent(paths: &[String]) -> Result<()> {
+    let p = recent_path();
+    let name = path(&p)?;
+    let data = paths.join("\r\n");
+    unsafe {
+        let f = CreateFileA(
+            name.as_ptr(),
+            0x40000000,
+            0,
+            ptr::null_mut(),
+            2,
+            0x80,
+            ptr::null_mut(),
+        );
+        if f as isize == -1 {
+            return Err(error("Recent-file list is read-only"));
+        }
+        let mut n = 0;
+        let ok = WriteFile(
+            f,
+            data.as_ptr().cast(),
+            data.len() as u32,
+            &mut n,
+            ptr::null_mut(),
+        );
+        CloseHandle(f);
+        if ok == 0 || n as usize != data.len() {
+            return Err(error("Cannot save recent files"));
+        }
+    }
+    Ok(())
+}
+static mut AUDIO_DATA: *mut Vec<u8> = ptr::null_mut();
+pub fn stop_audio() {
+    unsafe {
+        PlaySoundA(ptr::null(), ptr::null_mut(), 0);
+        if !AUDIO_DATA.is_null() {
+            drop(Box::from_raw(AUDIO_DATA));
+            AUDIO_DATA = ptr::null_mut();
+        }
+    }
+}
+pub fn play_audio(wav: Vec<u8>) -> Result<()> {
+    stop_audio();
+    unsafe {
+        AUDIO_DATA = Box::into_raw(Box::new(wav));
+        if PlaySoundA(
+            (*AUDIO_DATA).as_ptr(),
+            ptr::null_mut(),
+            0x0001 | 0x0004 | 0x0002,
+        ) == 0
+        {
+            stop_audio();
+            return Err("Windows could not play this PCM clip".into());
+        }
+    }
+    Ok(())
+}

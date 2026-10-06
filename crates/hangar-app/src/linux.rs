@@ -95,6 +95,31 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn XGetPixel(image: *mut c_void, x: c_int, y: c_int) -> c_ulong;
     fn XDestroyImage(image: *mut c_void) -> c_int;
+    fn XDefaultVisual(d: *mut c_void, screen: c_int) -> *mut c_void;
+    fn XCreateImage(
+        d: *mut c_void,
+        visual: *mut c_void,
+        depth: c_uint,
+        format: c_int,
+        offset: c_int,
+        data: *mut c_char,
+        w: c_uint,
+        h: c_uint,
+        pad: c_int,
+        stride: c_int,
+    ) -> *mut c_void;
+    fn XPutImage(
+        d: *mut c_void,
+        w: c_ulong,
+        gc: *mut c_void,
+        image: *mut c_void,
+        sx: c_int,
+        sy: c_int,
+        x: c_int,
+        y: c_int,
+        width: c_uint,
+        height: c_uint,
+    ) -> c_int;
     fn XOpenDisplay(name: *const c_char) -> *mut c_void;
     fn XDefaultScreen(d: *mut c_void) -> c_int;
     fn XRootWindow(d: *mut c_void, s: c_int) -> c_ulong;
@@ -179,6 +204,10 @@ unsafe extern "C" {
     fn XLoadFont(d: *mut c_void, name: *const c_char) -> c_ulong;
     fn XSetFont(d: *mut c_void, gc: *mut c_void, font: c_ulong) -> c_int;
     fn XUnloadFont(d: *mut c_void, font: c_ulong) -> c_int;
+}
+unsafe extern "C" {
+    fn malloc(size: usize) -> *mut c_void;
+    fn free(data: *mut c_void);
 }
 pub fn run(app: App) -> Result<()> {
     run_surface(app, None)
@@ -300,6 +329,45 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                         XSetForeground(d, gc, color as c_ulong);
                         XDrawLine(d, pix, gc, x, y, a, b);
                     }
+                    Draw::Bitmap(x, y, width, height, pixels) => {
+                        let memory = malloc(pixels.len() * 4);
+                        if !memory.is_null() {
+                            std::ptr::copy_nonoverlapping(
+                                pixels.as_ptr(),
+                                memory.cast(),
+                                pixels.len(),
+                            );
+                            let image = XCreateImage(
+                                d,
+                                XDefaultVisual(d, screen),
+                                XDefaultDepth(d, screen) as u32,
+                                2,
+                                0,
+                                memory.cast(),
+                                width as u32,
+                                height as u32,
+                                32,
+                                0,
+                            );
+                            if !image.is_null() {
+                                XPutImage(
+                                    d,
+                                    pix,
+                                    gc,
+                                    image,
+                                    0,
+                                    0,
+                                    x,
+                                    y,
+                                    width as u32,
+                                    height as u32,
+                                );
+                                XDestroyImage(image);
+                            } else {
+                                free(memory);
+                            }
+                        }
+                    }
                     Draw::Text(x, y, s, color) | Draw::Label(x, y, s, color) => {
                         let s = CString::new(s.replace('\0', "?")).unwrap();
                         XSetForeground(d, gc, color as c_ulong);
@@ -347,10 +415,92 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
             XFreePixmap(d, pix);
             XFlush(d);
         }
+        stop_audio();
         XUnloadFont(d, font);
         XFreeGC(d, gc);
         XDestroyWindow(d, w);
         XCloseDisplay(d);
         Ok(())
     }
+}
+
+pub fn current_dir() -> String {
+    std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "/".into())
+}
+pub fn roots() -> Vec<String> {
+    vec![
+        "/".into(),
+        std::env::var("HOME").unwrap_or_else(|_| "/".into()),
+    ]
+}
+pub fn is_dir(path: &str) -> bool {
+    std::path::Path::new(path).is_dir()
+}
+pub fn list_dir(path: &str) -> Result<Vec<crate::ui::FileItem>> {
+    let mut files = Vec::new();
+    for e in std::fs::read_dir(path).map_err(|e| e.to_string())? {
+        let e = e.map_err(|e| e.to_string())?;
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        files.push(crate::ui::FileItem {
+            name,
+            path: e.path().to_string_lossy().into_owned(),
+            directory: e.path().is_dir(),
+        });
+        if files.len() > 8192 {
+            return Err("Directory exceeds 8192 items; choose a smaller folder".into());
+        }
+    }
+    files.sort_unstable_by(|a, b| {
+        b.directory.cmp(&a.directory).then_with(|| {
+            a.name
+                .to_ascii_lowercase()
+                .cmp(&b.name.to_ascii_lowercase())
+        })
+    });
+    Ok(files)
+}
+fn recent_path() -> std::path::PathBuf {
+    std::env::current_exe()
+        .unwrap_or_default()
+        .with_file_name("tore-hangar-recent.txt")
+}
+pub fn load_recent() -> Vec<String> {
+    std::fs::read_to_string(recent_path())
+        .ok()
+        .filter(|s| s.len() <= 16384)
+        .map(|s| s.lines().take(8).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+pub fn save_recent(paths: &[String]) -> Result<()> {
+    std::fs::write(recent_path(), paths.join("\n")).map_err(|e| e.to_string())
+}
+std::thread_local! {static AUDIO:std::cell::RefCell<Option<std::process::Child>>=const{std::cell::RefCell::new(None)};}
+pub fn stop_audio() {
+    AUDIO.with(|slot| {
+        if let Some(mut child) = slot.borrow_mut().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    });
+}
+pub fn play_audio(wav: Vec<u8>) -> Result<()> {
+    stop_audio();
+    let mut child = std::process::Command::new("aplay")
+        .arg("-q")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Audio preview needs ALSA aplay: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or("Audio pipe unavailable")?;
+    std::thread::spawn(move || {
+        let _ = stdin.write_all(&wav);
+    });
+    AUDIO.with(|slot| *slot.borrow_mut() = Some(child));
+    Ok(())
 }

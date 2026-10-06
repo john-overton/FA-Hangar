@@ -4,7 +4,7 @@
 acceptance. Tests used Rust 1.91.1. No game payloads, extracted models or retail
 screenshots are committed or uploaded in build artifacts.
 
-- Twelve core tests pass: archive boundaries, duplicate/unsafe names, DCL
+- Twenty core tests pass: archive boundaries, duplicate/unsafe names, DCL
   malformed streams, untouched compressed bytes, BRF lossless edits, history
   branches, shape bounds/transforms, DOS-punctuation names, saved-value
   comparisons and donor-family creation/rejection.
@@ -19,7 +19,7 @@ screenshots are committed or uploaded in build artifacts.
   opened for this check.
 - Local Rust formatting, strict Clippy, Linux build, and both Windows release
   cross-builds pass. Both PE import/header audits pass; the executables import
-  48 functions across Kernel32/User32/GDI32 only, with no CRT dependency.
+  57 functions across Kernel32/User32/GDI32/WinMM, with no CRT dependency.
 - Windows CI passed for both architectures on Windows Server 2022, including
   running each custom-runtime executable's headless smoke path. These checks
   exercise the allocator, integer math, drawing commands, transform and undo.
@@ -40,6 +40,20 @@ screenshots are committed or uploaded in build artifacts.
   Exactly five PT identity/reference operands differed; the other definition
   text remained identical. Gameplay values were not changed. The source donor
   was not modified.
+
+The 0.3 media pass additionally validates PIC span holes, byte-local painting,
+UV/texture decoding, FC color patches, cloned texture/reference batch undo,
+and WAV round trips. Shared UI smoke checks that both atlas painting and 3D
+brush hits update the model render before mouse release, commit/reopen correctly,
+and undo back to the original bytes. It enumerates directories and opens the
+in-app browser without creating a window.
+
+A local real-F18 check mapped a model hit to _F18.PIC, changed exactly one raster
+byte, observed the live render change, round-tripped the archive and undid the
+change. Source media was not written. Exported 256x644 PNG CRC/zlib/image data
+were decoded independently with Python; an 18,061-sample 11025 Hz mono WAV was
+read with Python's wave module. Playback on an actual Windows audio device is
+still a manual acceptance check.
 
 Remaining acceptance: the [manual Windows checklist](WINDOWS-TEST.md), actual
 Windows 98/ME operation, and loading/flying the new variant in original FA.

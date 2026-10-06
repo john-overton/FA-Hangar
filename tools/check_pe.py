@@ -7,9 +7,10 @@ from pathlib import Path
 # Reviewed ANSI APIs available in the Windows 98/ME SDK family. This is an
 # import gate, not a substitute for executing the app on the original OS.
 ALLOWED = {
-    'kernel32.dll': set('CloseHandle CreateFileA DeleteFileA ExitProcess FlushFileBuffers GetCommandLineA GetFileSize GetLastError GetModuleHandleA GetProcessHeap HeapAlloc HeapFree ReadFile WriteFile'.split()),
+    'winmm.dll': {'PlaySoundA'},
+    'kernel32.dll': set('CloseHandle CreateFileA DeleteFileA ExitProcess FlushFileBuffers GetCommandLineA GetFileSize GetLastError GetModuleHandleA GetProcessHeap HeapAlloc HeapFree ReadFile WriteFile GetCurrentDirectoryA GetLogicalDriveStringsA FindFirstFileA FindNextFileA FindClose GetFileAttributesA GetModuleFileNameA'.split()),
     'user32.dll': set('BeginPaint CreateWindowExA DefWindowProcA DestroyWindow DispatchMessageA EndPaint FillRect GetClientRect GetKeyState GetMessageA InvalidateRect LoadCursorA MessageBoxA PostQuitMessage RegisterClassA ReleaseCapture SetCapture ShowWindow TranslateMessage UpdateWindow'.split()),
-    'gdi32.dll': set('BitBlt CreateCompatibleBitmap CreateCompatibleDC CreateFontA CreatePen CreateSolidBrush DeleteDC DeleteObject LineTo MoveToEx SelectObject SetBkMode SetTextColor TextOutA'.split()),
+    'gdi32.dll': set('BitBlt CreateCompatibleBitmap CreateCompatibleDC CreateFontA CreatePen CreateSolidBrush DeleteDC DeleteObject LineTo MoveToEx SelectObject SetBkMode SetTextColor TextOutA StretchDIBits'.split()),
 }
 
 def audit(path, legacy):

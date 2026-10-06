@@ -7,10 +7,12 @@ use alloc::{
 };
 use hangar_core::{
     archive::{Archive, Entry},
+    audio::Pcm,
     authoring::{self, Variant},
     brf::Brf,
     document::Document,
     model::{self, Model, Transform},
+    picture::{self, Pic},
     Result,
 };
 #[path = "../../../tore-hangar-design/tokens/theme.rs"]
@@ -24,6 +26,7 @@ pub enum Draw {
     Line(i32, i32, i32, i32, u32),
     Text(i32, i32, String, u32),
     Label(i32, i32, String, u32),
+    Bitmap(i32, i32, usize, usize, Vec<u32>),
 }
 pub struct Canvas {
     pub commands: Vec<Draw>,
@@ -51,6 +54,7 @@ enum Mode {
     Properties,
     Graft,
     Package,
+    Media,
 }
 #[derive(Clone, Copy)]
 pub enum FileAction {
@@ -62,6 +66,9 @@ pub enum FileAction {
     Obj,
     Graft,
     Variant,
+    Png,
+    Wav,
+    Palette,
 }
 #[derive(Clone)]
 enum PromptKind {
@@ -72,6 +79,8 @@ enum PromptKind {
     VariantId,
     VariantTitle,
     VariantReview,
+    Recolor,
+    Isolate,
 }
 struct Prompt {
     kind: PromptKind,
@@ -92,6 +101,23 @@ pub enum Key {
     Tab,
     F1,
     Num(u8),
+}
+#[derive(Clone)]
+pub struct FileItem {
+    pub name: String,
+    pub path: String,
+    pub directory: bool,
+}
+struct Stroke {
+    entry: usize,
+    bytes: Vec<u8>,
+    pic: Pic,
+    last: Option<(usize, usize)>,
+}
+struct Browser {
+    folder: String,
+    files: Vec<FileItem>,
+    scroll: usize,
 }
 pub struct App {
     pub width: i32,
@@ -133,6 +159,28 @@ pub struct App {
     original_brf: Option<Brf>,
     model_entry: Option<usize>,
     validation: Option<String>,
+    browser: Option<Browser>,
+    recent: Vec<String>,
+    pic: Option<Pic>,
+    base_palette: [[u8; 3]; 256],
+    palette_loaded: bool,
+    palette_override: Option<[[u8; 3]; 256]>,
+    image_zoom: i32,
+    image_pan: [i32; 2],
+    image_drag: bool,
+    brush: u8,
+    brush_radius: usize,
+    painting: bool,
+    last_paint: Option<(usize, usize)>,
+    paint_enabled: bool,
+    pick_color: bool,
+    textures: BTreeMap<String, Pic>,
+    textured: bool,
+    stroke: Option<Stroke>,
+    selected_face: Option<usize>,
+    model_paint: bool,
+    context_model: Option<Model>,
+    context_entry: Option<usize>,
 }
 fn extension(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or("")
@@ -187,23 +235,56 @@ impl App {
             original_brf: None,
             model_entry: None,
             validation: None,
+            browser: None,
+            recent: crate::platform::load_recent(),
+            pic: None,
+            base_palette: core::array::from_fn(|i| [i as u8; 3]),
+            palette_loaded: false,
+            palette_override: None,
+            image_zoom: 100,
+            image_pan: [0, 0],
+            image_drag: false,
+            brush: 150,
+            brush_radius: 1,
+            painting: false,
+            last_paint: None,
+            paint_enabled: false,
+            pick_color: false,
+            textures: BTreeMap::new(),
+            textured: false,
+            stroke: None,
+            selected_face: None,
+            model_paint: false,
+            context_model: None,
+            context_entry: None,
         }
     }
     pub fn demo(&mut self) {
+        self.finish_stroke();
         if self.doc.dirty() {
             self.status = "Save your changes before loading another LIB".into();
             return;
         }
         let mut a = Archive::empty();
         a.entries
-            .push(Entry::new("DEMO.SH", model::demo_shape()).unwrap());
+            .push(Entry::new("DEMO.SH", model::demo_textured()).unwrap());
         a.entries
             .push(Entry::new("DEMO.PT", hangar_core::brf::demo()).unwrap());
         for suffix in ["A", "B", "C", "D", "S"] {
             a.entries
                 .push(Entry::new(&format!("DEMO_{suffix}.SH"), model::demo_shape()).unwrap());
         }
+        a.entries
+            .push(Entry::new("DEMO.PIC", picture::demo()).unwrap());
+        let sound: Vec<u8> = (0..5512)
+            .map(|i| if i % 50 < 25 { 148 } else { 108 })
+            .collect();
+        a.entries.push(Entry::new("DEMO.5K", sound).unwrap());
         self.doc = Document::new(a);
+        self.context_model = None;
+        self.context_entry = None;
+        self.selected_face = None;
+        self.model_paint = false;
         self.required.clear();
         self.path = "Synthetic demo (not a game asset)".into();
         self.collapsed = [true; 9];
@@ -214,15 +295,21 @@ impl App {
         self.mode = Mode::Model;
         self.selected = 0;
         self.refresh();
+        self.frame();
         self.status =
             "Synthetic demo | G/R/S transforms, X/Y/Z axis, Enter apply, Esc cancel".into();
     }
     pub fn open(&mut self, path: &str) -> Result<()> {
+        self.finish_stroke();
         if self.doc.dirty() {
             return Err("Save your changes before opening another LIB".into());
         }
         let a = Archive::parse(crate::platform::read(path)?)?;
         self.doc = Document::new(a);
+        self.context_model = None;
+        self.context_entry = None;
+        self.selected_face = None;
+        self.model_paint = false;
         self.required.clear();
         self.path = path.into();
         self.selected = 0;
@@ -233,6 +320,8 @@ impl App {
         self.table_scroll = 0;
         self.mode = Mode::Browse;
         self.refresh();
+        self.frame();
+        self.remember(path);
         self.status = format!(
             "Opened {} | {} entries",
             path,
@@ -241,6 +330,13 @@ impl App {
         Ok(())
     }
     pub fn select_entry(&mut self, index: usize) {
+        self.finish_stroke();
+        self.selected_face = None;
+        self.context_model = None;
+        self.context_entry = None;
+        self.paint_enabled = false;
+        self.model_paint = false;
+
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
         self.collapsed[view::category_of(self.name())] = false;
         self.category = Some(view::category_of(self.name()));
@@ -263,6 +359,12 @@ impl App {
             self.scroll = position.saturating_sub(rows / 2);
         }
         self.refresh();
+        self.frame();
+        if matches!(extension(self.name()), "PIC" | "5K" | "11K" | "WAV") {
+            self.mode = Mode::Media;
+        } else if self.mode == Mode::Media {
+            self.mode = Mode::Model;
+        }
     }
     fn name(&self) -> &str {
         self.doc
@@ -272,6 +374,30 @@ impl App {
             .map_or("No entry", |e| e.name.as_str())
     }
     fn refresh(&mut self) {
+        let camera = (self.zoom, self.pan, self.image_zoom, self.image_pan);
+        self.refresh_data();
+        (self.zoom, self.pan, self.image_zoom, self.image_pan) = camera;
+    }
+    fn refresh_data(&mut self) {
+        crate::platform::stop_audio();
+        self.pic = None;
+        self.textures.clear();
+        self.painting = false;
+        self.last_paint = None;
+        self.paint_enabled = false;
+        self.base_palette = self
+            .palette_override
+            .unwrap_or_else(|| core::array::from_fn(|i| [i as u8; 3]));
+        self.palette_loaded = self.palette_override.is_some();
+        if let Some(i) = self.doc.archive.find("PALETTE.PAL") {
+            if let Ok(b) = self.doc.archive.entries[i].read() {
+                if let Ok(p) = picture::palette(&b) {
+                    self.base_palette = p;
+                    self.palette_loaded = true;
+                }
+            }
+        }
+
         self.brf = None;
         self.model = None;
         self.model_entry = None;
@@ -290,7 +416,22 @@ impl App {
             match e.read() {
                 Ok(data) => {
                     let ext = extension(&e.name);
-                    if ext == "SH" {
+                    if ext == "PIC" {
+                        match Pic::parse(&data) {
+                            Ok(p) => {
+                                self.detail = format!("{} x {} / indexed PIC", p.width, p.height);
+                                self.pic = Some(p);
+                            }
+                            Err(e) => self.detail = e,
+                        }
+                    } else if matches!(ext, "5K" | "11K" | "WAV") {
+                        self.detail = match Pcm::parse(&e.name, &data) {
+                            Ok(p) => {
+                                format!("{} Hz / {} samples / PCM8 mono", p.rate, p.samples.len())
+                            }
+                            Err(e) => e,
+                        };
+                    } else if ext == "SH" {
                         match Model::parse(&data) {
                             Ok(m) => {
                                 self.detail = if m.writable {
@@ -351,9 +492,27 @@ impl App {
         if !self.doc.archive.entries.is_empty() {
             self.collapsed[view::category_of(self.name())] = false;
         }
+        if let Some(model) = self.model.as_ref().or(self.context_model.as_ref()) {
+            for name in &model.textures {
+                let key = if name.contains('.') {
+                    name.clone()
+                } else {
+                    format!("{name}.PIC")
+                };
+                if let Some(i) = self.doc.archive.find(&key) {
+                    if let Ok(bytes) = self.doc.archive.entries[i].read() {
+                        if let Ok(p) = Pic::parse(&bytes) {
+                            self.textures.insert(name.clone(), p);
+                        }
+                    }
+                }
+            }
+        }
         self.frame();
     }
     fn frame(&mut self) {
+        self.image_zoom = 100;
+        self.image_pan = [0, 0];
         self.zoom = 100;
         self.pan = [0, 0];
     }
@@ -372,7 +531,10 @@ impl App {
             return;
         }
         let title = match a {
-            FileAction::Open => "Open LIB: full path",
+            FileAction::Png => "Export picture as PNG",
+            FileAction::Wav => "Export sound as WAV",
+            FileAction::Palette => "Load display palette (.PAL)",
+            FileAction::Open => "Open LIB",
             FileAction::Variant => "New aircraft / step 1: imported main SH path",
             FileAction::Save => "Package LIB: new output path",
             FileAction::Import => "Add entry: path to a resource file",
@@ -383,9 +545,26 @@ impl App {
         };
         let value = match a {
             FileAction::Save => "HANGAR.LIB".into(),
+            FileAction::Png => format!("{}.png", self.name().split('.').next().unwrap()),
+            FileAction::Wav => format!("{}.wav", self.name().split('.').next().unwrap()),
             FileAction::Export => self.name().into(),
             FileAction::Obj => format!("{}.obj", self.name().split('.').next().unwrap_or("model")),
             _ => String::new(),
+        };
+        let folder = if let Some(p) = self.recent.first() {
+            Self::parent_path(p)
+        } else {
+            crate::platform::current_dir()
+        };
+        let folder = if crate::platform::is_dir(&folder) {
+            folder
+        } else {
+            crate::platform::current_dir()
+        };
+        let value = if value.is_empty() {
+            format!("{}/", folder.trim_end_matches(['/', '\\']))
+        } else {
+            format!("{}/{}", folder.trim_end_matches(['/', '\\']), value)
         };
         self.prompt = Some(Prompt {
             kind: PromptKind::File(a),
@@ -393,6 +572,9 @@ impl App {
             value,
             axis: 0,
         });
+        let initial = self.prompt.as_ref().unwrap().value.clone();
+        self.browse_folder(&folder);
+        self.prompt.as_mut().unwrap().value = initial;
         self.filter_focus = false;
     }
     fn perform_file(&mut self, a: FileAction, path: &str) -> Result<()> {
@@ -401,6 +583,25 @@ impl App {
         }
         match a {
             FileAction::Open => self.open(path),
+            FileAction::Png => {
+                let p = self.pic.as_ref().ok_or("Select a PIC first")?;
+                crate::platform::write_new(path, &p.png(&self.base_palette))?;
+                self.status = format!("Exported PNG {path}");
+                Ok(())
+            }
+            FileAction::Wav => {
+                let pcm = Pcm::parse(self.name(), &self.data)?;
+                crate::platform::write_new(path, &pcm.wav())?;
+                self.status = format!("Exported WAV {path}");
+                Ok(())
+            }
+            FileAction::Palette => {
+                self.palette_override = Some(picture::palette(&crate::platform::read(path)?)?);
+                self.refresh();
+                self.status =
+                    "Display palette loaded; original resource palettes remain unchanged".into();
+                Ok(())
+            }
             FileAction::Variant => {
                 let shape = crate::platform::read(path)?;
                 Model::parse(&shape)?;
@@ -439,6 +640,7 @@ impl App {
                 self.field_selected = field;
                 self.field_scroll = scroll;
                 self.path = path.into();
+                self.remember(path);
                 self.status = format!(
                     "Packaged {} entries into {path}",
                     self.doc.archive.entries.len()
@@ -568,6 +770,16 @@ impl App {
         }
     }
     pub fn key(&mut self, key: Key, ctrl: bool, shift: bool) {
+        if self.painting {
+            if matches!(key, Key::Escape) {
+                self.painting = false;
+                self.stroke = None;
+                self.refresh();
+                return;
+            }
+            self.finish_stroke();
+        }
+
         if self.menu.is_some() {
             self.menu = None;
             if matches!(key, Key::Escape) {
@@ -583,8 +795,80 @@ impl App {
                     self.status = "Cancelled".into();
                 }
                 Key::Enter => {
+                    if let Some(p) = &self.prompt {
+                        if matches!(p.kind, PromptKind::File(_))
+                            && crate::platform::is_dir(p.value.trim())
+                        {
+                            let folder = p.value.trim().to_string();
+                            self.browse_folder(&folder);
+                            return;
+                        }
+                    }
                     let p = self.prompt.take().unwrap();
                     let r = match p.kind {
+                        PromptKind::Isolate => (|| {
+                            let to = p.value.trim().to_ascii_uppercase();
+                            let shape = self
+                                .model_entry
+                                .or(self.context_entry)
+                                .ok_or("No model context")?;
+                            let m = self
+                                .model
+                                .as_ref()
+                                .or(self.context_model.as_ref())
+                                .ok_or("No model")?;
+                            let from = if self.pic.is_some() {
+                                self.name().to_string()
+                            } else {
+                                let f = self
+                                    .selected_face
+                                    .and_then(|i| m.faces.get(i))
+                                    .ok_or("Select a textured panel")?;
+                                if f.texture.contains('.') {
+                                    f.texture.clone()
+                                } else {
+                                    format!("{}.PIC", f.texture)
+                                }
+                            };
+                            let texture =
+                                self.doc.archive.find(&from).ok_or("Texture is missing")?;
+                            let pixels = self.doc.archive.entries[texture].read()?;
+                            let (bytes, n) = Model::retarget_texture(
+                                &self.doc.archive.entries[shape].read()?,
+                                &from,
+                                &to,
+                            )?;
+                            self.doc.clone_texture(&to, pixels, shape, bytes)?;
+                            self.select_entry(shape);
+                            self.textured = true;
+                            self.status=format!("Cloned {to}; {n} decoded references updated. Other LOD/damage references retain original textures.");
+                            Ok(())
+                        })(),
+                        PromptKind::Recolor => {
+                            let r = (|| {
+                                let (from, to) = p
+                                    .value
+                                    .split_once(' ')
+                                    .ok_or("Enter two palette indices: FROM TO")?;
+                                let from = from
+                                    .trim()
+                                    .parse::<u8>()
+                                    .map_err(|_| "Invalid source color")?;
+                                let to = to
+                                    .trim()
+                                    .parse::<u8>()
+                                    .map_err(|_| "Invalid target color")?;
+                                let i = self.model_entry.ok_or("Select a shape")?;
+                                let bytes = self.doc.archive.entries[i].read()?;
+                                let (bytes, n) = Model::recolor(&bytes, from, to)?;
+                                self.doc.replace(i, bytes)?;
+                                self.refresh();
+                                self.textured = true;
+                                self.status=format!("Recolored {n} untextured faces in the decoded pose; Ctrl+Z undo");
+                                Ok(())
+                            })();
+                            r
+                        }
                         PromptKind::VariantId => match authoring::validate_id(&p.value) {
                             Ok(id) => {
                                 self.variant_id = id;
@@ -743,7 +1027,7 @@ impl App {
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
                 let op=ch.to_ascii_lowercase();self.prompt=Some(Prompt{kind:PromptKind::Transform(op),title:match op{'g'=>"Move in source units",'r'=>"Rotate in degrees",_=>"Scale in percent"}.into(),value:String::new(),axis:0});self.transform_preview();
             },
-            Key::Char('1')|Key::Num(1)=>{self.yaw=0;self.pitch=0;},Key::Char('3')|Key::Num(3)=>{self.yaw=90;self.pitch=0;},Key::Char('7')|Key::Num(7)=>{self.yaw=0;self.pitch = -90;},Key::Char('5')|Key::Num(5)=>self.perspective = !self.perspective,
+            Key::Char('1')|Key::Num(1)=>{self.yaw=0;self.pitch=0;},Key::Char('3')|Key::Num(3)=>{self.yaw=90;self.pitch=0;},Key::Char('7')|Key::Num(7)=>{self.yaw=0;self.pitch = -90;},Key::Char('5')|Key::Num(5)=>{if self.textured{self.perspective=false;self.status="Textured paint preview uses orthographic projection".into();}else{self.perspective = !self.perspective;}},
             Key::Home|Key::Char('.')=>self.frame(),
             Key::Up=>{self.select_entry(self.selected.saturating_sub(1));},
             Key::Down=>{self.select_entry(self.selected+1);},
@@ -754,6 +1038,8 @@ impl App {
         }
     }
     pub fn close(&mut self) {
+        self.finish_stroke();
+        crate::platform::stop_audio();
         if self.doc.dirty() {
             self.prompt = Some(Prompt {
                 kind: PromptKind::Discard,
@@ -780,14 +1066,59 @@ impl App {
     }
     pub fn click(&mut self, x: i32, y: i32, button: u8, down: bool) {
         self.mouse = [x, y];
+        if button == 1 && !down {
+            self.finish_stroke();
+            return;
+        }
+        if button == 1
+            && down
+            && self.prompt.is_none()
+            && self.mode == Mode::Model
+            && self.model.is_some()
+            && x > self.left() + 40
+            && x < self.right()
+            && y > 130
+            && y < self.dock_y()
+        {
+            if let Some((face, uv)) = self.model_hit(x, y) {
+                self.selected_face = Some(face);
+                self.textured = true;
+                self.perspective = false;
+                if self.model_paint {
+                    self.paint_model_hit(face, uv);
+                }
+                return;
+            }
+        }
+        if button == 1
+            && down
+            && self.prompt.is_none()
+            && self.mode == Mode::Media
+            && self.pic.is_some()
+            && self.image_point(x, y).is_some()
+            && (self.paint_enabled || self.pick_color)
+        {
+            self.paint_point(x, y);
+            return;
+        }
         if button == 2 {
-            self.drag = down
-                && self.prompt.is_none()
-                && self.mode == Mode::Model
+            self.image_drag = down
+                && self.mode == Mode::Media
+                && self.pic.is_some()
                 && x > self.left()
                 && x < self.right()
-                && y > 54
                 && y < self.dock_y();
+            self.drag = down
+                && self.prompt.is_none()
+                && ((self.mode == Mode::Model
+                    && x > self.left()
+                    && x < self.right()
+                    && y > 54
+                    && y < self.dock_y())
+                    || self.image_drag
+                    || (self.mode == Mode::Media
+                        && self.context_model.is_some()
+                        && (x >= self.right() || y >= self.dock_y())));
             return;
         }
         if !down {
@@ -818,10 +1149,24 @@ impl App {
         }
     }
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
+        if self.painting {
+            if self.mode == Mode::Model {
+                if let Some((face, uv)) = self.model_hit(x, y) {
+                    if Some(face) == self.selected_face {
+                        self.paint_model_hit(face, uv);
+                    }
+                }
+            } else {
+                self.paint_point(x, y);
+            }
+        }
         if self.drag {
             let dx = x - self.mouse[0];
             let dy = y - self.mouse[1];
-            if shift {
+            if self.image_drag {
+                self.image_pan[0] = (self.image_pan[0] + dx).clamp(-16000, 16000);
+                self.image_pan[1] = (self.image_pan[1] + dy).clamp(-16000, 16000);
+            } else if shift {
                 self.pan[0] = (self.pan[0] + dx).clamp(-10000, 10000);
                 self.pan[1] = (self.pan[1] + dy).clamp(-10000, 10000);
             } else {
@@ -833,6 +1178,32 @@ impl App {
     }
     pub fn wheel(&mut self, delta: i32) {
         if self.prompt.is_some() {
+            if let Some(b) = &mut self.browser {
+                b.scroll = (b.scroll as i32 - delta * 3)
+                    .clamp(0, b.files.len().saturating_sub(1) as i32)
+                    as usize;
+            }
+            return;
+        }
+        if self.mode == Mode::Media
+            && self.pic.is_some()
+            && self.mouse[0] > self.left()
+            && self.mouse[0] < self.right()
+            && self.mouse[1] < self.dock_y()
+        {
+            self.image_zoom = if delta > 0 {
+                self.image_zoom * 125 / 100
+            } else {
+                self.image_zoom * 80 / 100
+            }
+            .clamp(25, 1600);
+            return;
+        }
+        if self.mode == Mode::Media
+            && self.context_model.is_some()
+            && (self.mouse[0] >= self.right() || self.mouse[1] >= self.dock_y())
+        {
+            self.zoom = (self.zoom + delta * 10).clamp(10, 1000);
             return;
         }
         if self.mouse[0] < self.left() {
@@ -989,3 +1360,8 @@ fn clip(mut a: [i32; 2], mut b: [i32; 2], r: [i32; 4]) -> Option<([i32; 2], [i32
 
 #[path = "ui_view.rs"]
 mod view;
+
+#[path = "ui_browser.rs"]
+mod browser_ui;
+#[path = "ui_media.rs"]
+mod media;
