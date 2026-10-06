@@ -11,6 +11,13 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
 - `clone_aircraft.rs`: selected-PT dependency graph, private names and reference
   rewriting. `ui_clone.rs` indexes sibling/additional source LIBs, reads only
   requested payloads, and presents the export review.
+- `dependencies.rs`: shared inert BRF/module reference scanner and incremental
+  current-LIB index. Shared source handles identify unchanged entries; a changed
+  catalog invalidates extensionless-name scans. Reverse links support direct
+  users and cycle-safe transitive aircraft users. It keeps no decoded payloads.
+- `validation.rs`: advisory archive/payload/reference report. It checks output
+  offsets and untouched compressed bytes, validates supported changed payloads,
+  and distinguishes unavailable scans from references outside the current LIB.
 - `authoring.rs`: legacy donor PT + imported main SH workflow. Rewrites five
   identity/reference strings, aliases the reviewed A/B/C/D/S family, copies
   observed pose textures, and reports missing textures/shared stock references.
@@ -27,6 +34,8 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
   Fighters, lossless raster-byte patches, PNG encoding and WAV wrapping.
 - `ui.rs`: shared events, layout and draw commands from the supplied theme.
   `ui_browser.rs` lists platform-provided files/roots and recent LIBs.
+  `ui_dependencies.rs` places resource navigation beside the viewport and
+  renders scrollable package checks and the added/modified/removed build list.
   `ui_media.rs` handles stroke transactions and a CPU triangle rasterizer with
   per-pixel face/UV hit buffers. Those buffers drive model painting; live strokes
   overlay the texture cache until mouse release commits one document operation.
@@ -101,6 +110,22 @@ names, 4096 copied resources and 128 MiB decoded output. The source files can
 be up to 2 GiB without being loaded wholesale. The editor's private palette is
 named `<new ID>.PAL`; game-global palette lookup is not overridden.
 
+The general References dock deliberately uses the current document only. It
+shares the clone scanner, but does not infer the clone wizard's damage/cockpit/
+store families. It excludes self-name literals from user navigation and follows
+reverse edges with cycle protection to find observed aircraft users. Scans are
+limited to 4096 reference operands per resource, 65536 indexed links and 128 MiB
+of decoded non-leaf input. Budget failures and opaque resources are explicit;
+an incomplete scan must not be presented as proof that a resource has no users.
+Palette, image and sample bytes are not searched for filenames.
+
+Package results keep at most 2048 detailed checks while retaining total error,
+warning and omitted-result counts. Supported changed SH checks use the existing
+bounded static reader, not a full animation verifier. Missing local filenames
+are warnings because other game LIBs may supply them. The report is advisory
+and does not add a new save gate. Existing archive/destination checks still run
+on every save.
+
 The loose-SH workflow in authoring.rs remains separate. It retains its original
 shared-dependency contract and is not the default New aircraft action.
 
@@ -131,8 +156,9 @@ X11 fixed font. Both backends remain native, with no added dependencies.
 
 Saved entry snapshots share source buffers. Changed field values and resources
 are marked amber; the raw table can restore a saved operand. Source units are
-shown explicitly. Package validation checks the archive directory, not full
-semantic or animation dependency closure.
+shown explicitly. Package validation checks the archive directory, untouched
+payload preservation, supported changed payloads and observed stored names.
+It does not establish full semantic or animation dependency closure.
 
 The animation timeline and geometric graft controls remain unimplemented and
 are not shown as working controls. Graft supports the existing single-field

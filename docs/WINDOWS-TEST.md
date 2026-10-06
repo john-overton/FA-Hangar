@@ -84,6 +84,24 @@ PIC includes its palette; retail textures often rely on the LIB's base palette.
 Clone/paint scope is the decoded static pose, so check the remaining model states
 separately. No retail data is included in the test package.
 
+## Resource relationships and package checks
+
+1. Load Demo and select `DEMO.SH`. Open **References** in the lower dock
+   (**Links** at 800x600), then click `DEMO.PIC`. Confirm Paint opens, the dock
+   reports `DEMO.SH` as a direct user and `DEMO.PT` as an aircraft user, and
+   the **3D preview** tab still shows the originating model.
+2. Scroll the Links dock and click `DEMO.PT` under aircraft users. Confirm the
+   linked model opens. Navigation must not mark the document modified.
+3. Remove `DEMO.PIC`. In Package, confirm a **Removed** row and run package
+   checks. `DEMO.SH` should report `DEMO.PIC` as not in this LIB. Undo, rerun,
+   and confirm the warning disappears. Test report scrolling at 800x600.
+4. On a disposable custom LIB, replace a PIC with malformed bytes. Package
+   checks should report a changed-payload error. Undo restores the original.
+   An unknown encoding must be marked unverified, not silently passed.
+5. Inspect a shared retail shape or texture. Follow its direct and aircraft
+   users. Counts cover observed stored names in the current LIB only; resources
+   outside this LIB are not evidence that the installed game is missing them.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

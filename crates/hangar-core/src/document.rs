@@ -14,6 +14,21 @@ struct Change {
     before: Option<Entry>,
     after: Option<Entry>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Removed,
+}
+impl ChangeKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Added => "Added",
+            Self::Modified => "Modified",
+            Self::Removed => "Removed",
+        }
+    }
+}
 pub struct Document {
     pub archive: Archive,
     undo: Vec<Vec<Change>>,
@@ -74,6 +89,30 @@ impl Document {
                 .keys()
                 .filter(|name| !names.contains(name.as_str()))
                 .count()
+    }
+    /// Includes deleted entries, which no longer appear in the archive directory.
+    pub fn changes(&self) -> Vec<(String, ChangeKind)> {
+        let mut changes = BTreeMap::new();
+        let mut current = BTreeSet::new();
+        for e in &self.archive.entries {
+            current.insert(&e.name);
+        }
+        for e in &self.archive.entries {
+            if self.entry_changed(e) {
+                changes.insert(
+                    e.name.clone(),
+                    if self.saved.contains_key(&e.name) {
+                        ChangeKind::Modified
+                    } else {
+                        ChangeKind::Added
+                    },
+                );
+            }
+        }
+        for name in self.saved.keys().filter(|n| !current.contains(n)) {
+            changes.insert(name.clone(), ChangeKind::Removed);
+        }
+        changes.into_iter().collect()
     }
     fn apply(&mut self, change: Change) {
         self.archive.changed();

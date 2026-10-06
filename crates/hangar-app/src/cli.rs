@@ -12,7 +12,7 @@ pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -81,6 +81,30 @@ pub fn run() -> Result<()> {
             for name in &variant.missing_textures {if variant.archive.find(name).is_none(){return Err(format!("Missing imported-shape texture {name}; supply its path after OUTPUT.LIB"));}}
             crate::saving::library(argument(&args,6)?,&variant.archive.bytes()?)?;
             println!("Created {} entries from {}. Donor damage/shadow retained. Shared stock references: {}. Game test still required.",variant.archive.entries.len(),variant.donor,variant.shared.join(", "));
+        },
+        Some("references") => {
+            let archive = Archive::parse(platform::read(argument(&args, 1)?)?)?;
+            let at = archive.find(argument(&args, 2)?).ok_or("Entry not found")?;
+            let name = &archive.entries[at].name;
+            let mut index = hangar_core::dependencies::Index::default();
+            index.update(&archive);
+            println!("{name}: observed stored names / current LIB only");
+            if let Some(scan) = index.get(name) {
+                for link in &scan.links { println!("  -> {} [{}; {}]", link.target, link.evidence, if archive.find(&link.target).is_some() { "local" } else { "not in this LIB" }); }
+                if let Some(error) = &scan.unavailable { println!("  Unverified: {error}"); }
+                for note in &scan.notes { println!("  {note}"); }
+            }
+            for source in index.incoming(name) { println!("  <- {source}"); }
+            for source in index.aircraft_users(name) { println!("  Aircraft user: {source}"); }
+            println!("{} resources have unavailable dependency scans; implicit families and runtime lookups are unverified", index.unavailable_count());
+        },
+        Some("validate") => {
+            let doc = Document::new(Archive::parse(platform::read(argument(&args, 1)?)?)?);
+            let report = hangar_core::validation::inspect(&doc, &mut Default::default());
+            println!("{}", report.summary());
+            for check in &report.checks { println!("{} {}: {}", check.level.label(), check.entry.as_deref().unwrap_or("Package"), check.message); }
+            if report.omitted > 0 { println!("{} further results omitted", report.omitted); }
+            if report.errors > 0 { return Err("Package validation failed".into()); }
         },
         Some(cmd @ ("list"|"inspect"|"extract"|"repack"|"replace"|"set"))=>{
             let a=Archive::parse(platform::read(argument(&args,1)?)?)?;

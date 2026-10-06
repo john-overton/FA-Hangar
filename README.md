@@ -1,6 +1,7 @@
 # T.O.R.E Hangar
 
-A small, standalone Rust workshop for Fighters Anthology LIB files. Native
+A small, standalone Rust workshop for Fighters Anthology LIB files, built toward
+a Blender-light workflow for the game's models and their related resources. Native
 Win32/GDI on Windows, X11/Xwayland for local Linux development. The supplied
 [design system](tore-hangar-design/README.md) supplies the Gunmetal colors and
 Blender-inspired workspace.
@@ -39,6 +40,14 @@ read-only, history still works for the current session.
   changing geometry, relative links or record sizes.
 - Open EALIB archives, search entries, inspect bytes, add, remove, replace and
   export resources. Stored and raw-literal DCL-compressed entries are readable.
+- Inspect stored references, direct users and transitive aircraft users in the
+  References dock (Links at compact sizes). Click a resource to select it;
+  opening a texture from a model retains its live model preview. Shared shapes
+  show their observed direct-user count in the viewport.
+- Review added, modified and removed entries in Package. Run advisory checks
+  for archive integrity, untouched payload preservation, supported changed
+  payloads and references outside the current LIB. Scroll results and click an
+  entry to inspect it. These checks do not establish game-runtime compatibility.
 - Save a new or existing custom LIB with the required EOF sentinel. Untouched entry payloads
   keep their original compression and bytes. An unedited archive round-trips
   byte-for-byte, including padding. Modified entries are stored uncompressed.
@@ -121,6 +130,8 @@ inspection, extraction, repacking, replacement and field editing. For example:
 ```sh
 cargo run --locked -- list /path/to/FA_2.LIB
 cargo run --locked -- inspect /path/to/FA_2.LIB F18.PT
+cargo run --locked -- references /path/to/FA_2.LIB F18.SH
+cargo run --locked -- validate /path/to/MYMOD.LIB
 cargo run --locked -- set /path/to/FA_2.LIB F18.PT 35 23051 /new/path/MYMOD.LIB
 cargo run --locked -- --snapshot /new/path/workspace.svg
 ```
@@ -143,7 +154,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently about
-310–380 KB. Copy it to a writable location and run it. No installer or runtime
+350–420 KiB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -271,6 +282,20 @@ UV layout editing, palette RGB editing, hardpoint tools, animation playback,
 complete dependency closure, richer grafting, unit-aware gameplay controls,
 resizable editor splits and bitmap fonts.
 There are no inactive timeline controls pretending these features work.
+
+The References dock indexes observed BRF strings and bounded module filename
+literals throughout the current LIB, including names outside the displayed
+pose. Self-name literals are excluded from navigation. It does not scan sibling
+LIBs, infer every implicit family, or execute game procedures. "Not in this LIB"
+can mean a resource is supplied by another game library. Unavailable scans are
+reported explicitly; user counts are observed counts, not a guarantee of every
+possible runtime user. The aircraft-cloning wizard retains its broader source
+catalog and damage/cockpit/store-family rules.
+
+Package checks are advisory. Supported payload checks apply to changed entries;
+unknown encodings and incomplete dependency scans remain unverified. Opening a
+saved LIB establishes a new baseline, so CLI `validate` checks its archive and
+stored reference graph without treating every existing payload as newly edited.
 
 The loader never executes code from a resource. Unsupported records produce
 an explicit diagnostic. The current model reader is a static-pose projection,

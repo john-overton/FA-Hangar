@@ -4,7 +4,8 @@ use crate::{
     archive::{validate_name, Archive, Entry, ARCHIVE_LIMIT},
     authoring::validate_id,
     brf::Brf,
-    invalid, slice, u16_at, u32_at, Result,
+    dependencies::{references, Location, Reference},
+    invalid, Result,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -20,20 +21,6 @@ pub struct Package {
     pub id: String,
     pub notes: Vec<String>,
 }
-#[derive(Clone, Debug)]
-enum Location {
-    Text(usize),
-    Literal {
-        at: usize,
-        len: usize,
-        stem_only: bool,
-    },
-}
-#[derive(Clone, Debug)]
-struct Reference {
-    target: String,
-    location: Location,
-}
 struct Node {
     bytes: Vec<u8>,
     refs: Vec<Reference>,
@@ -48,37 +35,6 @@ fn ext(s: &str) -> &str {
 }
 fn stem(s: &str) -> &str {
     s.split('.').next().unwrap_or(s)
-}
-fn resource_extension(s: &str) -> bool {
-    matches!(
-        ext(s),
-        "PT" | "SH"
-            | "HUD"
-            | "PTS"
-            | "BI"
-            | "JT"
-            | "OT"
-            | "SEE"
-            | "ECM"
-            | "GAS"
-            | "PIC"
-            | "PAL"
-            | "FNT"
-            | "5K"
-            | "8K"
-            | "11K"
-            | "22K"
-            | "WAV"
-    )
-}
-fn leaf(s: &str) -> bool {
-    matches!(
-        ext(s),
-        "PIC" | "PAL" | "FNT" | "5K" | "8K" | "11K" | "22K" | "WAV"
-    )
-}
-fn name_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b"!#$%&'()-@^_`{}~.".contains(&b)
 }
 fn root_reference(brf: &Brf, label: &str) -> Result<Option<String>> {
     let f = brf
@@ -103,160 +59,6 @@ fn root_reference(brf: &Brf, label: &str) -> Result<Option<String>> {
     let name = unquote(&fields[0].value).to_ascii_uppercase();
     validate_name(&name)?;
     Ok(Some(name))
-}
-fn sections(bytes: &[u8]) -> Result<Vec<(usize, usize, bool)>> {
-    if slice(bytes, 0, 2)? != b"MZ" {
-        return Err(invalid("Expected an inert PL/PE module"));
-    }
-    let p = u32_at(bytes, 60)?;
-    if !matches!(slice(bytes, p, 4)?, b"PL\0\0" | b"PE\0\0") || u16_at(bytes, p + 4)? != 0x14c {
-        return Err(invalid("Unsupported module signature/machine"));
-    }
-    let count = u16_at(bytes, p + 6)?;
-    let optional = u16_at(bytes, p + 20)?;
-    if count == 0 || count > 32 || optional < 32 {
-        return Err(invalid("Invalid module section table"));
-    }
-    let table = p
-        .checked_add(24 + optional)
-        .ok_or_else(|| invalid("Section offset overflow"))?;
-    let mut ranges = Vec::new();
-    let mut occupied: Vec<(usize, usize)> = Vec::new();
-    for i in 0..count {
-        let s = slice(bytes, table + i * 40, 40)?;
-        let section_name =
-            core::str::from_utf8(s[..8].split(|b| *b == 0).next().unwrap()).unwrap_or("");
-        let size = u32_at(s, 16)?;
-        let at = u32_at(s, 20)?;
-        if size == 0 {
-            continue;
-        }
-        slice(bytes, at, size)?;
-        if at < table + count * 40 {
-            return Err(invalid("Module section overlaps its headers"));
-        }
-        if occupied.iter().any(|(a, n)| at < *a + *n && *a < at + size) {
-            return Err(invalid("Overlapping module sections"));
-        }
-        occupied.push((at, size));
-        if matches!(section_name, "CODE" | "DATA" | ".data" | ".rdata" | ".text") {
-            ranges.push((at, size.min(u32_at(s, 8)?), section_name == "CODE"));
-        }
-    }
-    Ok(ranges)
-}
-/// Recognize complete null-terminated filenames in module sections, never byte
-/// substrings in images/audio. Extensionless picture names require a named E2
-/// operand or the established ~/underscore picture prefix and a catalog match.
-fn references(
-    name: &str,
-    bytes: &[u8],
-    catalog: &BTreeSet<String>,
-    unresolved: &mut BTreeSet<String>,
-) -> Result<Vec<Reference>> {
-    if leaf(name) {
-        return Ok(Vec::new());
-    }
-    let mut out = Vec::new();
-    if bytes.starts_with(b"[brent's_relocatable_format]") {
-        let brf = Brf::parse(bytes, ext(name))?;
-        for (i, f) in brf
-            .fields
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| f.kind == "string")
-        {
-            let target = unquote(&f.value).to_ascii_uppercase();
-            if validate_name(&target).is_ok()
-                && (catalog.contains(&target) || resource_extension(&target))
-            {
-                out.push(Reference {
-                    target,
-                    location: Location::Text(i),
-                });
-            }
-        }
-    } else if bytes.starts_with(b"MZ") {
-        for (at, len, code) in sections(bytes)? {
-            let b = &bytes[at..at + len];
-            let mut start = 0;
-            for (i, value) in b.iter().enumerate() {
-                if name_byte(*value) {
-                    continue;
-                }
-                if *value == 0 && (1..=12).contains(&(i - start)) {
-                    let token = core::str::from_utf8(&b[start..i])
-                        .unwrap()
-                        .to_ascii_uppercase();
-                    let e2 = code && start >= 2 && b[start - 2..start] == [0xe2, 0];
-                    const HUD_NAMES: &[usize] = &[
-                        1, 0xe, 0x1b, 0x13c, 0x149, 0x156, 0x163, 0x170, 0x17d, 0x18a, 0x197,
-                        0x1a4, 0x275, 0x282,
-                    ];
-                    let hud = ext(name) == "HUD" && code && HUD_NAMES.contains(&start);
-                    let width = if e2 {
-                        14
-                    } else if hud {
-                        13
-                    } else {
-                        0
-                    };
-                    let capacity = if width > 0
-                        && start + width <= b.len()
-                        && b[i..start + width].iter().all(|b| *b == 0)
-                    {
-                        width - 1
-                    } else {
-                        i - start
-                    };
-                    if token.contains('.') {
-                        if validate_name(&token).is_ok()
-                            && (catalog.contains(&token) || resource_extension(&token))
-                        {
-                            out.push(Reference {
-                                target: token,
-                                location: Location::Literal {
-                                    at: at + start,
-                                    len: capacity,
-                                    stem_only: false,
-                                },
-                            });
-                        }
-                    } else {
-                        let candidate = format!("{token}.PIC");
-                        if hud
-                            && token.starts_with('~')
-                            && token.len() >= 3
-                            && !catalog.contains(&candidate)
-                            && unresolved.len() < 128
-                        {
-                            unresolved.insert(format!("{name}: unresolved module name {token}; no matching PIC, left unchanged."));
-                        }
-                        if validate_name(&candidate).is_ok()
-                            && (e2
-                                || ((hud || token.starts_with('~') || token.starts_with('_'))
-                                    && catalog.contains(&candidate)))
-                        {
-                            out.push(Reference {
-                                target: candidate,
-                                location: Location::Literal {
-                                    at: at + start,
-                                    len: capacity,
-                                    stem_only: true,
-                                },
-                            });
-                        }
-                    }
-                }
-                start = i + 1;
-            }
-        }
-    } else {
-        return Err(format!(
-            "Cannot inspect dependencies of {name}: unsupported resource encoding"
-        ));
-    }
-    Ok(out)
 }
 fn base36(mut n: usize) -> String {
     let mut b = Vec::new();
@@ -768,7 +570,7 @@ mod tests {
             let after = p.archive.entries[p.archive.find(new).unwrap()]
                 .read()
                 .unwrap();
-            if leaf(old) {
+            if crate::dependencies::leaf(old) {
                 assert_eq!(before, after);
             } else if before.starts_with(b"MZ") {
                 assert_eq!(before.len(), after.len());

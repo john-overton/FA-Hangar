@@ -93,3 +93,25 @@ unchanged. Package layouts were rendered locally at 1280x800 and 800x600.
 Both Windows cross-builds and import audits pass (59 reviewed imports, no CRT).
 Windows 98/ME execution and interrupted-save recovery on those OSes remain
 manual acceptance checks.
+
+
+The resource-navigation/package-check pass adds six core tests (34 total):
+cycle-safe reverse aircraft users, cache invalidation on edit/undo/catalog
+changes, explicit scan limits, removed-resource diagnostics, changed payload
+errors versus unknown encodings, and bounded reports with retained counts.
+Existing clone tests continue to cover hidden module references and exclusion
+of imports/sample bytes after extraction of the shared scanner.
+
+Shared UI smoke clicks a shape's texture link and returns through its aircraft
+user, retains the live model context, verifies no dirty state from navigation,
+checks remove/undo/report invalidation, and scrolls both references and results.
+It checks dock hit regions at 800x600 and 1280x800, including the live-preview
+tab. Native Linux model/References and Package renders were visually inspected
+at those sizes; this pass adds no platform APIs or runtime dependencies.
+
+Core tests, strict Clippy, the shared UI smoke, both Windows release builds and
+PE audits pass. Audits still report 59 reviewed imports and no runtime DLLs;
+executables are 360,448 bytes (32-bit) and 430,080 bytes (64-bit). Synthetic CLI
+`references` and `validate` checks also pass. This pass has not been run on
+Windows 98/ME or tested in original Fighters Anthology. The current-LIB index
+and advisory package checks do not establish runtime dependency closure.

@@ -11,12 +11,14 @@ pub mod authoring;
 pub mod brf;
 pub mod clone_aircraft;
 mod dcl;
+pub mod dependencies;
 pub mod document;
 pub mod model;
 pub mod picture;
 pub mod save;
 #[allow(dead_code)]
 mod schema;
+pub mod validation;
 pub type Result<T> = core::result::Result<T, alloc::string::String>;
 pub(crate) fn invalid(message: &str) -> alloc::string::String {
     message.into()

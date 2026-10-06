@@ -15,6 +15,7 @@ pub(super) enum Action {
     Filter,
     Category(usize),
     Entry(usize),
+    Related(usize),
     Field(usize),
     PickField(usize),
     ResetField(usize),
@@ -42,7 +43,7 @@ pub(super) enum Action {
     Isolate,
 }
 pub(super) struct Hit {
-    rect: [i32; 4],
+    pub(super) rect: [i32; 4],
     pub action: Action,
 }
 impl Hit {
@@ -528,6 +529,28 @@ impl App {
                 self.table_scroll = 0;
             }
             Action::Entry(i) => self.select_entry(i),
+            Action::Related(i) => {
+                self.finish_stroke();
+                self.filter.clear();
+                if self
+                    .doc
+                    .archive
+                    .entries
+                    .get(i)
+                    .is_some_and(|e| e.name.ends_with(".PIC"))
+                    && self.model.is_some()
+                {
+                    self.open_texture(i);
+                } else {
+                    self.select_entry(i);
+                }
+                self.mode = match extension(self.name()) {
+                    "PT" | "SH" => Mode::Model,
+                    "PIC" | "5K" | "11K" | "WAV" => Mode::Media,
+                    _ => Mode::Browse,
+                };
+                self.dock = 4;
+            }
             Action::Field(i) => self.edit_field(i),
             Action::PickField(i) => self.field_selected = i,
             Action::ResetField(i) => {
@@ -557,14 +580,12 @@ impl App {
             Action::Transform(c) => self.key(Key::Char(c), false, false),
             Action::Dock(n) => self.dock = n,
             Action::Validate => {
-                self.validation = Some(match self.doc.archive.bytes().and_then(Archive::parse) {
-                    Ok(a) => format!(
-                        "PASS: {} entries; directory offsets and EOF sentinel verified",
-                        a.entries.len()
-                    ),
-                    Err(e) => format!("Error: {e}"),
-                });
-                self.status = self.validation.clone().unwrap();
+                self.finish_stroke();
+                let report = hangar_core::validation::inspect(&self.doc, &mut self.dependencies);
+                self.status = report.summary();
+                self.validation = Some(report);
+                self.validation_scroll = 0;
+                self.mode = Mode::Package;
             }
             Action::Apply => self.key(Key::Enter, false, false),
             Action::Cancel => self.key(Key::Escape, false, false),
@@ -572,6 +593,19 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "references" {
+            self.mode = if self.pic.is_some() {
+                Mode::Media
+            } else {
+                Mode::Model
+            };
+            self.dock = 4;
+            return Ok(());
+        }
+        if name == "validation" {
+            self.act(Action::Validate);
+            return Ok(());
+        }
         if name == "textured" {
             self.mode = Mode::Model;
             self.textured = true;
@@ -1161,6 +1195,22 @@ impl App {
                 c::INK_MUTED,
             );
         }
+        if let Some(i) = self.model_entry {
+            let users = self
+                .dependencies
+                .incoming(&self.doc.archive.entries[i].name)
+                .count();
+            if users > 1 {
+                label_fit(
+                    d,
+                    l + 51,
+                    136,
+                    width - 110,
+                    &format!("Shared shape / {users} direct users in this LIB"),
+                    c::AMBER,
+                );
+            }
+        }
         let gx = r - 43;
         let gy = 92;
         d.line(gx - 19, gy, gx + 19, gy, c::AXIS_X);
@@ -1482,59 +1532,37 @@ impl App {
             d.label(r + 20, y, label, c::INK_MUTED);
             text_fit(d, r + 134, y, w - 152, &value, c::INK);
         }
-        d.label(r + 20, 244, "References observed", c::INK);
-        let mut refs = BTreeSet::new();
-        if let Some(b) = &self.brf {
-            for f in &b.fields {
-                if f.kind == "string" {
-                    let n = f.value.trim_matches('"').to_ascii_uppercase();
-                    if hangar_core::archive::validate_name(&n).is_ok() {
-                        refs.insert(n);
-                    }
-                }
-            }
-        }
-        if let Some(m) = &self.model {
-            refs.extend(m.textures.iter().cloned());
-        }
-        let mut y = 264;
-        for name in refs.iter().take(7) {
-            icon(
-                &mut o.canvas,
-                r + 20,
-                y,
-                GROUPS[category_of(name)].2,
-                c::INK_MUTED,
-            );
-            text_fit(&mut o.canvas, r + 44, y + 13, w - 64, name, c::INK_MUTED);
-            if let Some(i) = self.doc.archive.find(name) {
-                o.hit([r + 14, y - 2, w - 28, 22], Action::Entry(i));
-            }
-            y += 24;
-        }
-        if refs.is_empty() {
-            o.canvas
-                .label(r + 20, y + 14, "No decoded references", c::INK_FAINT);
-            y += 28;
-        }
-        o.button(
-            [r + 10, y + 20, w - 20, 24],
-            "Open in Model",
-            Action::Mode(Mode::Model),
-            false,
+        let links = self.dependencies.get(&e.name).map_or(0, |s| s.links.len());
+        let users = self.dependencies.incoming(&e.name).count();
+        d.label(r + 20, 244, "Resource relationships", c::INK);
+        d.label(
+            r + 20,
+            272,
+            &format!("{links} references / {users} direct users"),
+            c::INK_MUTED,
         );
-        o.button(
-            [r + 10, y + 52, w - 20, 24],
-            "Export entry",
-            Action::File(FileAction::Export),
-            false,
+        d.label(
+            r + 20,
+            298,
+            &format!("{} aircraft users in this LIB", self.aircraft_users.len()),
+            c::STEEL,
         );
-        o.button(
-            [r + 10, y + 84, w - 20, 24],
-            "Replace entry",
-            Action::File(FileAction::Replace),
-            false,
+        label_fit(
+            d,
+            r + 20,
+            324,
+            w - 40,
+            "Stored references / current LIB only",
+            c::INK_FAINT,
         );
+        for (y, title, action) in [
+            (344, "References / users", Action::Dock(4)),
+            (380, "Open in Model", Action::Mode(Mode::Model)),
+            (416, "Export entry", Action::File(FileAction::Export)),
+            (452, "Replace entry", Action::File(FileAction::Replace)),
+        ] {
+            o.button([r + 10, y, w - 20, 24], title, action, false);
+        }
     }
     fn fields_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32, full: bool) {
         o.canvas.rect(x, y, w, h, c::GM_800);
@@ -1640,41 +1668,49 @@ impl App {
     fn dock_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
         o.canvas.rect(x, y, w, h, c::GM_800);
         o.canvas.line(x, y, x + w, y, c::GM_1000);
-        o.button(
-            [x + 4, y + 4, 90, 22],
-            "Raw fields",
-            Action::Dock(0),
-            self.dock == 0,
-        );
-        o.button(
-            [x + 97, y + 4, 52, 22],
-            "Hex",
-            Action::Dock(1),
-            self.dock == 1,
-        );
-        o.button(
-            [x + 152, y + 4, 72, 22],
-            "Details",
-            Action::Dock(2),
-            self.dock == 2,
-        );
-        if self.mode == Mode::Media && self.context_model.is_some() {
+        let compact = w < 450;
+        let mut tx = x + 4;
+        for (id, title, width) in if compact {
+            [
+                (0, "Raw", 48),
+                (1, "Hex", 40),
+                (2, "Details", 60),
+                (4, "Links", 62),
+                (3, "3D preview", 86),
+            ]
+        } else {
+            [
+                (0, "Raw fields", 90),
+                (1, "Hex", 52),
+                (2, "Details", 72),
+                (4, "References", 94),
+                (3, "3D preview", 86),
+            ]
+        } {
+            if id == 3 && !(self.mode == Mode::Media && self.context_model.is_some()) {
+                continue;
+            }
             o.button(
-                [x + 227, y + 4, 86, 22],
-                "3D preview",
-                Action::Dock(3),
-                self.dock == 3,
+                [tx, y + 4, width, 22],
+                title,
+                Action::Dock(id),
+                self.dock == id,
             );
+            tx += width + 3;
         }
-        if w > 450 && !(self.mode == Mode::Media && self.context_model.is_some()) {
+        if w > tx - x + 140 {
             text_fit(
                 &mut o.canvas,
-                x + 239,
+                tx + 8,
                 y + 20,
-                w - 251,
-                &format!("{} / {} B", self.name(), self.data.len()),
+                x + w - tx - 16,
+                self.name(),
                 c::INK_MUTED,
             );
+        }
+        if self.dock == 4 {
+            self.references_layout(o, x, y + 30, w, h - 30);
+            return;
         }
         if self.dock == 3 && self.context_model.is_some() {
             self.draw_model(o, x, y + 30, w, h - 30);
@@ -1803,144 +1839,6 @@ impl App {
             c::INK_FAINT,
         );
     }
-    fn package_layout(&self, o: &mut Layout) {
-        let l = self.left();
-        let r = self.right();
-        let w = self.width;
-        let h = self.height;
-        let mid = r - l;
-        let d = &mut o.canvas;
-        d.rect(0, 26, l, h - 48, c::GM_800);
-        d.rect(l + 1, 26, mid - 2, h - 48, c::GM_900);
-        d.rect(r + 1, 26, w - r - 1, h - 48, c::GM_800);
-        d.label(12, 44, "Build list", c::INK);
-        d.label(l + 12, 44, "Validation", c::INK);
-        d.label(r + 12, 44, "Output", c::INK);
-        d.line(l, 26, l, h - 22, c::GM_1000);
-        d.line(r, 26, r, h - 22, c::GM_1000);
-        text_fit(d, 12, 78, l - 24, self.lib_name(), c::INK);
-        let changed: Vec<_> = self
-            .doc
-            .archive
-            .entries
-            .iter()
-            .filter(|e| self.doc.entry_changed(e))
-            .collect();
-        let total_changed = self.doc.changed_count();
-        let mut y = 100;
-        for e in changed.iter().take(((h - 210) / 24).max(0) as usize) {
-            icon(d, 24, y, GROUPS[category_of(&e.name)].2, c::AMBER);
-            text_fit(d, 48, y + 14, l - 60, &e.name, c::AMBER);
-            y += 24;
-        }
-        label_fit(
-            d,
-            14,
-            y + 26,
-            l - 28,
-            &format!(
-                "{} changed / {} total",
-                total_changed,
-                self.doc.archive.entries.len()
-            ),
-            c::INK_MUTED,
-        );
-        d.label(14, h - 83, "OUTPUT MODE", c::INK_FAINT);
-        label_fit(
-            d,
-            14,
-            h - 55,
-            l - 28,
-            if hangar_core::save::protected_name(&self.path).is_some() {
-                "Protected / save a copy"
-            } else {
-                "Custom LIB / save with backup"
-            },
-            c::INK_MUTED,
-        );
-        let checks = [
-            ("Original payloads kept intact.", true),
-            ("Edited entries stored unpacked.", true),
-            ("Retail LIB names are protected.", true),
-            ("Custom saves keep .bak backups.", true),
-            ("Test new LIBs in the game.", false),
-        ];
-        for (i, (text, pass)) in checks.into_iter().enumerate() {
-            let yy = 69 + i as i32 * 58;
-            d.rect(l + 10, yy, mid - 20, 48, c::GM_800);
-            border(
-                d,
-                l + 10,
-                yy,
-                mid - 20,
-                48,
-                if pass { c::GM_600 } else { c::AMBER_DEEP },
-            );
-            icon(
-                d,
-                l + 21,
-                yy + 15,
-                if pass { Icon::Check } else { Icon::Warn },
-                if pass { c::OK } else { c::AMBER },
-            );
-            label_fit(d, l + 48, yy + 28, mid - 66, text, c::INK_MUTED);
-        }
-        label_fit(
-            d,
-            l + 14,
-            378,
-            mid - 28,
-            self.validation
-                .as_deref()
-                .unwrap_or("Directory validation has not been run."),
-            if self
-                .validation
-                .as_ref()
-                .is_some_and(|s| s.starts_with("PASS"))
-            {
-                c::OK
-            } else {
-                c::INK_MUTED
-            },
-        );
-        o.button(
-            [l + 14, 396, mid - 28, 24],
-            "Re-run directory checks",
-            Action::Validate,
-            false,
-        );
-        let d = &mut o.canvas;
-        d.label(l + 14, 448, "DETAILS", c::INK_FAINT);
-        d.rect(l + 12, 462, mid - 24, (h - 501).max(40), c::GM_950);
-        text_fit(d, l + 24, 484, mid - 48, &self.status, c::INK_MUTED);
-        d.rect(r + 9, 65, w - r - 18, 145, c::GM_900);
-        border(d, r + 9, 65, w - r - 18, 145, c::GM_1000);
-        d.label(r + 22, 87, "Destination", c::INK);
-        d.label(r + 22, 116, "Choose a custom .LIB filename.", c::INK_MUTED);
-        d.label(r + 22, 144, "Mode", c::INK_MUTED);
-        d.text(
-            r + 116,
-            144,
-            if hangar_core::save::protected_name(&self.path).is_some() {
-                "Save a copy"
-            } else {
-                "Save + backup"
-            },
-            c::INK,
-        );
-        d.label(
-            r + 22,
-            181,
-            "Retail filenames cannot be written.",
-            c::INK_FAINT,
-        );
-        o.button(
-            [r + 12, 232, w - r - 24, 28],
-            "Package LIB",
-            Action::File(FileAction::Save),
-            true,
-        );
-    }
     fn menu_layout(&self, o: &mut Layout, menu: usize) {
         let xs = [86, 124, 163, 196, 243, 286, 333];
         let x = xs[menu];
@@ -1959,9 +1857,10 @@ impl App {
                 ("Add entry       Ctrl+I", Action::File(FileAction::Import)),
                 ("Duplicate aircraft", Action::File(FileAction::Variant)),
                 ("From loose SH file...", Action::File(FileAction::VariantSh)),
-                ("Validate directory", Action::Validate),
+                ("Validate package", Action::Validate),
             ],
             3 => vec![
+                ("References / users", Action::Dock(4)),
                 ("Export entry    Ctrl+E", Action::File(FileAction::Export)),
                 ("Replace entry", Action::File(FileAction::Replace)),
                 ("Export geometry as OBJ", Action::File(FileAction::Obj)),
@@ -2108,6 +2007,7 @@ impl App {
                 true,
             );
         }
+        self.smoke_dependencies();
         self.demo();
         self.width = 1280;
         self.height = 800;
@@ -2145,7 +2045,7 @@ impl App {
         assert!(self.browser_entries().contains(&self.selected));
         click(self, |a| matches!(a, Action::Mode(Mode::Package)));
         click(self, |a| matches!(a, Action::Validate));
-        assert!(self.validation.as_ref().unwrap().starts_with("PASS"));
+        assert!(self.validation.as_ref().unwrap().errors == 0);
         self.file_prompt(FileAction::Open);
         click(self, |a| matches!(a, Action::Cancel));
         assert!(self.prompt.is_none());

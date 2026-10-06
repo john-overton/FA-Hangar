@@ -168,7 +168,12 @@ pub struct App {
     inspector_scroll: i32,
     original_brf: Option<Brf>,
     model_entry: Option<usize>,
-    validation: Option<String>,
+    validation: Option<hangar_core::validation::Report>,
+    dependencies: hangar_core::dependencies::Index,
+    aircraft_users: Vec<String>,
+    reference_scroll: usize,
+    validation_scroll: usize,
+    changes_scroll: usize,
     browser: Option<Browser>,
     recent: Vec<String>,
     pic: Option<Pic>,
@@ -250,6 +255,11 @@ impl App {
             original_brf: None,
             model_entry: None,
             validation: None,
+            dependencies: Default::default(),
+            aircraft_users: Vec::new(),
+            reference_scroll: 0,
+            validation_scroll: 0,
+            changes_scroll: 0,
             browser: None,
             recent: crate::platform::load_recent(),
             pic: None,
@@ -451,6 +461,10 @@ impl App {
         self.original_brf = None;
         self.inspector_scroll = 0;
         self.validation = None;
+        self.validation_scroll = 0;
+        self.changes_scroll = 0;
+        self.reference_scroll = 0;
+        self.dependencies.update(&self.doc.archive);
         self.preview = None;
         self.data.clear();
         self.field_scroll = 0;
@@ -459,6 +473,7 @@ impl App {
         self.selected = self
             .selected
             .min(self.doc.archive.entries.len().saturating_sub(1));
+        self.aircraft_users = self.dependencies.aircraft_users(self.name());
         if let Some(e) = self.doc.archive.entries.get(self.selected) {
             match e.read() {
                 Ok(data) => {
@@ -1342,7 +1357,7 @@ impl App {
                     || self.image_drag
                     || (self.mode == Mode::Media
                         && self.context_model.is_some()
-                        && (x >= self.right() || y >= self.dock_y())));
+                        && (x >= self.right() || (self.dock == 3 && y >= self.dock_y()))));
             return;
         }
         if !down {
@@ -1417,6 +1432,31 @@ impl App {
                     .clamp(0, b.files.len().saturating_sub(1) as i32)
                     as usize;
             }
+            return;
+        }
+        if self.mode == Mode::Package {
+            if self.mouse[0] < self.left() {
+                let rows = ((self.height - 220) / 24).max(1) as usize;
+                self.changes_scroll = (self.changes_scroll as i32 - delta * 3)
+                    .clamp(0, self.doc.changes().len().saturating_sub(rows) as i32)
+                    as usize;
+            } else if self.mouse[0] < self.right() {
+                let rows = ((self.height - 192) / 20).max(1) as usize;
+                self.validation_scroll = (self.validation_scroll as i32 - delta * 3)
+                    .clamp(0, self.validation_lines().len().saturating_sub(rows) as i32)
+                    as usize;
+            }
+            return;
+        }
+        if self.dock == 4
+            && self.mouse[0] > self.left()
+            && self.mouse[0] < self.right()
+            && self.mouse[1] >= self.dock_y()
+        {
+            let rows = ((self.height - self.dock_y() - 84) / 22).max(1) as usize;
+            self.reference_scroll = (self.reference_scroll as i32 - delta * 3)
+                .clamp(0, self.reference_rows().len().saturating_sub(rows) as i32)
+                as usize;
             return;
         }
         if self.mode == Mode::Media
@@ -1602,3 +1642,6 @@ mod media;
 
 #[path = "ui_clone.rs"]
 mod cloning_ui;
+
+#[path = "ui_dependencies.rs"]
+mod dependencies_ui;
