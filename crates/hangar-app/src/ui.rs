@@ -66,6 +66,8 @@ pub enum FileAction {
     Obj,
     Graft,
     Variant,
+    VariantSh,
+    CloneSource,
     Png,
     Wav,
     Palette,
@@ -79,6 +81,9 @@ enum PromptKind {
     VariantId,
     VariantTitle,
     VariantReview,
+    CloneId,
+    CloneTitle,
+    CloneReview,
     Recolor,
     Isolate,
 }
@@ -146,6 +151,11 @@ pub struct App {
     filter: String,
     filter_focus: bool,
     pub quit: bool,
+    clone_draft: Option<hangar_core::clone_aircraft::Package>,
+    clone_sources: Vec<String>,
+    clone_title: String,
+    clone_scroll: usize,
+    suggested_output: Option<String>,
     variant_shape: Vec<u8>,
     variant_id: String,
     variant_draft: Option<Variant>,
@@ -222,6 +232,11 @@ impl App {
             filter: String::new(),
             filter_focus: false,
             quit: false,
+            clone_draft: None,
+            clone_sources: Vec::new(),
+            clone_title: String::new(),
+            clone_scroll: 0,
+            suggested_output: None,
             variant_shape: Vec::new(),
             variant_id: String::new(),
             variant_draft: None,
@@ -280,6 +295,7 @@ impl App {
             .map(|i| if i % 50 < 25 { 148 } else { 108 })
             .collect();
         a.entries.push(Entry::new("DEMO.5K", sound).unwrap());
+        self.suggested_output = None;
         self.doc = Document::new(a);
         self.context_model = None;
         self.context_entry = None;
@@ -305,6 +321,7 @@ impl App {
             return Err("Save your changes before opening another LIB".into());
         }
         let a = Archive::parse(crate::platform::read(path)?)?;
+        self.suggested_output = None;
         self.doc = Document::new(a);
         self.context_model = None;
         self.context_entry = None;
@@ -319,6 +336,19 @@ impl App {
         self.collapsed = [true; 9];
         self.table_scroll = 0;
         self.mode = Mode::Browse;
+        let aircraft: Vec<_> = self
+            .doc
+            .archive
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| e.name.ends_with(".PT"))
+            .map(|(i, _)| i)
+            .collect();
+        if aircraft.len() == 1 {
+            self.selected = aircraft[0];
+            self.mode = Mode::Model;
+        }
         self.refresh();
         self.frame();
         self.remember(path);
@@ -389,7 +419,19 @@ impl App {
             .palette_override
             .unwrap_or_else(|| core::array::from_fn(|i| [i as u8; 3]));
         self.palette_loaded = self.palette_override.is_some();
-        if let Some(i) = self.doc.archive.find("PALETTE.PAL") {
+        let mut palettes = Vec::new();
+        let pts: Vec<_> = self
+            .doc
+            .archive
+            .entries
+            .iter()
+            .filter(|e| e.name.ends_with(".PT"))
+            .collect();
+        if pts.len() == 1 {
+            palettes.push(format!("{}.PAL", pts[0].name.split('.').next().unwrap()));
+        }
+        palettes.push("PALETTE.PAL".into());
+        if let Some(i) = palettes.iter().find_map(|name| self.doc.archive.find(name)) {
             if let Ok(b) = self.doc.archive.entries[i].read() {
                 if let Ok(p) = picture::palette(&b) {
                     self.base_palette = p;
@@ -522,7 +564,9 @@ impl App {
         }
     }
     pub fn file_prompt(&mut self, a: FileAction) {
-        if matches!(a, FileAction::Variant) && (self.doc.dirty() || !self.name().ends_with(".PT")) {
+        if matches!(a, FileAction::Variant | FileAction::VariantSh)
+            && (self.doc.dirty() || !self.name().ends_with(".PT"))
+        {
             self.status = "Select a PT donor in a saved LIB before creating a new aircraft".into();
             return;
         }
@@ -530,12 +574,25 @@ impl App {
             self.status = "Save your changes before opening another LIB".into();
             return;
         }
+        if matches!(a, FileAction::Variant) {
+            self.begin_clone();
+            return;
+        }
+        if matches!(a, FileAction::CloneSource) {
+            if let Some(p) = &self.prompt {
+                if matches!(p.kind, PromptKind::CloneTitle) {
+                    self.clone_title = p.value.clone();
+                }
+            }
+        }
         let title = match a {
             FileAction::Png => "Export picture as PNG",
             FileAction::Wav => "Export sound as WAV",
             FileAction::Palette => "Load display palette (.PAL or a LIB containing PALETTE.PAL)",
             FileAction::Open => "Open LIB",
-            FileAction::Variant => "New aircraft / step 1: imported main SH path",
+            FileAction::Variant => "New aircraft",
+            FileAction::VariantSh => "New aircraft from loose SH / step 1: select SH file",
+            FileAction::CloneSource => "Additional source LIB for aircraft dependencies",
             FileAction::Save => "Package LIB: new output path",
             FileAction::Import => "Add entry: path to a resource file",
             FileAction::Replace => "Replace selected entry: resource file path",
@@ -544,7 +601,10 @@ impl App {
             FileAction::Graft => "Copy selected field from same entry in donor LIB: donor path",
         };
         let value = match a {
-            FileAction::Save => "HANGAR.LIB".into(),
+            FileAction::Save => self
+                .suggested_output
+                .clone()
+                .unwrap_or_else(|| "HANGAR.LIB".into()),
             FileAction::Png => format!("{}.png", self.name().split('.').next().unwrap()),
             FileAction::Wav => format!("{}.wav", self.name().split('.').next().unwrap()),
             FileAction::Export => self.name().into(),
@@ -612,7 +672,9 @@ impl App {
                     "Display palette loaded; original resource palettes remain unchanged".into();
                 Ok(())
             }
-            FileAction::Variant => {
+            FileAction::Variant => Err("Start New aircraft from a selected PT".into()),
+            FileAction::CloneSource => self.add_clone_source(path),
+            FileAction::VariantSh => {
                 let shape = crate::platform::read(path)?;
                 Model::parse(&shape)?;
                 self.variant_shape = shape;
@@ -800,6 +862,26 @@ impl App {
         if self.prompt.is_some() {
             match key {
                 Key::Escape => {
+                    if self.prompt.as_ref().is_some_and(|p| {
+                        matches!(p.kind, PromptKind::File(FileAction::CloneSource))
+                    }) {
+                        self.browser = None;
+                        self.prompt = Some(Prompt {
+                            kind: PromptKind::CloneTitle,
+                            title: "New aircraft / step 2: display name".into(),
+                            value: self.clone_title.clone(),
+                            axis: 0,
+                        });
+                        return;
+                    }
+                    if self.prompt.as_ref().is_some_and(|p| {
+                        matches!(
+                            p.kind,
+                            PromptKind::CloneId | PromptKind::CloneTitle | PromptKind::CloneReview
+                        )
+                    }) {
+                        self.clone_draft = None;
+                    }
                     self.prompt = None;
                     self.preview = None;
                     self.status = "Cancelled".into();
@@ -878,6 +960,72 @@ impl App {
                                 Ok(())
                             })();
                             r
+                        }
+                        PromptKind::CloneId => match authoring::validate_id(p.value.trim()) {
+                            Ok(id) => {
+                                if self.doc.archive.find(&format!("{id}.PT")).is_some() {
+                                    Err("That aircraft ID already exists; choose a new ID".into())
+                                } else {
+                                    self.variant_id = id;
+                                    self.prompt = Some(Prompt {
+                                        kind: PromptKind::CloneTitle,
+                                        title: "New aircraft / step 2: display name".into(),
+                                        value: self.clone_title.clone(),
+                                        axis: 0,
+                                    });
+                                    Ok(())
+                                }
+                            }
+                            Err(e) => Err(e),
+                        },
+                        PromptKind::CloneTitle => {
+                            self.clone_title = p.value.clone();
+                            match self.build_clone() {
+                                Ok(package) => {
+                                    self.clone_draft = Some(package);
+                                    self.clone_scroll = 0;
+                                    self.prompt = Some(Prompt {
+                                        kind: PromptKind::CloneReview,
+                                        title: "New aircraft / review private resources".into(),
+                                        value: String::new(),
+                                        axis: 0,
+                                    });
+                                    Ok(())
+                                }
+                                Err(e) => Err(e),
+                            }
+                        }
+                        PromptKind::CloneReview => {
+                            if let Some(package) = self.clone_draft.take() {
+                                let count = package.archive.entries.len();
+                                self.suggested_output = Some(format!("{}.LIB", package.id));
+                                self.path = format!("{}.LIB", package.id);
+                                self.doc = Document::new(package.archive);
+                                self.doc.mark_unsaved();
+                                self.required.clear();
+                                self.context_model = None;
+                                self.context_entry = None;
+                                self.selected_face = None;
+                                self.selected = self
+                                    .doc
+                                    .archive
+                                    .find(&format!("{}.PT", package.id))
+                                    .unwrap_or(0);
+                                self.scroll = 0;
+                                self.table_scroll = 0;
+                                self.category = None;
+                                self.filter.clear();
+                                self.collapsed = [true; 9];
+                                self.mode = Mode::Model;
+                                self.refresh();
+                                self.status = format!(
+                                    "{count} private resources ready; choose a NEW output LIB path"
+                                );
+                                self.file_prompt(FileAction::Save);
+                                Ok(())
+                            } else {
+                                Err("No prepared aircraft export".into())
+                            }
                         }
                         PromptKind::VariantId => match authoring::validate_id(&p.value) {
                             Ok(id) => {
@@ -1193,6 +1341,16 @@ impl App {
         self.mouse = [x, y];
     }
     pub fn wheel(&mut self, delta: i32) {
+        if self
+            .prompt
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, PromptKind::CloneReview))
+        {
+            let len = self.clone_draft.as_ref().map_or(0, |p| p.mapping.len());
+            self.clone_scroll = (self.clone_scroll as i32 - delta * 3)
+                .clamp(0, len.saturating_sub(1) as i32) as usize;
+            return;
+        }
         if self.prompt.is_some() {
             if let Some(b) = &mut self.browser {
                 b.scroll = (b.scroll as i32 - delta * 3)
@@ -1381,3 +1539,6 @@ mod view;
 mod browser_ui;
 #[path = "ui_media.rs"]
 mod media;
+
+#[path = "ui_clone.rs"]
+mod cloning_ui;

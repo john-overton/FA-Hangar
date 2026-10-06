@@ -8,7 +8,10 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
 
 - `hangar-core/archive.rs`: bounded EALIB directory, shared source storage,
   lossless unedited archive serialization, raw DCL decoding and stored writes.
-- `authoring.rs`: isolated donor PT + imported main SH workflow. Rewrites five
+- `clone_aircraft.rs`: selected-PT dependency graph, private names and reference
+  rewriting. `ui_clone.rs` indexes sibling/additional source LIBs, reads only
+  requested payloads, and presents the export review.
+- `authoring.rs`: legacy donor PT + imported main SH workflow. Rewrites five
   identity/reference strings, aliases the reviewed A/B/C/D/S family, copies
   observed pose textures, and reports missing textures/shared stock references.
 - `brf.rs` and `schema.rs`: source-range operands, schema annotation, width and
@@ -68,12 +71,38 @@ Unrecognized fields remain indexed operands. Numeric edits validate storage
 width; pointer edits must resolve. No unit conversions or runtime behavior are
 inferred from mockup numbers. This does not validate all field relationships.
 
-Aircraft creation follows the shadow-derived damage-family contract documented
-in the sibling `docs/spec/fa-xx-export.md`. It requires an explicit `_S.SH`
-reference and all five companion resources. It does not guess generic object
-families. Imported main SH bytes and donor companion bytes remain unchanged.
-Only PT identity and main/shadow reference strings change. Textures are found
-through the bounded static-pose reader; full dependency closure is not claimed.
+The selected-aircraft clone follows the shadow-derived damage-family contract
+in the sibling `docs/spec/fa-xx-export.md`. It reads the main/shadow references
+from the PT and includes all A/B/C/D/S companions. BRF string operands and
+catalog-resolved module filename literals form the recursive resource graph.
+Available `$<store>.PIC` icons are included using the ordnance-menu contract.
+A same-name HUD is included when a PT leaves the explicit HUD pointer null.
+
+Compiled modules are inspected as inert PL/PE sections. Only CODE, DATA, .data,
+.rdata and .text contribute filename literals. Imports, exports, relocation
+tables and DOS stubs remain untouched. Replacements never move bytes or enlarge
+sections. Reviewed E2 texture-name fields have 14-byte storage and reviewed HUD
+picture fields have 13-byte storage; other strings are constrained to their
+original capacity. Texture/cockpit suffix families and store/icon stem pairs
+remain consistent. All output names are checked against the complete scanned
+catalog, then resolved output references are checked again against the package.
+
+Extensionless module strings with no catalog match are not invented as files.
+Unresolved names in reviewed HUD fields, such as ~F104_W in the A-10's donor
+HUD, are reported and preserved. Required explicit filenames must resolve.
+This verifies a stored resource graph, not every dynamically generated lookup
+in the original executable. A second aircraft definition in the graph is
+rejected rather than exporting an incomplete second damage family.
+
+The source catalog uses directory-only reads and bounded range reads. Current
+in-memory entries win, then explicitly added source LIBs; conflicting sibling
+copies require an explicit choice. Limits are 64 extra LIBs, 131072 catalog
+names, 4096 copied resources and 128 MiB decoded output. The source files can
+be up to 2 GiB without being loaded wholesale. The editor's private palette is
+named `<new ID>.PAL`; game-global palette lookup is not overridden.
+
+The loose-SH workflow in authoring.rs remains separate. It retains its original
+shared-dependency contract and is not the default New aircraft action.
 
 SH writing only accepts the understood straight-line subset of vertex buffers,
 faces, texture/fog selection and source strings. A spatial header, control-flow,

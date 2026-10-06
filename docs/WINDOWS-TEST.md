@@ -25,26 +25,30 @@ The synthetic demo is only an editor test; do not install it in the game.
 
 Use a copy of your own game installation for the game check.
 
-1. Open FA_1.LIB first and confirm its 2,001 entries load without the old
-   ASCII-name error. Then open FA_2.LIB and search for a donor PT, for example F18.PT. Search for
-   F18.SH separately to inspect the main model, then export it to a new SH file.
-2. Select F18.PT and click **New aircraft**. Supply that exported SH, ID
-   `TEST18`, and display name `Hangar F18 Test`; type CREATE at the review.
-3. Confirm TEST18.PT, TEST18.SH, TEST18_A/B/C/D/S.SH and the observed texture
-   are present. The PT fields should retain the donor values while names and
-   main/shadow references use TEST18.
-4. Package to TEST18.LIB, reopen it, and inspect TEST18.SH and TEST18.PT.
-5. For the actual game check, place only this new LIB beside FA.EXE in the
-   copied installation, with that folder as the working directory. Launch FA,
-   find the new aircraft, and check selection, appearance, controls, stores,
-   damage and shadow. Remove TEST18.LIB to remove the test variant.
+1. Open FA_1.LIB and confirm its 2,001 entries load. Then open FA_2.LIB,
+   filter/select `A10.PT`, and click **New aircraft**.
+2. The first field must request a **new aircraft ID**, not a file path. Use
+   `A10V1`, then a display name such as `My A-10`.
+3. Review the copied resources and new filenames. The tested retail A-10
+   produces 44 entries with FA_1/FA_2 available. Verify the main/damage/shadow
+   shapes, private textures, HUD/cockpit, weapons, sounds and palette are listed.
+4. Try Back and Cancel. The original LIB must remain unchanged. Rebuild the
+   review and click **Export new LIB**. The suggested name is `A10V1.LIB`.
+5. Save to a new path and reopen. Confirm `A10V1.PT` is selected and its linked
+   model/textures load. Numeric characteristics should remain donor values.
+6. Repeat with `F18.PT`; the tested source produces 58 private resources.
+7. If files are missing, use **Add source LIB**. If the ID already exists, the
+   wizard should reject it with a naming error, not a Windows file-open error.
+8. In the copied game installation, place the new LIB beside FA.EXE and launch
+   with that folder as the working directory. Check the new aircraft's selection,
+   cockpit, stores, flight, model LODs, damage and shadow. Verify stock aircraft
+   still use their original resources. Remove the new LIB to uninstall the test.
 
-This first test intentionally reuses the donor's main model so that identity
-and packaging can be tested before introducing a different model. A later
-import can substitute another compatible SH. Hardpoints, flight properties,
-damaged shapes and shadow remain donor-derived until deliberately changed.
-Part grafting is not available yet. General retail shapes are read-only in
-the geometry editor, but can be imported intact into a new aircraft package.
+The default workflow no longer requires exporting a loose SH first. For that
+separate use case, select **Lib > From loose SH file**. The new clone rewrites
+stored resource references but still relies on the game's procedures and any
+runtime-generated lookups not encoded as resolvable resource names. Review
+reported unresolved HUD names and test them in the actual game.
 
 ## File browser, audio and painting
 

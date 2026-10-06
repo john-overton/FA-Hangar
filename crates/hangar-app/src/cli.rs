@@ -12,7 +12,7 @@ pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nAll output paths must be new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nAll output paths must be new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -24,7 +24,7 @@ pub fn run() -> Result<()> {
             std::fs::create_dir(&temp).map_err(|e|e.to_string())?;
             let shape=temp.join("MODEL.SH");let output=temp.join("NEW.LIB");
             platform::write_new(shape.to_str().unwrap(), &hangar_core::model::demo_shape())?;
-            app.file_prompt(FileAction::Variant);
+            app.file_prompt(FileAction::VariantSh);
             for value in [shape.to_str().unwrap(),"NEWJET","New test aircraft","CREATE"] {
                 app.key(Key::Char('a'),true,false);
                 for c in value.chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);
@@ -39,6 +39,7 @@ pub fn run() -> Result<()> {
             std::fs::remove_dir_all(temp).map_err(|e|e.to_string())?;
             app.smoke_layout();
             app.smoke_media();
+            app.smoke_clone();
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
         Some("--paint-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Shape not found")?;app.select_entry(at);println!("{}",app.check_real_paint()?);},
@@ -57,6 +58,15 @@ pub fn run() -> Result<()> {
             let mut s=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">",app.width,app.height);
             fn escape(s:&str)->String{s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;")}
             for d in app.draw().commands{match d{Draw::Bitmap(x,y,w,h,pixels)=>{for yy in 0..h {let mut xx=0;while xx<w {let color=pixels[yy*w+xx];let mut end=xx+1;while end<w&&pixels[yy*w+end]==color{end+=1;}s.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"1\" fill=\"#{color:06x}\"/>",x+xx as i32,y+yy as i32,end-xx));xx=end;}}},Draw::Rect(x,y,w,h,c)=>s.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>")),Draw::Line(x,y,a,b,c)=>s.push_str(&format!("<path d=\"M{x} {y} L{a} {b}\" stroke=\"#{c:06x}\"/>")),Draw::Label(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t))),Draw::Text(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"monospace\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t)))}}s.push_str("</svg>");platform::write_new(argument(&args,1)?,s.as_bytes())?;
+        },
+        Some("--clone-check")=>{app.open(argument(&args,1)?)?;app.clone_export_check(argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,argument(&args,5)?)?;println!("PASS selected-PT wizard, automatic sources, review, named LIB export and reopen");},
+        Some("clone-aircraft") => {
+            let mut sources=vec![Archive::parse(platform::read(argument(&args,1)?)?)?];
+            for path in args.iter().skip(6){sources.push(Archive::parse(platform::read(path)?)?);}
+            let refs:Vec<_>=sources.iter().collect();let package=hangar_core::clone_aircraft::build(&refs,argument(&args,2)?,argument(&args,3)?,argument(&args,4)?)?;
+            platform::write_new(argument(&args,5)?,&package.archive.bytes()?)?;
+            for (old,new) in &package.mapping{println!("{old:13} -> {new}");}
+            println!("{} private resources; {} bytes",package.archive.entries.len(),package.archive.bytes()?.len());
         },
         Some("variant") => {
             let source=Archive::parse(platform::read(argument(&args,1)?)?)?;

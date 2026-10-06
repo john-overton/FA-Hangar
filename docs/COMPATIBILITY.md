@@ -55,7 +55,7 @@ compiler-generated instructions or runtime behavior work on Windows 98.
   device check; CI does not assume an audio device. Linux uses ALSA `aplay`.
 
 The additional Windows APIs are `FindFirstFileA`/`FindNextFileA`/`FindClose`,
-path/drive queries, `StretchDIBits` and `PlaySoundA`, all from the existing Win32
+path/drive queries, `SetFilePointer` for bounded source reads, `StretchDIBits` and `PlaySoundA`, all from the existing Win32
 API family. The audio buffer stays owned until playback is stopped before
 release ([PlaySound memory lifetime](https://learn.microsoft.com/en-us/previous-versions/dd743680(v=vs.85))).
 No WinMM DLL is bundled; Windows supplies it.

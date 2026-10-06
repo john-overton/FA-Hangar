@@ -15,7 +15,8 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
-Version 0.3 adds an in-app file browser and recent LIBs, audio playback/WAV
+Version 0.4 duplicates a selected aircraft directly into its own privately named
+LIB. The editor also provides an in-app file browser and recent LIBs, audio playback/WAV
 export, PIC preview/PNG export, and linked model/texture painting. Recent paths
 are kept in `tore-hangar-recent.txt` beside the executable; if that location is
 read-only, history still works for the current session.
@@ -43,9 +44,11 @@ read-only, history still works for the current session.
 - Edit PT/JT/OT/SEE/ECM textual BRF operands. Recognized schemas get named
   fields; other blocks retain their indexed labels. Comments, whitespace,
   line endings, labels, scaling markers and untouched values survive edits.
-- Create a new aircraft from an imported SH and a compatible PT donor. The
-  wizard rewrites its identity and main/shadow references, clones the donor's
-  damage/shadow family, and copies textures observed in the static pose.
+- Duplicate the selected PT into a separate LIB with a new ID/display name.
+  Resolve its resource graph recursively, copy and rename the damage/shadow
+  family, textures, cockpit/HUD, equipment, weapons, sounds and private palette,
+  then rewrite references. Review every old-to-new filename before exporting.
+- Keep loose-SH authoring available separately under Lib > From loose SH file.
 - Copy a selected field from the same named entry in another LIB, with an
   editable value preview before applying it. Entry replacement can transfer
   complete objects through export/import.
@@ -107,7 +110,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently about
-230–285 KB. Copy it to a writable location and run it. No installer or runtime
+310–380 KB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -120,36 +123,63 @@ The legacy executable's smoke test runs on the modern Windows runner, not on
 Windows 98. Source and notices are included in the repository; packages carry
 the license and notices alongside the executable.
 
-## Create an aircraft from an SH
+## Duplicate an aircraft into its own LIB
 
-1. Open the donor LIB and select its PT entry. Save any edits first.
-2. Click **New aircraft**, enter the imported SH path, a unique ID of up to
-   six characters, and its display name.
-3. Review the draft and type `CREATE`. This starts a separate in-memory LIB.
-   The donor archive stays untouched.
-4. Edit the new PT's fields. Add any missing textures with **Add entry**.
-5. **Package LIB** to a new path, then reopen it to inspect the result.
+1. Open the source LIB and select an aircraft PT, such as `A10.PT`.
+2. Click **New aircraft**. Enter a new ID, for example `A10V1`, then its display
+   name. This workflow uses the selected aircraft; it does **not** ask for a
+   loose SH path.
+3. Review the filename map. Hangar copies the resolved resource graph and
+   assigns private names that do not collide with any scanned source entry.
+   Use Back to change names, or Add source LIB when dependencies are elsewhere.
+4. Click **Export new LIB**, choose a destination, and save the suggested
+   `A10V1.LIB` or another new filename. The exported aircraft opens for editing.
+5. Reopen the LIB, inspect its model/fields, and test it in Fighters Anthology.
 
-The imported main SH is preserved byte-for-byte. The A/B/C/D damaged/fragment
-shapes and S shadow are unchanged donor geometry under new names. The donor
-must provide the complete reviewed `_S.SH` family; other conventions are
-rejected. Flight, hardpoints, cockpit/equipment and availability remain donor
-values until edited. Stock dependencies remain shared with the original game.
-Known missing main-pose textures block packaging until supplied. Dependencies
-in unvisited animations/LODs are not yet exhaustively checked.
+The source document and original files are preserved. Before export, the review
+is a draft; cancelling it keeps the source open. Cancelling the final output
+picker leaves the new unsaved LIB open for later packaging. Save source edits
+before beginning the workflow.
 
-This creates a **mod candidate**, not a guarantee that any arbitrary SH will
-fly correctly. Generic OT object creation and geometric part grafting are not
-implemented. See [the Windows test checklist](docs/WINDOWS-TEST.md).
+The current document has first priority. Other LIBs in its folder are indexed
+for dependencies and naming collisions; only needed payloads are read. Added
+source LIBs resolve missing/ambiguous external resources. Conflicting external
+copies require an explicit source choice. New entries are written in name order.
+
+The clone includes explicit BRF resource references, catalog-resolved filename
+literals in module data/code sections, the shadow-derived A/B/C/D/S family,
+known cockpit picture families, available store-icon companions and an editor
+palette copy. It inspects whole module sections, so it is not limited to the
+currently displayed shape pose. It preserves imported game symbols, compiled
+addresses and section sizes; short aliases fit small filename fields. Geometry,
+numeric characteristics and leaf image/audio bytes remain unchanged.
+
+This is a private **resource** package, not proof of complete original-game
+runtime behavior. Game procedures and dynamically generated names remain
+outside the file graph. Unresolved HUD name candidates are shown in the review
+and preserved; required missing resource filenames block export. The tool
+supports one aircraft and the reviewed `_S.SH` damage-family convention.
+
+For an externally authored shape, use **Lib > From loose SH file**. That older
+workflow requires a real SH file and retains shared stock dependencies. It is
+separate from **New aircraft**, which clones the selected aircraft and assets.
+
+The CLI equivalent accepts additional source LIBs explicitly:
+
+```sh
+cargo run --locked -- clone-aircraft FA_2.LIB A10.PT A10V1 "My A-10" A10V1.LIB FA_1.LIB
+```
+
+See [the Windows test checklist](docs/WINDOWS-TEST.md).
 
 ## Paint a livery
 
 1. Select a PT/SH and choose **Textured** (or View > Textured / wireframe).
 2. Click a visible panel. The inspector identifies its face and named PIC.
-3. For a separate livery, first use a new aircraft variant, then **Clone texture
-   for this shape** with a new 8.3 PIC name. This protects the original PIC;
-   only decoded references in that SH are changed. Other LODs/damage shapes
-   may still use the original texture and must be reviewed separately.
+3. **New aircraft** now creates private copies of the discovered textures,
+   including the damage family. Paint those copies for a separate livery.
+   **Clone texture for this shape** remains available for individual changes;
+   that narrower command only retargets references in the decoded pose.
 4. Click **UV / paint …**. Amber outlines show that face's footprint on the
    atlas. Choose a palette swatch and **Brush**. The lower **3D preview** updates
    during the stroke. Wheel zooms the atlas; middle-drag pans it. Middle-drag

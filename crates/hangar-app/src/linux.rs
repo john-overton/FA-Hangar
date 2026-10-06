@@ -504,3 +504,27 @@ pub fn play_audio(wav: Vec<u8>) -> Result<()> {
     AUDIO.with(|slot| *slot.borrow_mut() = Some(child));
     Ok(())
 }
+
+pub fn file_size(path: &str) -> Result<usize> {
+    let n = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
+    if n > i32::MAX as u64 {
+        return Err("Source LIB exceeds 2 GiB".into());
+    }
+    Ok(n as usize)
+}
+pub fn read_range(path: &str, at: usize, size: usize) -> Result<Vec<u8>> {
+    use std::io::{Seek, SeekFrom};
+    if size > hangar_core::archive::RESOURCE_LIMIT * 2 + 4 {
+        return Err("Source range exceeds limit".into());
+    }
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(at as u64))
+        .map_err(|e| e.to_string())?;
+    let mut out = vec![0; size];
+    file.read_exact(&mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+pub fn remove_test_file(path: &str) -> Result<()> {
+    std::fs::remove_file(path).map_err(|e| e.to_string())
+}

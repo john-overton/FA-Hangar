@@ -613,6 +613,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             assert_eq!(app.doc.archive.bytes().unwrap(), before);
             app.smoke_layout();
             app.smoke_media();
+            app.smoke_clone();
             ExitProcess(0);
         }
         if rest == "--demo" {
@@ -968,4 +969,96 @@ pub fn play_audio(wav: Vec<u8>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
+#[cfg_attr(
+    target_arch = "x86",
+    link(
+        name = "kernel32",
+        kind = "raw-dylib",
+        import_name_type = "undecorated"
+    )
+)]
+unsafe extern "system" {
+    fn SetFilePointer(file: Handle, offset: i32, high: *mut i32, origin: u32) -> u32;
+}
+pub fn file_size(name: &str) -> Result<usize> {
+    let name = path(name)?;
+    unsafe {
+        let file = CreateFileA(
+            name.as_ptr(),
+            0x80000000,
+            1,
+            ptr::null_mut(),
+            3,
+            0x80,
+            ptr::null_mut(),
+        );
+        if file as isize == -1 {
+            return Err(error("Cannot open source LIB"));
+        }
+        let mut high = 0;
+        let n = GetFileSize(file, &mut high);
+        CloseHandle(file);
+        if high != 0 || n > i32::MAX as u32 {
+            return Err("Source LIB exceeds 2 GiB or cannot be measured".into());
+        }
+        Ok(n as usize)
+    }
+}
+pub fn read_range(name: &str, at: usize, size: usize) -> Result<Vec<u8>> {
+    if size > hangar_core::archive::RESOURCE_LIMIT * 2 + 4 || at > i32::MAX as usize {
+        return Err("Source range exceeds limit".into());
+    }
+    let name = path(name)?;
+    unsafe {
+        let file = CreateFileA(
+            name.as_ptr(),
+            0x80000000,
+            1,
+            ptr::null_mut(),
+            3,
+            0x80,
+            ptr::null_mut(),
+        );
+        if file as isize == -1 {
+            return Err(error("Cannot open source LIB"));
+        }
+        if SetFilePointer(file, at as i32, ptr::null_mut(), 0) == u32::MAX {
+            let e = error("Cannot seek source LIB");
+            CloseHandle(file);
+            return Err(e);
+        }
+        let mut out = vec![0; size];
+        let mut cursor = 0;
+        while cursor < size {
+            let mut n = 0;
+            if ReadFile(
+                file,
+                out[cursor..].as_mut_ptr().cast(),
+                (size - cursor) as u32,
+                &mut n,
+                ptr::null_mut(),
+            ) == 0
+                || n == 0
+            {
+                let e = error("Cannot read source resource");
+                CloseHandle(file);
+                return Err(e);
+            }
+            cursor += n as usize;
+        }
+        CloseHandle(file);
+        Ok(out)
+    }
+}
+
+pub fn remove_test_file(name: &str) -> Result<()> {
+    let name = path(name)?;
+    if unsafe { DeleteFileA(name.as_ptr()) } == 0 {
+        Err(error("Cannot remove test file"))
+    } else {
+        Ok(())
+    }
 }

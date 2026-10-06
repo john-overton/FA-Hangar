@@ -24,6 +24,7 @@ pub(super) enum Action {
     Validate,
     Apply,
     Cancel,
+    CloneBack,
     BrowserUp,
     BrowserRoots,
     BrowserPick(usize),
@@ -445,6 +446,31 @@ impl App {
                     axis: 0,
                 });
             }
+            Action::CloneBack => {
+                if self
+                    .prompt
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.kind, PromptKind::CloneReview))
+                {
+                    self.clone_draft = None;
+                    self.prompt = Some(Prompt {
+                        kind: PromptKind::CloneTitle,
+                        title: "New aircraft / step 2: display name".into(),
+                        value: self.clone_title.clone(),
+                        axis: 0,
+                    });
+                } else {
+                    if let Some(p) = &self.prompt {
+                        self.clone_title = p.value.clone();
+                    }
+                    self.prompt = Some(Prompt {
+                        kind: PromptKind::CloneId,
+                        title: "New aircraft / step 1: new aircraft ID".into(),
+                        value: self.variant_id.clone(),
+                        axis: 0,
+                    });
+                }
+            }
             Action::Menu(n) => self.menu = if self.menu == Some(n) { None } else { Some(n) },
             Action::Mode(m) => {
                 if m == Mode::Model && self.model.is_none() {
@@ -573,6 +599,19 @@ impl App {
                     return Ok(());
                 }
             }
+        }
+        if name == "clone-review" {
+            self.begin_clone();
+            self.variant_id = "NEWJET".into();
+            self.clone_title = "New aircraft".into();
+            self.clone_draft = Some(self.build_clone()?);
+            self.prompt = Some(Prompt {
+                kind: PromptKind::CloneReview,
+                title: "Review".into(),
+                value: String::new(),
+                axis: 0,
+            });
+            return Ok(());
         }
         self.mode = match name {
             "browse" => Mode::Browse,
@@ -833,7 +872,13 @@ impl App {
         if let Some(menu) = self.menu {
             self.menu_layout(&mut out, menu);
         }
-        if self.prompt.is_some() {
+        if self
+            .prompt
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, PromptKind::CloneReview))
+        {
+            self.clone_review(&mut out);
+        } else if self.prompt.is_some() {
             if matches!(self.prompt.as_ref().unwrap().kind, PromptKind::File(_))
                 && self.browser.is_some()
             {
@@ -1886,7 +1931,8 @@ impl App {
             ],
             2 => vec![
                 ("Add entry       Ctrl+I", Action::File(FileAction::Import)),
-                ("New aircraft from SH", Action::File(FileAction::Variant)),
+                ("Duplicate aircraft", Action::File(FileAction::Variant)),
+                ("From loose SH file...", Action::File(FileAction::VariantSh)),
                 ("Validate directory", Action::Validate),
             ],
             3 => vec![
@@ -1906,7 +1952,8 @@ impl App {
                 ("Textured / wireframe", Action::Textured),
             ],
             5 => vec![
-                ("New aircraft from SH", Action::File(FileAction::Variant)),
+                ("Duplicate aircraft", Action::File(FileAction::Variant)),
+                ("From loose SH file...", Action::File(FileAction::VariantSh)),
                 ("Graft field", Action::Mode(Mode::Graft)),
             ],
             _ => vec![
@@ -1988,6 +2035,17 @@ impl App {
         if self.status.starts_with("Error:") {
             icon(d, x + 18, y + 143, Icon::Warn, c::DANGER);
             label_fit(d, x + 42, y + 157, w - 60, &self.status, c::DANGER);
+        }
+        if matches!(p.kind, PromptKind::CloneTitle) {
+            o.button(
+                [x + 16, y + 181, 138, 26],
+                "Add source LIB",
+                Action::File(FileAction::CloneSource),
+                false,
+            );
+        }
+        if matches!(p.kind, PromptKind::CloneTitle) {
+            o.button([x + 167, y + 181, 78, 26], "Back", Action::CloneBack, false);
         }
         o.button(
             [x + w - 204, y + 181, 86, 26],

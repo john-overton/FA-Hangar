@@ -4,7 +4,7 @@
 acceptance. Tests used Rust 1.91.1. No game payloads, extracted models or retail
 screenshots are committed or uploaded in build artifacts.
 
-- Twenty core tests pass: archive boundaries, duplicate/unsafe names, DCL
+- Twenty-three core tests pass: archive boundaries, duplicate/unsafe names, DCL
   malformed streams, untouched compressed bytes, BRF lossless edits, history
   branches, shape bounds/transforms, DOS-punctuation names, saved-value
   comparisons and donor-family creation/rejection.
@@ -19,7 +19,7 @@ screenshots are committed or uploaded in build artifacts.
   opened for this check.
 - Local Rust formatting, strict Clippy, Linux build, and both Windows release
   cross-builds pass. Both PE import/header audits pass; the executables import
-  57 functions across Kernel32/User32/GDI32/WinMM, with no CRT dependency.
+  58 functions across Kernel32/User32/GDI32/WinMM, with no CRT dependency.
 - Windows CI passed for both architectures on Windows Server 2022, including
   running each custom-runtime executable's headless smoke path. These checks
   exercise the allocator, integer math, drawing commands, transform and undo.
@@ -54,6 +54,21 @@ change. Source media was not written. Exported 256x644 PNG CRC/zlib/image data
 were decoded independently with Python; an 18,061-sample 11025 Hz mono WAV was
 read with Python's wave module. Playback on an actual Windows audio device is
 still a manual acceptance check.
+
+The 0.4 selected-aircraft export pass adds recursive graph/cycle tests, source
+collision checks, missing-source rejection, hidden/non-displayed texture names,
+store-icon and cockpit-family alias relationships, and directory-only reads.
+Tests verify that image/audio/palette bytes stay exact, compiled sizes stay
+exact, only recognized name slots change, import sections remain unchanged,
+and a private variant can itself be cloned with its palette preserved.
+
+The real selected-PT GUI event sequence was exercised for A10.PT and F18.PT:
+new ID, display name, automatic sibling sources, rename review, output picker,
+write and reopen. It produced 44 and 58 privately named resources respectively.
+The A-10 model still decodes to the same 373 vertices and 299 faces. Both the
+normal and 800x600 review layouts were rendered and checked. The Windows smoke
+also writes a synthetic scratch LIB, indexes it, reads a selected payload by
+file offset, checks its bytes, and removes that newly created fixture.
 
 Remaining acceptance: the [manual Windows checklist](WINDOWS-TEST.md), actual
 Windows 98/ME operation, and loading/flying the new variant in original FA.

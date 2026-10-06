@@ -43,8 +43,11 @@ impl App {
                 if let Some(p) = &self.prompt {
                     if let PromptKind::File(action) = p.kind {
                         let ext = match action {
-                            FileAction::Open | FileAction::Save | FileAction::Graft => Some("LIB"),
-                            FileAction::Variant => Some("SH"),
+                            FileAction::Open
+                            | FileAction::Save
+                            | FileAction::Graft
+                            | FileAction::CloneSource => Some("LIB"),
+                            FileAction::VariantSh => Some("SH"),
                             FileAction::Palette => Some("PAL"),
                             _ => None,
                         };
@@ -119,7 +122,10 @@ impl App {
             } else {
                 let folder = Self::parent_path(&path);
                 self.browse_folder(&folder);
-                if matches!(action, Some(FileAction::Palette | FileAction::Graft)) {
+                if matches!(
+                    action,
+                    Some(FileAction::Palette | FileAction::Graft | FileAction::CloneSource)
+                ) {
                     if let Some(p) = &mut self.prompt {
                         p.value = path;
                     }
