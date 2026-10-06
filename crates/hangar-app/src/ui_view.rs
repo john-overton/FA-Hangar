@@ -1050,7 +1050,16 @@ impl App {
             c::INK_MUTED,
         );
         text_fit(d, r + 34, 44, w - 84, self.name(), c::INK);
-        badge(d, self.width - 38, 32, extension(self.name()));
+        badge(
+            d,
+            self.width - 38,
+            32,
+            if self.doc.archive.entries.is_empty() {
+                "--"
+            } else {
+                extension(self.name())
+            },
+        );
         if self.mode == Mode::Browse {
             self.entry_inspector(o);
             return;

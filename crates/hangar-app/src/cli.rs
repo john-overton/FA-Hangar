@@ -39,14 +39,14 @@ pub fn run() -> Result<()> {
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
         Some("--native-snapshot") => {
-            if let Some(path)=args.get(2) { app.open(path)?; if let Some(name)=args.get(3) { let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at); } } else { app.demo(); }
+            if let Some(path)=args.get(2).filter(|p|p.as_str()!="-") { app.open(path)?; if let Some(name)=args.get(3) { let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at); } } else { app.demo(); }
             if let Some(workspace)=args.get(4){app.workspace(workspace)?;}
             if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
             platform::capture(app,argument(&args,1)?)?;
         },
         Some("--demo")=>{app.demo();platform::run(app)?;},
         Some("demo-lib")=>{app.demo();platform::write_new(argument(&args,1)?,&app.doc.archive.bytes()?)?;},
-        Some("--snapshot")=>{if let Some(path)=args.get(2){app.open(path)?;if let Some(name)=args.get(3){let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at);}}else{app.demo();}
+        Some("--snapshot")=>{if let Some(path)=args.get(2).filter(|p|p.as_str()!="-"){app.open(path)?;if let Some(name)=args.get(3){let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at);}}else{app.demo();}
             if let Some(workspace)=args.get(4){app.workspace(workspace)?;}
             if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
             let mut s=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">",app.width,app.height);
