@@ -1,0 +1,685 @@
+//! ANSI Win32/GDI only. No CRT, standard library, Unicode shim, GPU or installer.
+#![allow(non_snake_case)]
+use crate::ui::{App, Draw, Key};
+use alloc::{boxed::Box, ffi::CString, format, string::String, vec, vec::Vec};
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    ffi::{c_char, c_void},
+    ptr,
+};
+use hangar_core::Result;
+type Handle = *mut c_void;
+#[repr(C)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+#[repr(C)]
+struct Rect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+#[repr(C)]
+struct Msg {
+    hwnd: Handle,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+    time: u32,
+    point: Point,
+}
+#[repr(C)]
+struct Paint {
+    dc: Handle,
+    erase: i32,
+    rect: Rect,
+    restore: i32,
+    inc_update: i32,
+    reserved: [u8; 32],
+}
+#[repr(C)]
+struct WndClass {
+    style: u32,
+    proc: Option<unsafe extern "system" fn(Handle, u32, usize, isize) -> isize>,
+    cls_extra: i32,
+    wnd_extra: i32,
+    instance: Handle,
+    icon: Handle,
+    cursor: Handle,
+    background: Handle,
+    menu: *const c_char,
+    name: *const c_char,
+}
+#[repr(C)]
+struct MinMax {
+    reserved: Point,
+    max_size: Point,
+    max_position: Point,
+    min_track: Point,
+    max_track: Point,
+}
+#[cfg_attr(not(target_arch = "x86"), link(name = "kernel32", kind = "raw-dylib"))]
+#[cfg_attr(
+    target_arch = "x86",
+    link(
+        name = "kernel32",
+        kind = "raw-dylib",
+        import_name_type = "undecorated"
+    )
+)]
+unsafe extern "system" {
+    fn GetProcessHeap() -> Handle;
+    fn HeapAlloc(heap: Handle, flags: u32, size: usize) -> *mut c_void;
+    fn HeapFree(heap: Handle, flags: u32, mem: *mut c_void) -> i32;
+    fn ExitProcess(code: u32) -> !;
+    fn GetModuleHandleA(name: *const c_char) -> Handle;
+    fn GetCommandLineA() -> *const c_char;
+    fn CreateFileA(
+        name: *const c_char,
+        access: u32,
+        share: u32,
+        security: *mut c_void,
+        creation: u32,
+        flags: u32,
+        template: Handle,
+    ) -> Handle;
+    fn GetFileSize(file: Handle, high: *mut u32) -> u32;
+    fn ReadFile(
+        file: Handle,
+        buf: *mut c_void,
+        size: u32,
+        read: *mut u32,
+        overlapped: *mut c_void,
+    ) -> i32;
+    fn WriteFile(
+        file: Handle,
+        buf: *const c_void,
+        size: u32,
+        written: *mut u32,
+        overlapped: *mut c_void,
+    ) -> i32;
+    fn FlushFileBuffers(file: Handle) -> i32;
+    fn CloseHandle(handle: Handle) -> i32;
+    fn DeleteFileA(name: *const c_char) -> i32;
+    fn GetLastError() -> u32;
+}
+#[cfg_attr(not(target_arch = "x86"), link(name = "user32", kind = "raw-dylib"))]
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "user32", kind = "raw-dylib", import_name_type = "undecorated")
+)]
+unsafe extern "system" {
+    fn RegisterClassA(class: *const WndClass) -> u16;
+    fn CreateWindowExA(
+        ex: u32,
+        class: *const c_char,
+        title: *const c_char,
+        style: u32,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        parent: Handle,
+        menu: Handle,
+        instance: Handle,
+        param: *mut c_void,
+    ) -> Handle;
+    fn DefWindowProcA(hwnd: Handle, message: u32, wp: usize, lp: isize) -> isize;
+    fn ShowWindow(hwnd: Handle, cmd: i32) -> i32;
+    fn UpdateWindow(hwnd: Handle) -> i32;
+    fn GetMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
+    fn TranslateMessage(msg: *const Msg) -> i32;
+    fn DispatchMessageA(msg: *const Msg) -> isize;
+    fn PostQuitMessage(code: i32);
+    fn DestroyWindow(hwnd: Handle) -> i32;
+    fn InvalidateRect(hwnd: Handle, rect: *const Rect, erase: i32) -> i32;
+    fn BeginPaint(hwnd: Handle, paint: *mut Paint) -> Handle;
+    fn EndPaint(hwnd: Handle, paint: *const Paint) -> i32;
+    fn GetClientRect(hwnd: Handle, rect: *mut Rect) -> i32;
+    fn FillRect(dc: Handle, rect: *const Rect, brush: Handle) -> i32;
+    fn LoadCursorA(instance: Handle, name: *const c_char) -> Handle;
+    fn GetKeyState(key: i32) -> i16;
+    fn SetCapture(hwnd: Handle) -> Handle;
+    fn ReleaseCapture() -> i32;
+    fn MessageBoxA(hwnd: Handle, text: *const c_char, caption: *const c_char, flags: u32) -> i32;
+}
+#[cfg_attr(not(target_arch = "x86"), link(name = "gdi32", kind = "raw-dylib"))]
+#[cfg_attr(
+    target_arch = "x86",
+    link(name = "gdi32", kind = "raw-dylib", import_name_type = "undecorated")
+)]
+unsafe extern "system" {
+    fn CreateSolidBrush(color: u32) -> Handle;
+    fn DeleteObject(obj: Handle) -> i32;
+    fn CreatePen(style: i32, width: i32, color: u32) -> Handle;
+    fn SelectObject(dc: Handle, obj: Handle) -> Handle;
+    fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
+    fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
+    fn TextOutA(dc: Handle, x: i32, y: i32, text: *const c_char, len: i32) -> i32;
+    fn SetTextColor(dc: Handle, color: u32) -> u32;
+    fn SetBkMode(dc: Handle, mode: i32) -> i32;
+    fn CreateCompatibleDC(dc: Handle) -> Handle;
+    fn CreateCompatibleBitmap(dc: Handle, w: i32, h: i32) -> Handle;
+    fn DeleteDC(dc: Handle) -> i32;
+    fn BitBlt(
+        dst: Handle,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        src: Handle,
+        sx: i32,
+        sy: i32,
+        rop: u32,
+    ) -> i32;
+    fn CreateFontA(
+        height: i32,
+        width: i32,
+        escape: i32,
+        orient: i32,
+        weight: i32,
+        italic: u32,
+        underline: u32,
+        strike: u32,
+        charset: u32,
+        out: u32,
+        clip: u32,
+        quality: u32,
+        family: u32,
+        name: *const c_char,
+    ) -> Handle;
+}
+struct Heap;
+unsafe impl GlobalAlloc for Heap {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        let align = layout.align().max(core::mem::size_of::<usize>());
+        let Some(size) = layout
+            .size()
+            .checked_add(align)
+            .and_then(|n| n.checked_add(core::mem::size_of::<usize>()))
+        else {
+            return ptr::null_mut();
+        };
+        let base = HeapAlloc(GetProcessHeap(), 0, size) as usize;
+        if base == 0 {
+            return ptr::null_mut();
+        }
+        let aligned = (base + core::mem::size_of::<usize>() + align - 1) & !(align - 1);
+        *((aligned - core::mem::size_of::<usize>()) as *mut usize) = base;
+        aligned as *mut u8
+    }
+    unsafe fn dealloc(&self, p: *mut u8, _layout: Layout) {
+        let base = *((p as usize - core::mem::size_of::<usize>()) as *const usize);
+        HeapFree(GetProcessHeap(), 0, base as *mut c_void);
+    }
+}
+#[global_allocator]
+static ALLOCATOR: Heap = Heap;
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    unsafe {
+        MessageBoxA(
+            ptr::null_mut(),
+            c"Hangar stopped after an internal error. The source LIB was not overwritten.".as_ptr(),
+            c"TORE Hangar".as_ptr(),
+            0x10,
+        );
+        ExitProcess(1)
+    }
+}
+fn path(path: &str) -> Result<CString> {
+    if !path.is_ascii() {
+        return Err("This build requires ASCII file paths".into());
+    }
+    CString::new(path).map_err(|_| "Path contains a NUL byte".into())
+}
+fn error(action: &str) -> String {
+    format!("{} (Windows error {})", action, unsafe { GetLastError() })
+}
+pub fn read(name: &str) -> Result<Vec<u8>> {
+    let name = path(name)?;
+    unsafe {
+        let file = CreateFileA(
+            name.as_ptr(),
+            0x80000000,
+            1,
+            ptr::null_mut(),
+            3,
+            0x80,
+            ptr::null_mut(),
+        );
+        if file as isize == -1 {
+            return Err(error("Cannot open file"));
+        }
+        let mut high = 0;
+        let size = GetFileSize(file, &mut high);
+        if high != 0 || size as usize > hangar_core::archive::ARCHIVE_LIMIT {
+            CloseHandle(file);
+            return Err("File exceeds 128 MiB limit".into());
+        }
+        let mut b = vec![0; size as usize];
+        let mut at = 0;
+        while at < b.len() {
+            let mut n = 0;
+            if ReadFile(
+                file,
+                b[at..].as_mut_ptr().cast(),
+                (b.len() - at) as u32,
+                &mut n,
+                ptr::null_mut(),
+            ) == 0
+                || n == 0
+            {
+                let e = error("Cannot read file");
+                CloseHandle(file);
+                return Err(e);
+            }
+            at += n as usize;
+        }
+        CloseHandle(file);
+        Ok(b)
+    }
+}
+pub fn write_new(name: &str, bytes: &[u8]) -> Result<()> {
+    let name = path(name)?;
+    unsafe {
+        let file = CreateFileA(
+            name.as_ptr(),
+            0x40000000,
+            0,
+            ptr::null_mut(),
+            1,
+            0x80,
+            ptr::null_mut(),
+        );
+        if file as isize == -1 {
+            return Err(error("Cannot create output; choose a new file path"));
+        }
+        let mut at = 0;
+        let mut err = None;
+        while at < bytes.len() {
+            let mut n = 0;
+            if WriteFile(
+                file,
+                bytes[at..].as_ptr().cast(),
+                (bytes.len() - at) as u32,
+                &mut n,
+                ptr::null_mut(),
+            ) == 0
+                || n == 0
+            {
+                err = Some(error("Cannot write output"));
+                break;
+            }
+            at += n as usize;
+        }
+        if err.is_none() && FlushFileBuffers(file) == 0 {
+            err = Some(error("Cannot flush output"));
+        }
+        CloseHandle(file);
+        if let Some(e) = err {
+            DeleteFileA(name.as_ptr());
+            Err(e)
+        } else {
+            Ok(())
+        }
+    }
+}
+static mut APP: *mut App = ptr::null_mut();
+fn color(rgb: u32) -> u32 {
+    (rgb & 255) << 16 | (rgb & 0xff00) | (rgb >> 16) & 255
+}
+unsafe fn paint(hwnd: Handle, app: &App) {
+    let mut ps: Paint = core::mem::zeroed();
+    let dc = BeginPaint(hwnd, &mut ps);
+    let back = CreateCompatibleDC(dc);
+    let bitmap = CreateCompatibleBitmap(dc, app.width, app.height);
+    if back.is_null() || bitmap.is_null() {
+        if !back.is_null() {
+            DeleteDC(back);
+        }
+        if !bitmap.is_null() {
+            DeleteObject(bitmap);
+        }
+        EndPaint(hwnd, &ps);
+        return;
+    }
+    let oldbitmap = SelectObject(back, bitmap);
+    let font = CreateFontA(
+        -12,
+        0,
+        0,
+        0,
+        400,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        c"Lucida Console".as_ptr(),
+    );
+    let oldfont = SelectObject(back, font);
+    SetBkMode(back, 1);
+    for cmd in app.draw().commands {
+        match cmd {
+            Draw::Rect(x, y, w, h, c) => {
+                let brush = CreateSolidBrush(color(c));
+                FillRect(
+                    back,
+                    &Rect {
+                        left: x,
+                        top: y,
+                        right: x + w,
+                        bottom: y + h,
+                    },
+                    brush,
+                );
+                DeleteObject(brush);
+            }
+            Draw::Line(x, y, a, b, c) => {
+                let pen = CreatePen(0, 1, color(c));
+                let old = SelectObject(back, pen);
+                MoveToEx(back, x, y, ptr::null_mut());
+                LineTo(back, a, b);
+                SelectObject(back, old);
+                DeleteObject(pen);
+            }
+            Draw::Text(x, y, s, c) => {
+                SetTextColor(back, color(c));
+                TextOutA(back, x, y - 12, s.as_ptr().cast(), s.len() as i32);
+            }
+        }
+    }
+    BitBlt(dc, 0, 0, app.width, app.height, back, 0, 0, 0x00cc0020);
+    SelectObject(back, oldfont);
+    DeleteObject(font);
+    SelectObject(back, oldbitmap);
+    DeleteObject(bitmap);
+    DeleteDC(back);
+    EndPaint(hwnd, &ps);
+}
+unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) -> isize {
+    if APP.is_null() {
+        return DefWindowProcA(hwnd, msg, wp, lp);
+    }
+    let app = &mut *APP;
+    let shift = GetKeyState(0x10) < 0;
+    let ctrl = GetKeyState(0x11) < 0;
+    match msg {
+        0x24 => {
+            let m = &mut *(lp as *mut MinMax);
+            m.min_track = Point { x: 816, y: 639 };
+            return 0;
+        }
+        0x05 => {
+            let mut rect: Rect = core::mem::zeroed();
+            GetClientRect(hwnd, &mut rect);
+            app.width = rect.right.max(800);
+            app.height = rect.bottom.max(600);
+        }
+        0x0f => {
+            paint(hwnd, app);
+            return 0;
+        }
+        0x14 => return 1,
+        0x10 => {
+            app.close();
+            if app.quit {
+                DestroyWindow(hwnd);
+            } else {
+                InvalidateRect(hwnd, ptr::null(), 0);
+            }
+            return 0;
+        }
+        0x02 => {
+            PostQuitMessage(0);
+            return 0;
+        }
+        0x100 => {
+            let k = match wp {
+                0x0d => Some(Key::Enter),
+                0x1b => Some(Key::Escape),
+                8 => Some(Key::Backspace),
+                0x2e => Some(Key::Delete),
+                0x26 => Some(Key::Up),
+                0x28 => Some(Key::Down),
+                0x24 => Some(Key::Home),
+                9 => Some(Key::Tab),
+                0x70 => Some(Key::F1),
+                0x60..=0x69 => Some(Key::Num((wp - 0x60) as u8)),
+                0x41..=0x5a if ctrl => Some(Key::Char((wp as u8 as char).to_ascii_lowercase())),
+                _ => None,
+            };
+            if let Some(k) = k {
+                app.key(k, ctrl, shift);
+            }
+        }
+        0x102 => {
+            if !ctrl && (32..127).contains(&wp) {
+                app.key(Key::Char(wp as u8 as char), false, shift);
+            }
+        }
+        0x201 | 0x202 | 0x204 | 0x205 | 0x207 | 0x208 => {
+            let x = lp as u16 as i16 as i32;
+            let y = (lp >> 16) as u16 as i16 as i32;
+            let (button, down) = match msg {
+                0x201 => (1, true),
+                0x202 => (1, false),
+                0x204 => (3, true),
+                0x205 => (3, false),
+                0x207 => (2, true),
+                _ => (2, false),
+            };
+            if button == 2 {
+                if down {
+                    SetCapture(hwnd);
+                } else {
+                    ReleaseCapture();
+                }
+            }
+            app.click(x, y, button, down);
+        }
+        0x200 => app.motion(
+            lp as u16 as i16 as i32,
+            (lp >> 16) as u16 as i16 as i32,
+            shift,
+        ),
+        0x20a => app.wheel((wp >> 16) as u16 as i16 as i32 / 120),
+        _ => return DefWindowProcA(hwnd, msg, wp, lp),
+    }
+    if app.quit {
+        DestroyWindow(hwnd);
+    } else {
+        InvalidateRect(hwnd, ptr::null(), 0);
+    }
+    0
+}
+#[no_mangle]
+pub extern "C" fn mainCRTStartup() -> ! {
+    unsafe {
+        let mut app = Box::new(App::new());
+        // A single optional quoted path, plus --demo and --smoke-test for Windows CI.
+        let command = core::ffi::CStr::from_ptr(GetCommandLineA()).to_string_lossy();
+        let rest = if let Some(s) = command.strip_prefix('"') {
+            s.split_once('"').map_or("", |(_, r)| r)
+        } else {
+            command.split_once(' ').map_or("", |(_, r)| r)
+        }
+        .trim();
+        if rest == "--smoke-test" {
+            app.demo();
+            let before = app.doc.archive.bytes().unwrap();
+            app.key(Key::Char('g'), false, false);
+            app.key(Key::Char('1'), false, false);
+            app.key(Key::Enter, false, false);
+            assert!(app.doc.dirty());
+            assert!(app.draw().commands.len() > 100);
+            app.key(Key::Char('z'), true, false);
+            assert_eq!(app.doc.archive.bytes().unwrap(), before);
+            ExitProcess(0);
+        }
+        if rest == "--demo" {
+            app.demo();
+        } else if !rest.is_empty() {
+            if let Err(e) = app.open(rest.trim_matches('"')) {
+                app.status = e;
+            }
+        }
+        APP = Box::into_raw(app);
+        let instance = GetModuleHandleA(ptr::null());
+        let class = WndClass {
+            style: 3,
+            proc: Some(wndproc),
+            cls_extra: 0,
+            wnd_extra: 0,
+            instance,
+            icon: ptr::null_mut(),
+            cursor: LoadCursorA(ptr::null_mut(), 32512usize as *const c_char),
+            background: ptr::null_mut(),
+            menu: ptr::null(),
+            name: c"ToreHangar".as_ptr(),
+        };
+        if RegisterClassA(&class) == 0 {
+            ExitProcess(1);
+        }
+        let hwnd = CreateWindowExA(
+            0,
+            class.name,
+            c"TORE Hangar".as_ptr(),
+            0x00cf0000,
+            0x80000000u32 as i32,
+            0x80000000u32 as i32,
+            1296,
+            839,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            instance,
+            ptr::null_mut(),
+        );
+        if hwnd.is_null() {
+            ExitProcess(1);
+        }
+        ShowWindow(hwnd, 1);
+        UpdateWindow(hwnd);
+        let mut msg: Msg = core::mem::zeroed();
+        loop {
+            let result = GetMessageA(&mut msg, ptr::null_mut(), 0, 0);
+            if result <= 0 {
+                break;
+            }
+            TranslateMessage(&msg);
+            DispatchMessageA(&msg);
+        }
+        drop(Box::from_raw(APP));
+        ExitProcess(0)
+    }
+}
+// LLVM may emit these intrinsics. Volatile loops prevent self-recursive lowering.
+#[no_mangle]
+unsafe extern "C" fn memcpy(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    for i in 0..n {
+        dst.add(i).write_volatile(src.add(i).read_volatile());
+    }
+    dst
+}
+#[no_mangle]
+unsafe extern "C" fn memmove(dst: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+    if (dst as usize) < src as usize {
+        memcpy(dst, src, n);
+    } else {
+        for i in (0..n).rev() {
+            dst.add(i).write_volatile(src.add(i).read_volatile());
+        }
+    }
+    dst
+}
+#[no_mangle]
+unsafe extern "C" fn memset(dst: *mut u8, value: i32, n: usize) -> *mut u8 {
+    for i in 0..n {
+        dst.add(i).write_volatile(value as u8);
+    }
+    dst
+}
+#[no_mangle]
+unsafe extern "C" fn memcmp(a: *const u8, b: *const u8, n: usize) -> i32 {
+    for i in 0..n {
+        let x = a.add(i).read_volatile();
+        let y = b.add(i).read_volatile();
+        if x != y {
+            return x as i32 - y as i32;
+        }
+    }
+    0
+}
+#[no_mangle]
+unsafe extern "C" fn strlen(s: *const u8) -> usize {
+    let mut n = 0;
+    while s.add(n).read_volatile() != 0 {
+        n += 1;
+    }
+    n
+}
+// Precompiled alloc contains an exception table. The runtime does not unwind.
+#[no_mangle]
+extern "C" fn __CxxFrameHandler3() -> ! {
+    unsafe { ExitProcess(2) }
+}
+#[cfg(target_arch = "x86")]
+fn unsigned_divide(n: u64, d: u64) -> u64 {
+    if d == 0 {
+        unsafe { ExitProcess(2) }
+    }
+    let mut q = 0u64;
+    let mut r = 0u64;
+    for i in (0..64).rev() {
+        let carry = r >> 63;
+        r = (r << 1) | ((n >> i) & 1);
+        if carry != 0 || r >= d {
+            r = r.wrapping_sub(d);
+            q |= 1u64 << i;
+        }
+    }
+    q
+}
+#[cfg(target_arch = "x86")]
+#[no_mangle]
+extern "C" fn hangar_udiv(a: u64, b: u64) -> u64 {
+    unsigned_divide(a, b)
+}
+#[cfg(target_arch = "x86")]
+#[no_mangle]
+extern "C" fn hangar_sdiv(a: i64, b: i64) -> i64 {
+    let q = unsigned_divide(a.unsigned_abs(), b.unsigned_abs());
+    if (a < 0) != (b < 0) {
+        q.wrapping_neg() as i64
+    } else {
+        q as i64
+    }
+}
+// MSVC's x86 64-bit divide helpers pop their arguments, unlike a C function.
+#[cfg(target_arch = "x86")]
+core::arch::global_asm!(
+    ".global __alldiv",
+    "__alldiv:",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "call _hangar_sdiv",
+    "add esp, 16",
+    "ret 16",
+    ".global __aulldiv",
+    "__aulldiv:",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "call _hangar_udiv",
+    "add esp, 16",
+    "ret 16",
+);

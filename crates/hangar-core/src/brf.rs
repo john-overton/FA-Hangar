@@ -221,6 +221,34 @@ impl Brf {
     }
 }
 use alloc::string::ToString;
+/// Synthetic, schema-shaped definition for exercising the UI without retail data.
+pub fn demo() -> Vec<u8> {
+    let mut s = String::from(
+        "[brent's_relocatable_format]\r\n; Synthetic editor fixture, not a flyable aircraft\r\n",
+    );
+    for fields in [schema::OBJECT, schema::NPC, schema::PLANE] {
+        for (kind, name) in fields {
+            let (kind, value) = match *kind {
+                "ptr" if ["ot_names", "shape", "shadowShape"].contains(name) => ("ptr", *name),
+                "ptr" => ("dword", "0"),
+                "symbol" => ("symbol", "_DEMO"),
+                _ => (
+                    *kind,
+                    match *name {
+                        "weight" => "10000",
+                        "hitPoints" => "100",
+                        "year" => "1997",
+                        _ => "0",
+                    },
+                ),
+            };
+            s.push_str(&format!("    {kind} {value} ; {name}\r\n"));
+        }
+    }
+    s.push_str(":ot_names\r\nstring \"Demo\"\r\nstring \"Synthetic aircraft\"\r\nstring \"DEMO.PT\"\r\n:shape\r\nstring \"DEMO.SH\"\r\n:shadowShape\r\nstring \"DEMO_S.SH\"\r\nend\r\n");
+    s.into_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

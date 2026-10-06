@@ -6,6 +6,7 @@ extern crate std;
 #[macro_use]
 extern crate alloc as alloc_macros;
 pub mod archive;
+pub mod authoring;
 pub mod brf;
 mod dcl;
 pub mod document;

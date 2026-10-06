@@ -63,7 +63,7 @@ pub fn validate_name(name: &str) -> Result<()> {
         || !(1..=3).contains(&ext.len())
         || !stem
             .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_~&-".contains(&c))
+            .all(|c| c.is_ascii_alphanumeric() || b"_~&-#^".contains(&c))
         || !ext.bytes().all(|c| c.is_ascii_alphanumeric())
     {
         return Err(invalid("Expected an ASCII 8.3 name"));
@@ -224,6 +224,8 @@ mod tests {
     }
     #[test]
     fn names_are_safe_and_unique() {
+        assert!(Entry::new("#CALL.5K", vec![]).is_ok());
+        assert!(Entry::new("^CALL.11K", vec![]).is_ok());
         for name in ["../x", "A/B.PT", "TOOLONG99.PT", "A.B.C", "é.PT"] {
             assert!(Entry::new(name, vec![]).is_err());
         }

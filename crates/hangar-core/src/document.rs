@@ -30,6 +30,9 @@ impl Document {
     pub fn dirty(&self) -> bool {
         self.saved_revision != Some(self.revision)
     }
+    pub fn mark_unsaved(&mut self) {
+        self.saved_revision = None;
+    }
     pub fn mark_saved(&mut self) {
         self.saved_revision = Some(self.revision);
     }
