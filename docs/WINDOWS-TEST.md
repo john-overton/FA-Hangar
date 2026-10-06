@@ -125,6 +125,33 @@ separately. No retail data is included in the test package.
    and paginated notes. Try New empty LIB, Ctrl+W, and Save As to another open
    library's path; the latter must be rejected.
 
+## Hardpoint, material and decal acceptance
+
+1. Select DEMO.PT and click Hardpoints. Verify the two steel station markers,
+   amber selection, XYZ fields, and no dirty state from a click without movement.
+   Drag a station, then undo once. Try G/X/10, H placement, duplicate, remove and
+   a default-store assignment. Count and station records must reopen together.
+2. In a disposable real aircraft clone, compare station positions and stores
+   before/after saving in FA. The editor preserves source coordinates; it does
+   not validate the game's full weapon compatibility or launch behavior.
+3. Select a textured face, Materials, and transform its UVs. Check the atlas and
+   model, then undo; the original footprint must return immediately. Clone the
+   texture across the aircraft family and inspect damage/other-LOD references.
+4. Edit a saved palette color and undo. Confirm Materials identifies the owning
+   resource. A private aircraft-ID PAL is editor preview data; game-global palette
+   lookup is unchanged. Test intended colors in the original game.
+5. Import a transparent squadron PNG, place it on the atlas, and drag it on a
+   model panel. Change width, rotation, mirror and opacity. Nothing should become
+   dirty until Apply decal. Cancel/Esc must restore the original preview.
+6. Apply the decal, undo once, redo, save and reopen. Check holes stay transparent,
+   pixels outside the stamp stay unchanged, and shared/mirrored panels behave as
+   the preview showed. Try tail-number text, ink selection, and all four national
+   presets. Test the final livery in FA.
+7. Restart and reload a squadron PNG from the imported-art library. Forgetting a
+   path must not delete its PNG. Test missing paths and a read-only EXE folder.
+   Interlaced/animated PNGs and missing target palettes should explain the limit.
+8. Check all three livery tabs and the hardpoint inspector at 800x600 and 1280x800.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

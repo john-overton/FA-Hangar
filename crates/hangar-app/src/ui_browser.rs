@@ -49,6 +49,7 @@ impl App {
                             | FileAction::GraftLibrary
                             | FileAction::CloneSource
                             | FileAction::ReferenceSource => Some("LIB"),
+                            FileAction::Decal => Some("PNG"),
                             FileAction::VariantSh => Some("SH"),
                             FileAction::Palette => Some("PAL"),
                             _ => None,

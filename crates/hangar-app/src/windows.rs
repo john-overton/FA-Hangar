@@ -925,7 +925,7 @@ pub fn list_dir(folder: &str) -> Result<Vec<crate::ui::FileItem>> {
         Ok(files)
     }
 }
-fn recent_path() -> String {
+fn sidecar_path(name: &str) -> String {
     let mut b = [0u8; 260];
     let n = unsafe { GetModuleFileNameA(ptr::null_mut(), b.as_mut_ptr(), 260) } as usize;
     if n == 0 || n >= 260 {
@@ -933,10 +933,10 @@ fn recent_path() -> String {
     }
     let s = String::from_utf8_lossy(&b[..n]);
     let dir = s.rsplit_once('\\').map_or(".", |(d, _)| d);
-    format!("{dir}\\tore-hangar-recent.txt")
+    format!("{dir}\\{name}")
 }
-pub fn load_recent() -> Vec<String> {
-    let p = recent_path();
+fn load_paths(name: &str, count: usize) -> Vec<String> {
+    let p = sidecar_path(name);
     if p.is_empty() {
         return vec![];
     }
@@ -944,11 +944,11 @@ pub fn load_recent() -> Vec<String> {
         .ok()
         .filter(|b| b.len() <= 16384)
         .and_then(|b| String::from_utf8(b).ok())
-        .map(|s| s.lines().take(8).map(String::from).collect())
+        .map(|s| s.lines().take(count).map(String::from).collect())
         .unwrap_or_default()
 }
-pub fn save_recent(paths: &[String]) -> Result<()> {
-    let p = recent_path();
+fn save_paths(name: &str, paths: &[String]) -> Result<()> {
+    let p = sidecar_path(name);
     let name = path(&p)?;
     let data = paths.join("\r\n");
     unsafe {
@@ -979,6 +979,19 @@ pub fn save_recent(paths: &[String]) -> Result<()> {
     }
     Ok(())
 }
+pub fn load_recent() -> Vec<String> {
+    load_paths("tore-hangar-recent.txt", 8)
+}
+pub fn save_recent(paths: &[String]) -> Result<()> {
+    save_paths("tore-hangar-recent.txt", paths)
+}
+pub fn load_decals() -> Vec<String> {
+    load_paths("tore-hangar-decals.txt", 16)
+}
+pub fn save_decals(paths: &[String]) -> Result<()> {
+    save_paths("tore-hangar-decals.txt", paths)
+}
+
 static mut AUDIO_DATA: *mut Vec<u8> = ptr::null_mut();
 pub fn stop_audio() {
     unsafe {

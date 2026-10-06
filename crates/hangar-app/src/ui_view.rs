@@ -57,6 +57,27 @@ pub(super) enum Action {
     Textured,
     ModelPaint,
     Isolate,
+    Hardpoints,
+    HardpointVisibility,
+    HardpointSelect(usize),
+    HardpointStep(i32),
+    HardpointAdd(bool),
+    HardpointRemove,
+    StationField(usize),
+    StationFields,
+    MediaTab(u8),
+    MaterialPrompt(u8),
+    DecalLibrary,
+    DecalSaved(usize),
+    DecalForget(usize),
+    DecalText,
+    DecalInk,
+    DecalPreset(bool),
+    DecalSetting(u8),
+    DecalMirror,
+    DecalPlace,
+    DecalCancel,
+    DecalApply,
 }
 pub(super) struct Hit {
     pub(super) rect: [i32; 4],
@@ -668,6 +689,145 @@ impl App {
                         .len()
                         .max(1);
             }
+            Action::MediaTab(tab) => {
+                self.media_tab = tab;
+                self.hp_tool = false;
+                if self.pic.is_some() || self.name().ends_with(".PAL") {
+                    self.mode = Mode::Media;
+                } else if self.model.is_some() {
+                    self.mode = Mode::Model;
+                }
+            }
+            Action::MaterialPrompt(kind) => self.material_prompt(kind),
+            Action::DecalLibrary => {
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::DecalLibrary,
+                    title: "Imported PNG / squadron library".into(),
+                    value: String::new(),
+                    axis: 0,
+                });
+            }
+            Action::DecalSaved(i) => {
+                if let Some(path) = self.decal_paths.get(i).cloned() {
+                    let result = self.load_decal(&path, false);
+                    if result.is_ok() {
+                        self.prompt = None;
+                    }
+                    self.result(result);
+                }
+            }
+            Action::DecalForget(i) => {
+                if i < self.decal_paths.len() {
+                    self.decal_paths.remove(i);
+                    let result = crate::platform::save_decals(&self.decal_paths);
+                    self.result(result);
+                }
+            }
+            Action::DecalInk => {
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::DecalInk,
+                    title: "Tail-text ink / palette index 0..255".into(),
+                    value: format!("{}", self.text_ink()),
+                    axis: 0,
+                })
+            }
+            Action::DecalText => {
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::DecalText,
+                    title: "Tail number / letters, digits, space, dash, slash, period".into(),
+                    value: self.decal_text.clone(),
+                    axis: 0,
+                })
+            }
+            Action::DecalPreset(next) => {
+                if next {
+                    self.decal_preset =
+                        (self.decal_preset + 1) % hangar_core::decal::NATIONAL_NAMES.len();
+                }
+                let result =
+                    hangar_core::decal::Image::national(self.decal_preset).and_then(|image| {
+                        self.set_decal(
+                            image,
+                            hangar_core::decal::NATIONAL_NAMES[self.decal_preset].into(),
+                            false,
+                        )
+                    });
+                self.result(result);
+            }
+            Action::DecalSetting(key) => self.decal_setting_prompt(key),
+            Action::DecalMirror => {
+                let mut p = self.decal_placement;
+                p.mirror = !p.mirror;
+                if let Some(entry) = self
+                    .decal_draft
+                    .as_ref()
+                    .map(|d| d.entry)
+                    .or_else(|| self.texture_target())
+                {
+                    let result = self.prepare_decal(entry, p);
+                    self.result(result);
+                } else {
+                    self.decal_placement = p;
+                }
+            }
+            Action::DecalPlace => {
+                if self.decal_image.is_some() {
+                    self.decal_active = true;
+                    self.paint_enabled = false;
+                    self.model_paint = false;
+                    self.status = "Click the texture or a model panel to preview the decal".into();
+                } else {
+                    self.status =
+                        "Import PNG, enter tail text or choose a national marking first".into();
+                }
+            }
+            Action::DecalCancel => {
+                self.decal_draft = None;
+                self.decal_active = false;
+                self.decal_dragging = false;
+            }
+            Action::DecalApply => {
+                let result = self.apply_decal();
+                self.result(result);
+            }
+            Action::Hardpoints => {
+                self.hp_tool = self.mode != Mode::Model || !self.hp_tool;
+                self.mode = Mode::Model;
+                self.hp_visible = true;
+                self.selected_face = None;
+                self.decal_active = false;
+                self.decal_draft = None;
+            }
+            Action::HardpointVisibility => self.hp_visible = !self.hp_visible,
+            Action::HardpointSelect(i) => {
+                self.hp_selected = i;
+                self.hp_tool = true;
+            }
+            Action::HardpointStep(step) => {
+                let n = self.hp_context.as_ref().map_or(0, |c| c.stations.len());
+                if n > 0 {
+                    self.hp_selected =
+                        (self.hp_selected as i32 + step).rem_euclid(n as i32) as usize;
+                }
+            }
+            Action::HardpointAdd(duplicate) => {
+                let result = self.station_add(duplicate, false);
+                self.result(result);
+            }
+            Action::HardpointRemove => {
+                let result = self.station_remove();
+                self.result(result);
+            }
+            Action::StationFields => {
+                if let Some(entry) = self.hp_context.as_ref().map(|c| c.entry) {
+                    let station = self.hp_selected;
+                    self.select_entry(entry);
+                    self.field_group = Some(hangar_core::definition::Aspect::Hardpoints);
+                    self.field_scroll = 1 + station * 12;
+                    self.mode = Mode::Properties;
+                }
+            }
+            Action::StationField(column) => self.station_prompt(column),
             Action::PinDonor => {
                 let result = self.pin_donor();
                 self.result(result);
@@ -697,6 +857,44 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "hardpoints" {
+            self.select_entry(1);
+            self.mode = Mode::Model;
+            self.hp_tool = true;
+            self.hp_visible = true;
+            return Ok(());
+        }
+        if name == "materials" {
+            self.select_entry(0);
+            self.selected_face = self
+                .model
+                .as_ref()
+                .and_then(|m| m.faces.iter().position(|f| !f.uv.is_empty()));
+            self.media_tab = 1;
+            self.mode = Mode::Model;
+            return Ok(());
+        }
+        if name == "decals" || name == "decal-text" {
+            self.select_entry(0);
+            self.selected_face = self
+                .model
+                .as_ref()
+                .and_then(|m| m.faces.iter().position(|f| !f.uv.is_empty()));
+            let texture = self.texture_target().ok_or("No texture")?;
+            self.open_texture(texture);
+            self.media_tab = 2;
+            if name == "decal-text" {
+                self.tail_text("01")?;
+            } else {
+                self.set_decal(
+                    hangar_core::decal::Image::national(0)?,
+                    "US stars and bars".into(),
+                    false,
+                )?;
+            }
+            self.decal_setting(2, "24")?;
+            return Ok(());
+        }
         if name == "libraries" || name == "transfer-review" {
             self.path = "SOURCE.LIB".into();
             self.select_entry(0);
@@ -990,11 +1188,16 @@ impl App {
             } else {
                 self.graft_layout(&mut out);
             }
-            if self.mode == Mode::Graft {
+            if self.mode == Mode::Model && self.hp_tool {
+                self.hardpoint_inspector(&mut out);
+            } else if self.mode == Mode::Graft {
                 self.graft_inspector(&mut out);
             } else if self.mode == Mode::Properties {
                 self.definition_inspector(&mut out);
-            } else if self.mode == Mode::Media || self.selected_face.is_some() {
+            } else if self.mode == Mode::Media
+                || self.selected_face.is_some()
+                || (self.mode == Mode::Model && self.media_tab > 0)
+            {
                 self.media_inspector(&mut out);
             } else {
                 self.inspector(&mut out);
@@ -1074,6 +1277,12 @@ impl App {
                 .is_some_and(|p| matches!(p.kind, PromptKind::TransferReview))
             {
                 self.transfer_review(&mut out);
+            } else if self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::DecalLibrary))
+            {
+                self.decal_library_layout(&mut out);
             } else {
                 self.prompt_layout(&mut out);
             }
@@ -1281,8 +1490,13 @@ impl App {
         d.rect(l + 1, 26, width - 2, 28, c::GM_800);
         icon(d, l + 8, 32, Icon::Select, c::INK_MUTED);
         label_fit(d, l + 30, 44, 112, "Object Mode", c::INK);
-        d.label(l + 152, 44, "Static pose", c::INK_FAINT);
-        if width > 420 {
+        o.button(
+            [l + 125, 29, 105, 22],
+            "Hardpoints",
+            Action::Hardpoints,
+            self.hp_tool,
+        );
+        if width > 490 {
             o.button(
                 [r - 254, 29, 94, 22],
                 if self.textured {
@@ -1408,6 +1622,7 @@ impl App {
             c::INK_MUTED,
         );
         d.text(r - 65, dock - 12, &format!("{}%", self.zoom), c::INK_FAINT);
+        self.hardpoint_overlay(o);
     }
     fn browse_layout(&self, o: &mut Layout) {
         let l = self.left();
@@ -2001,6 +2216,8 @@ impl App {
                 ("Use as graft donor", Action::PinDonor),
                 ("Graft characteristics", Action::Mode(Mode::Graft)),
                 ("Preview / Paint media", Action::Mode(Mode::Media)),
+                ("Hardpoint tools", Action::Hardpoints),
+                ("Decals / markings", Action::MediaTab(2)),
                 ("Recolor face palette", Action::Recolor),
             ],
             4 => vec![
@@ -2084,7 +2301,7 @@ impl App {
             .rev()
             .collect();
         d.text(x + 26, y + 94, &format!("{value}_"), c::INK);
-        let hint = if matches!(p.kind, PromptKind::Transform(_)) {
+        let hint = if matches!(p.kind, PromptKind::Transform(_) | PromptKind::StationMove) {
             format!(
                 "Axis {} / X Y Z to constrain / integer value",
                 ['X', 'Y', 'Z'][p.axis]
@@ -2146,6 +2363,7 @@ impl App {
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();
+        self.smoke_material_tools();
         self.demo();
         self.width = 1280;
         self.height = 800;

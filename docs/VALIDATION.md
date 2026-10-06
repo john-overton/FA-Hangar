@@ -1,241 +1,159 @@
-# Architecture and format references
+# Current test build validation
 
-Implementation milestone: a native LIB/BRF editor with an SH preview and a
-restricted static writer. Agent decisions below were chosen for the requested
-lightweight portable application. The user's accepted CPU minimum is SSE2.
+2026-10-06. Implementation work, not a claim of original-game or Windows 98
+acceptance. Tests used Rust 1.91.1. No game payloads, extracted models or retail
+screenshots are committed or uploaded in build artifacts.
 
-## Layers
+- Twenty-three core tests pass: archive boundaries, duplicate/unsafe names, DCL
+  malformed streams, untouched compressed bytes, BRF lossless edits, history
+  branches, shape bounds/transforms, DOS-punctuation names, saved-value
+  comparisons and donor-family creation/rejection.
+- Linux shared-UI smoke passes: selection, transform/invalid-input handling,
+  undo, BRF edit, donor wizard, package save and reopening. The 0.2 smoke also
+  clicks controls through rendered hit regions, checks linked PT/SH selection,
+  menus, highlights, and control bounds at 800x600 across all five workspaces.
+- Linux native Xlib rendering was exercised on an unmapped private window and
+  captured to a local image. The real F18-derived variant was visually checked
+  for layout and correct source-axis orientation. All five redesigned workspaces
+  were rendered natively; 1280x800 and 800x600 layouts were visually checked. No user desktop window was
+  opened for this check.
+- Local Rust formatting, strict Clippy, Linux build, and both Windows release
+  cross-builds pass. Both PE import/header audits pass; the executables import
+  59 functions across Kernel32/User32/GDI32/WinMM, with no CRT dependency.
+- Windows CI passed for both architectures on Windows Server 2022, including
+  running each custom-runtime executable's headless smoke path. These checks
+  exercise the allocator, integer math, drawing commands, transform and undo.
+  They do not exercise native GDI mouse/window interactions or a Win98 kernel.
+- FA_1.LIB's reported failure was reproduced: 99 picture names begin with `$`.
+  The name validator now accepts ASCII DOS 8.3 punctuation while rejecting
+  separators and other invalid path characters. FA_1.LIB (2,001 entries),
+  FA_2.LIB, FA_4B.LIB and FA_4D.LIB all pass byte-identical no-op repacks;
+  source hashes stay unchanged.
+- A user-owned retail FA_2.LIB containing 5,405 entries was opened locally.
+  A no-op repack was byte-identical. Editing F18.PT object weight changed only
+  its payload; all 5,404 other payloads and compression flags were identical.
+  The source hash remained unchanged.
+- F18.SH decoded into 357 vertex records and 287 faces in the selected static
+  pose. It was correctly marked read-only for geometry writes.
+- A TEST18 aircraft candidate was built from F18.PT and an imported F18.SH:
+  seven renamed definition/shape-family entries plus _F18.PIC. It reopened.
+  Exactly five PT identity/reference operands differed; the other definition
+  text remained identical. Gameplay values were not changed. The source donor
+  was not modified.
 
-- `hangar-core/archive.rs`: bounded EALIB directory, shared source storage,
-  lossless unedited archive serialization, raw DCL decoding and stored writes.
-- `clone_aircraft.rs`: selected-PT dependency graph, private names and reference
-  rewriting. `ui_clone.rs` indexes sibling/additional source LIBs, reads only
-  requested payloads, and presents the export review.
-- `dependencies.rs`: shared inert BRF/module reference scanner and incremental
-  current-LIB index. Shared source handles identify unchanged entries; a changed
-  catalog invalidates extensionless-name scans. Reverse links support direct
-  users and cycle-safe transitive aircraft users. It keeps no decoded payloads.
-- `validation.rs`: advisory archive/payload/reference report. It checks output
-  offsets and untouched compressed bytes, validates supported changed payloads,
-  and distinguishes unavailable scans from references outside the current LIB.
-- `authoring.rs`: legacy donor PT + imported main SH workflow. Rewrites five
-  identity/reference strings, aliases the reviewed A/B/C/D/S family, copies
-  observed pose textures, and reports missing textures/shared stock references.
-- `brf.rs` and `schema.rs`: source-range operands, schema annotation, width and
-  pointer validation. Edits change only one operand. All values stay in source
-  units. Structural fields are exposed for expert use; semantic gameplay
-  validation and dependency checks are future work.
-- `model.rs`: PL/PE CODE lookup and bounded SH data traversal. Imported modules
-  are never loaded as libraries or executed. Integer source coordinates and
-  integer camera math keep the legacy runtime free of floating-point helpers.
-- `resource_ops.rs`: bounded transfer graphs, explicit collision decisions,
-  filename-slot-aware renaming and duplicate plans. `Document::transaction`
-  validates a shared-buffer draft before applying a single undo batch.
-- `document.rs`: entry-granular reversible operations. Original source buffers
-  are reference counted. Saving tracks a revision; undo after save shows dirty.
-- `picture.rs` / `audio.rs`: bounded indexed PIC and PCM readers adapted from
-  Fighters, lossless raster-byte patches, PNG encoding and WAV wrapping.
-- `ui.rs`: shared events, layout and draw commands from the supplied theme.
-  `ui_browser.rs` lists platform-provided files/roots and recent LIBs.
-  `ui_dependencies.rs` places resource navigation beside the viewport and
-  renders scrollable package checks and the added/modified/removed build list.
-  `ui_libraries.rs` parks complete document/history objects and view state,
-  manages source snapshots and resource reviews, and protects inactive dirty
-  documents. The active `doc` remains the target for existing editor operations.
-  Palettes are heap-backed to keep native Win32 stack frames small.
-  `ui_media.rs` handles stroke transactions and a CPU triangle rasterizer with
-  per-pixel face/UV hit buffers. Those buffers drive model painting; live strokes
-  overlay the texture cache until mouse release commits one document operation.
-- `windows.rs`: Win32 ANSI events, GDI back buffer, filesystem and allocation.
-  `linux.rs`: Xlib events/drawing plus standard Linux filesystem support.
-- `cli.rs`: local Linux inspection and automation using the same core.
+The 0.3 media pass additionally validates PIC span holes, byte-local painting,
+UV/texture decoding, FC color patches, cloned texture/reference batch undo,
+and WAV round trips. Shared UI smoke checks that both atlas painting and 3D
+brush hits update the model render before mouse release, commit/reopen correctly,
+and undo back to the original bytes. It enumerates directories and opens the
+in-app browser without creating a window.
 
-No vendored retail fixtures, absolute dependency on a sibling repository,
-external compiler process, or runtime download is required.
+A local real-F18 check mapped a model hit to _F18.PIC, changed exactly one raster
+byte, observed the live render change, round-tripped the archive and undid the
+change. Source media was not written. Exported 256x644 PNG CRC/zlib/image data
+were decoded independently with Python; an 18,061-sample 11025 Hz mono WAV was
+read with Python's wave module. Playback on an actual Windows audio device is
+still a manual acceptance check.
 
-## Evidence consulted
+The 0.4 selected-aircraft export pass adds recursive graph/cycle tests, source
+collision checks, missing-source rejection, hidden/non-displayed texture names,
+store-icon and cockpit-family alias relationships, and directory-only reads.
+Tests verify that image/audio/palette bytes stay exact, compiled sizes stay
+exact, only recognized name slots change, import sections remain unchanged,
+and a private variant can itself be cloned with its palette preserved.
 
-The local `/home/john/Development/T.O.R.E-Fighters` checkout supplied:
+The real selected-PT GUI event sequence was exercised for A10.PT and F18.PT:
+new ID, display name, automatic sibling sources, rename review, output picker,
+write and reopen. It produced 44 and 58 privately named resources respectively.
+The A-10 model still decodes to the same 373 vertices and 299 faces. Both the
+normal and 800x600 review layouts were rendered and checked. The Windows smoke
+also writes a synthetic scratch LIB, indexes it, reads a selected payload by
+file offset, checks its bytes, and removes that newly created fixture.
 
-- `tools/fa_lib.py`, `tools/test_fa_lib.py`, and `crates/tore-formats/src/lib.rs`:
-  7-byte EALIB header; 18-byte entries; 13-byte names, compression byte, 32-bit
-  absolute offsets; mandatory additional directory entry with offset = EOF.
-- `crates/tore-formats/src/dcl.rs`: bounded raw-literal DCL decoder. Hangar
-  removes its lazy synchronized table cache; tables are small and local.
-- `aircraft.rs` and `aircraft_schema.rs`: textual BRF grammar and field order.
-  The copied schema contains field names/types, not retail values.
-- `module.rs`, `shape.rs`, `tools/export_faxx.py`, and
-  `docs/formats/objects-and-shapes.md`: module section bounds, SH vertex slots,
-  relative control links, static pose traversal, face widths and center/normal
-  storage. Source vertices use their stored axes; the viewport displays source
-  Z vertically. Normal/center record mapping is separate.
-- `docs/spec/fa-xx-export.md` and `tools/check_shape_roundtrip.py`: why a
-  geometry-only OBJ conversion cannot be treated as a general safe SH writer.
+Remaining acceptance: the [manual Windows checklist](WINDOWS-TEST.md), actual
+Windows 98/ME operation, and loading/flying the new variant in original FA.
+General SH part grafting, generic object creation and complete animation/LOD
+texture dependency closure are not implemented.
 
-The borrowed DCL implementation and schema are GPL-3.0. See notices and license.
-The original sibling repository is read-only reference material for this work.
 
-## Writing policy
+The 0.4.1 save-policy pass adds five portable tests: all 17 reserved filenames
+and Win32 aliases, repeated saves with retained backups, staged-write/rename/
+rollback failures, concurrent destination collisions, and first-time saves.
+The 28 core tests, Linux smoke and strict Clippy checks pass. Shared executable
+smoke now also writes/replaces/reopens synthetic custom LIBs, checks two backup
+generations, rejects a retail output name, verifies dirty state survives
+rejection, and checks that Ctrl+S suggests the current custom path.
 
-Unchanged archive bytes are preserved exactly. Once edited, directory offsets
-are recalculated and untouched payloads, flags and directory name bytes are
-retained. New/replaced entries use flag 0. Unknown compression is carried
-through unchanged; decoding it produces an explicit error.
+A disposable FA_2.LIB copy was used for CLI QA: protected writes were rejected,
+A10.PT extraction succeeded, a custom copy was edited/replaced and reopened, and
+both numbered backup hashes matched the expected previous versions. Read-only
+and symlink destinations were rejected; replacing a hard-linked custom copy
+left its retail-named sibling intact. The actual retail source SHA-256 stayed
+unchanged. Package layouts were rendered locally at 1280x800 and 800x600.
+Both Windows cross-builds and import audits pass (59 reviewed imports, no CRT).
+Windows 98/ME execution and interrupted-save recovery on those OSes remain
+manual acceptance checks.
 
-BRF annotation is conditional on complete root schema length and kind matching.
-Unrecognized fields remain indexed operands. Numeric edits validate storage
-width; pointer edits must resolve. No unit conversions or runtime behavior are
-inferred from mockup numbers. This does not validate all field relationships.
 
-The selected-aircraft clone follows the shadow-derived damage-family contract
-in the sibling `docs/spec/fa-xx-export.md`. It reads the main/shadow references
-from the PT and includes all A/B/C/D/S companions. BRF string operands and
-catalog-resolved module filename literals form the recursive resource graph.
-Available `$<store>.PIC` icons are included using the ordnance-menu contract.
-A same-name HUD is included when a PT leaves the explicit HUD pointer null.
+The resource-navigation/package-check pass adds six core tests (34 total):
+cycle-safe reverse aircraft users, cache invalidation on edit/undo/catalog
+changes, explicit scan limits, removed-resource diagnostics, changed payload
+errors versus unknown encodings, and bounded reports with retained counts.
+Existing clone tests continue to cover hidden module references and exclusion
+of imports/sample bytes after extraction of the shared scanner.
 
-Compiled modules are inspected as inert PL/PE sections. Only CODE, DATA, .data,
-.rdata and .text contribute filename literals. Imports, exports, relocation
-tables and DOS stubs remain untouched. Replacements never move bytes or enlarge
-sections. Reviewed E2 texture-name fields have 14-byte storage and reviewed HUD
-picture fields have 13-byte storage; other strings are constrained to their
-original capacity. Texture/cockpit suffix families and store/icon stem pairs
-remain consistent. All output names are checked against the complete scanned
-catalog, then resolved output references are checked again against the package.
+Shared UI smoke clicks a shape's texture link and returns through its aircraft
+user, retains the live model context, verifies no dirty state from navigation,
+checks remove/undo/report invalidation, and scrolls both references and results.
+It checks dock hit regions at 800x600 and 1280x800, including the live-preview
+tab. Native Linux model/References and Package renders were visually inspected
+at those sizes; this pass adds no platform APIs or runtime dependencies.
 
-Extensionless module strings with no catalog match are not invented as files.
-Unresolved names in reviewed HUD fields, such as ~F104_W in the A-10's donor
-HUD, are reported and preserved. Required explicit filenames must resolve.
-This verifies a stored resource graph, not every dynamically generated lookup
-in the original executable. A second aircraft definition in the graph is
-rejected rather than exporting an incomplete second damage family.
+Core tests, strict Clippy, the shared UI smoke, both Windows release builds and
+PE audits pass. Audits still report 59 reviewed imports and no runtime DLLs;
+executables are 360,448 bytes (32-bit) and 430,080 bytes (64-bit). Synthetic CLI
+`references` and `validate` checks also pass. This pass has not been run on
+Windows 98/ME or tested in original Fighters Anthology. The current-LIB index
+and advisory package checks do not establish runtime dependency closure.
 
-The source catalog uses directory-only reads and bounded range reads. Current
-in-memory entries win, then explicitly added source LIBs; conflicting sibling
-copies require an explicit choice. Limits are 64 extra LIBs, 131072 catalog
-names, 4096 copied resources and 128 MiB decoded output. The source files can
-be up to 2 GiB without being loaded wholesale. The editor's private palette is
-named `<new ID>.PAL`; game-global palette lookup is not overridden.
 
-The References dock indexes the current document with optional directory-only
-source catalogs (64 LIBs / 131072 catalog entries). It shares the clone scanner
-and adds reviewed damage-family, default-HUD and store-icon conventions.
-Other open documents contribute provider names and cached reverse-user links;
-other runtime-derived families remain unverified. It excludes self-name literals
-from user navigation and follows reverse edges with cycle protection to find observed aircraft users. Scans are
-limited to 4096 reference operands per resource, 65536 indexed links and 128 MiB
-of decoded non-leaf input. Budget failures and opaque resources are explicit;
-an incomplete scan must not be presented as proof that a resource has no users.
-Palette, image and sample bytes are not searched for filenames.
+## Version 0.5 follow-up
 
-Package results keep at most 2048 detailed checks while retaining total error,
-warning and omitted-result counts. Supported changed SH checks use the existing
-bounded static reader, not a full animation verifier. Missing local filenames
-are warnings because other game LIBs may supply them. The report is advisory
-and does not add a new save gate. Existing archive/destination checks still run
-on every save.
+Structured definition groups, donor reviews and multi-library workspaces passed
+42 core tests, shared UI smoke, Clippy, both release cross-builds and PE audits.
+Windows CI run 37522788653 passed both target jobs for d71967f. Tests cover
+independent document history/camera state, inactive dirty-document close guards,
+reviewed copies and collision decisions, stale-plan rejection, reference-aware
+rename/undo, and dependency resolution across open libraries. No original-game
+or Win98/ME acceptance was claimed.
 
-The loose-SH workflow in authoring.rs remains separate. It retains its original
-shared-dependency contract and is not the default New aircraft action.
+## Version 0.6 hardpoint, material and decal pass
 
-SH writing only accepts the understood straight-line subset of vertex buffers,
-faces, texture/fog selection and source strings. A spatial header, control-flow,
-vertex-normal record or any other skipped record marks the pose read-only.
-The writer preserves record sizes, rejects coordinate/byte-center overflow,
-and updates face centers/normals where present. General aircraft do not qualify.
-The synthetic demo is an editor fixture, not a proven game-loadable aircraft.
+49 portable core tests pass. New cases cover no-op and byte-local station moves,
+count updates, add/duplicate/remove, shared-block guards and private store
+references; palette and UV-slot patches; hidden family texture literals; PNG
+CRCs, all five filters, indexed and 16-bit samples; alpha, opacity, rotation,
+mirroring and preserved PIC span holes.
 
-A complete SH writer must preserve every branch, LOD, state switch, local
-transform, contact box, visibility plane, normal, relocation, and reference.
-The next milestone is an editable intermediate representation with original
-record provenance and byte-identical no-op round trips, before opening up
-writes to real aircraft. Test general writes against the independent OpenFA
-round-trip tools and then the original game. Unsupported records must never
-be silently flattened or discarded.
+Shared UI smoke clicks and drags station markers, checks no dirty state before
+release, edits stores, and undoes UV/palette changes. It previews/applies/cancels
+national/text/PNG decals, verifies exact archive restoration with one undo, and
+checks all tools and the 16-entry PNG library at 800x600 and 1280x800. Native
+Linux hardpoint, material, national-decal and tail-text layouts were inspected.
+Context models reload after undo, so UV previews return to the restored data.
 
-## UI differences from the design reference
+An independently generated PNG using Python zlib and all five filters was loaded
+through the application. A separate Python alpha/palette compositor matched
+every exported pixel. Package reopen, metadata/mask preservation and one-step
+undo also passed. No retail artwork or squadron logos are committed.
 
-The 0.2 pass follows the supplied four-page concept with fixed
-Browse/Model/Flight/Graft/Package workspaces, a compact menu bar, grouped
-outliner, type icons, linked PT/SH selection, categorized properties, and a
-Raw fields/Hex/Details dock. `ui_view.rs` emits drawing commands and hit regions
-from the same layout. Minimum-size hit regions are checked in the shared smoke.
-Windows uses Tahoma labels and Lucida Console data; Linux keeps its available
-X11 fixed font. Both backends remain native, with no added dependencies.
+Strict Clippy, Linux shared smoke, both Windows release cross-builds and PE
+audits pass. The completed binaries are 543,232 bytes (32-bit) and 638,464 bytes
+(64-bit), with the same 59 reviewed imports and no runtime DLLs. PNG decoding
+adds statically linked no_std miniz_oxide/adler2 code. Format milestone 010fba4
+passed Windows CI; the final UI is checked by its pushed workflow.
 
-Saved entry snapshots share source buffers. Changed field values and resources
-are marked amber; the raw table can restore a saved operand. Source units are
-shown explicitly. Package validation checks the archive directory, untouched
-payload preservation, supported changed payloads and observed stored names.
-It does not establish full semantic or animation dependency closure.
-
-The animation timeline and geometric graft controls remain unimplemented and
-are not shown as working controls. `definition.rs` annotates linked station and
-envelope blocks only after kind/count validation. `ui_graft.rs` exposes semantic
-field groups, donor snapshots, explicit conflicts and target-to-donor previews.
-Grouped numeric grafts match labels, kinds and scaling; they preserve identity,
-resource pointers and all unselected operands, applying in one document undo
-transaction. Record-size changes and geometric grafting are separate work. Typed path dialogs, fixed panel splits and a wireframe viewport
-remain; vertex Edit mode and bitmap fonts are future work. File selection now uses an
-in-app directory/drive browser with recent LIBs.
-
-## Material editing boundary
-
-FC colors and E2 texture-name operands have fixed, bounded source offsets.
-Color remapping changes only the low palette byte of matching untextured FC
-records. Texture cloning replaces the 14-byte bounded name operands reached by
-the reader and adds a copied PIC in one undo transaction. Unvisited references
-remain untouched; this is not complete LOD/animation material closure.
-
-PIC painting records a source offset for each opaque pixel. Aliased spans or
-metadata overlaps disable painting. Raw-kind PICs can carry an unused nonzero
-span capacity with a null span pointer; that inactive field is preserved.
-No-op bytes are never re-encoded. Painting mutates only raster bytes and keeps
-palette, row tables, spans, glyph metadata and transparency structure intact.
-
-The static preview uses bounded CPU triangle rasterization, depth and nearest
-indexed texture lookup. UV V is flipped against the source PIC height, as in
-the reviewed Fighters exporter/renderer. Rendering and picking use the same
-mapping. It is unlit and orthographic, with fan triangulation, not game renderer
-parity. Brush size is measured in texture pixels, not world-space distance.
-
-## Retail protection and recoverable saves
-
-`hangar-core/src/save.rs` owns the explicit installer/disc filename list and
-storage-independent save protocol. Matching ignores case, recognizes both path
-separators and Windows drive prefixes, and catches trailing-dot/space and stream
-aliases. LIB destinations reject ambiguous Win32/device syntax. No hash or
-folder-based exemption is used. The low-level create-new writer also refuses
-reserved names, covering resource export destinations.
-
-GUI and CLI archive writers share `saving.rs`: validate the destination and
-serialized EALIB, create/flush a fresh same-directory stage, move an existing
-custom LIB to an unused backup name, then install the staged file. All moves
-refuse an existing destination; rollback also refuses to clobber a file created
-by another process. Windows uses `MoveFileA`; Linux uses same-directory hard
-link/unlink. Failures preserve the old bytes; failed rollback reports both
-recovery paths. This is recoverable replacement, not a crash-atomic transaction.
-No background backup pruning or retail unlock switch is provided.
-
-## Multi-library transaction boundaries
-
-Opening a LIB adds a document; path normalization reselects an already-open
-file. Library IDs remain stable when the active document is swapped with a
-parked one. Each document owns its saved baseline and undo/redo history, camera,
-selection, field group and palette override. Save As rejects a path owned by
-another open file. Closing the application considers every document's dirty
-state. Limits are eight open documents and 256 MiB of stored resource data;
-shared clipboard/history buffers can outlive a closed document.
-
-A resource copy snapshots the source and other open LIBs. The source owns its
-local names; other providers must agree on stored bytes or the review fails
-with an ambiguity diagnostic. The graph has a 4096-resource and 128 MiB decoded
-scan limit. Target collisions require explicit keep/take decisions. The review
-records original target entries so stale plans fail rather than overwrite later
-edits. Missing game-supplied resources remain review notes and package warnings.
-
-Rename plans rewrite recognized BRF and module literals only, preserving fixed
-compiled slots and unknown bytes. They refuse known damage/HUD/store/palette
-conventions that need family-wide identity changes, and known external users
-without a local resource in another open LIB. Unknown runtime names remain
-unverified. Aircraft-family creation stays in the dedicated New aircraft wizard.
+Original-game behavior and Windows 98/ME runtime operation remain manual
+acceptance checks. National presets are compact editor artwork; exact variants
+and authentic squadron logos are supplied as PNG. The private aircraft-ID PAL
+is an editor preview palette and does not override FA's game-global palette.

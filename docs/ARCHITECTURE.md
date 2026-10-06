@@ -239,3 +239,35 @@ compiled slots and unknown bytes. They refuse known damage/HUD/store/palette
 conventions that need family-wide identity changes, and known external users
 without a local resource in another open LIB. Unknown runtime names remain
 unverified. Aircraft-family creation stays in the dedicated New aircraft wizard.
+
+
+## Hardpoint and material tools
+
+The hardpoint editor annotates only reviewed PT station records. New fields keep
+original source ranges; station transactions update the count and complete row
+together, validate signed coordinate limits, and refuse table resizing when other
+pointers share the block. Store reassignment creates a private string block.
+Unreferenced old blocks are retained, so conservative stored-name scans can still
+report their filenames. Source-coordinate markers use the same camera axes as
+the model; mouse movement previews a view-plane edit and release commits once.
+The saved station view supplies amber changed-value feedback.
+
+Material edits remain fixed-size patches: PAL/embedded-PIC RGB bytes, source UV
+coordinates with original byte/word widths, and bounded stored texture-name
+slots. Family texture cloning traverses reviewed aircraft dependencies and scans
+whole SH sections. It does not reconstruct the shape VM or rewrite topology.
+Context-model caches reload after undo so UV/material previews follow restored
+bytes rather than stale geometry snapshots.
+
+Decal input is bounded PNG decoded through no_std miniz_oxide, or programmatic
+block text/national artwork. PNG chunk CRCs, scanline filters, sample depths,
+palette indices and decoded lengths are checked; interlace and APNG are refused.
+Opaque target pixels receive alpha-composited colors quantized to the existing
+palette. Original span holes and metadata survive. Placement previews always
+rebuild from an unchanged entry snapshot and use the same picture cache path as
+the live 3D renderer. Apply checks that snapshot and commits one document change.
+
+The imported-art library stores only paths in an executable-adjacent sidecar.
+No image data, font runtime, GPU renderer, new platform APIs or runtime DLLs are
+introduced. Pending decal/station state is heap-backed where necessary to keep
+the custom Windows runtime's stack frames bounded.

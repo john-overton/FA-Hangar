@@ -44,6 +44,7 @@ pub fn run() -> Result<()> {
             app.smoke_save_policy();
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
+        Some("--decal-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("PIC not found")?;app.select_entry(at);println!("{}",app.check_decal_import(argument(&args,3)?,argument(&args,4)?)?);},
         Some("--paint-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Shape not found")?;app.select_entry(at);println!("{}",app.check_real_paint()?);},
         Some(cmd @ ("export-png"|"export-wav"))=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Entry not found")?;app.select_entry(at);app.file_prompt(if cmd=="export-png"{FileAction::Png}else{FileAction::Wav});app.key(Key::Char('a'),true,false);for c in argument(&args,3)?.chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);if app.status.starts_with("Error:"){return Err(app.status);}println!("{}",app.status);},
         Some("--native-snapshot") => {

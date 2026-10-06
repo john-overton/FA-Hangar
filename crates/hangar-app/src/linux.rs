@@ -487,20 +487,32 @@ pub fn list_dir(path: &str) -> Result<Vec<crate::ui::FileItem>> {
     });
     Ok(files)
 }
-fn recent_path() -> std::path::PathBuf {
+fn sidecar_path(name: &str) -> std::path::PathBuf {
     std::env::current_exe()
         .unwrap_or_default()
-        .with_file_name("tore-hangar-recent.txt")
+        .with_file_name(name)
 }
-pub fn load_recent() -> Vec<String> {
-    std::fs::read_to_string(recent_path())
+fn load_paths(name: &str, count: usize) -> Vec<String> {
+    std::fs::read_to_string(sidecar_path(name))
         .ok()
         .filter(|s| s.len() <= 16384)
-        .map(|s| s.lines().take(8).map(str::to_owned).collect())
+        .map(|s| s.lines().take(count).map(str::to_owned).collect())
         .unwrap_or_default()
 }
+fn save_paths(name: &str, paths: &[String]) -> Result<()> {
+    std::fs::write(sidecar_path(name), paths.join("\n")).map_err(|e| e.to_string())
+}
+pub fn load_recent() -> Vec<String> {
+    load_paths("tore-hangar-recent.txt", 8)
+}
 pub fn save_recent(paths: &[String]) -> Result<()> {
-    std::fs::write(recent_path(), paths.join("\n")).map_err(|e| e.to_string())
+    save_paths("tore-hangar-recent.txt", paths)
+}
+pub fn load_decals() -> Vec<String> {
+    load_paths("tore-hangar-decals.txt", 16)
+}
+pub fn save_decals(paths: &[String]) -> Result<()> {
+    save_paths("tore-hangar-decals.txt", paths)
 }
 std::thread_local! {static AUDIO:std::cell::RefCell<Option<std::process::Child>>=const{std::cell::RefCell::new(None)};}
 pub fn stop_audio() {

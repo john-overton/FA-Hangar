@@ -249,6 +249,9 @@ pub fn store(bytes: &[u8], station: usize, name: &str) -> Result<Vec<u8>> {
     let row = rows.get(station).ok_or("No selected station")?;
     let f = &b.fields[row.fields[8]];
     let name = name.trim().to_ascii_uppercase();
+    if row.store.as_deref() == Some(name.as_str()) || row.store.is_none() && name.is_empty() {
+        return Ok(bytes.to_vec());
+    }
     if name.is_empty() {
         return patch(bytes, vec![(f.kind_start, f.end, "dword 0".into())]);
     }

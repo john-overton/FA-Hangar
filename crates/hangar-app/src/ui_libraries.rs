@@ -543,6 +543,7 @@ impl App {
 }
 
 impl App {
+    #[inline(never)]
     pub(super) fn smoke_libraries(&mut self) {
         let mut app = App::new();
         app.demo();

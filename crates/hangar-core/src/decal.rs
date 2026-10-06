@@ -107,6 +107,9 @@ impl Image {
                         return Err(invalid("Unsupported PNG color type or sample depth"));
                     }
                 }
+                b"acTL" | b"fcTL" | b"fdAT" => {
+                    return Err(invalid("Use a static PNG for decal artwork"))
+                }
                 b"PLTE" => {
                     if idat_seen || !palette.is_empty() || n == 0 || n > 768 || !n.is_multiple_of(3)
                     {

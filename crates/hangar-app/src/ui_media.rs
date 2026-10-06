@@ -26,12 +26,18 @@ fn blit(o: &mut Layout, rect: [i32; 4], pixels: &[u32], sw: usize, sh: usize) {
         .push(Draw::Bitmap(x, y, w as usize, h as usize, out));
 }
 impl App {
-    fn current_picture(&self) -> Option<&Pic> {
-        self.stroke
+    pub(super) fn current_picture(&self) -> Option<&Pic> {
+        self.decal_draft
             .as_ref()
-            .filter(|s| s.entry == self.selected)
-            .map(|s| &s.pic)
-            .or(self.pic.as_ref())
+            .filter(|d| d.entry == self.selected)
+            .map(|d| &d.pic)
+            .or_else(|| {
+                self.stroke
+                    .as_ref()
+                    .filter(|s| s.entry == self.selected)
+                    .map(|s| &s.pic)
+                    .or(self.pic.as_ref())
+            })
     }
     pub(super) fn image_rect(&self) -> Option<[i32; 4]> {
         let p = self.current_picture()?;
@@ -166,27 +172,37 @@ impl App {
         self.mode = Mode::Media;
         self.dock = 3;
     }
-    fn model_for_paint(&self) -> Option<&Model> {
+    pub(super) fn model_for_paint(&self) -> Option<&Model> {
         self.preview
             .as_ref()
             .or(self.model.as_ref())
             .or(self.context_model.as_ref())
     }
-    fn texture_for(&self, name: &str) -> Option<&Pic> {
+    pub(super) fn texture_for(&self, name: &str) -> Option<&Pic> {
         let full = if name.contains('.') {
             name.to_string()
         } else {
             format!("{name}.PIC")
         };
-        self.stroke
+        self.decal_draft
             .as_ref()
-            .filter(|s| {
-                self.doc.archive.entries[s.entry]
+            .filter(|d| {
+                self.doc.archive.entries[d.entry]
                     .name
                     .eq_ignore_ascii_case(&full)
             })
-            .map(|s| &s.pic)
-            .or_else(|| self.textures.get(name))
+            .map(|d| &d.pic)
+            .or_else(|| {
+                self.stroke
+                    .as_ref()
+                    .filter(|s| {
+                        self.doc.archive.entries[s.entry]
+                            .name
+                            .eq_ignore_ascii_case(&full)
+                    })
+                    .map(|s| &s.pic)
+                    .or_else(|| self.textures.get(name))
+            })
     }
     fn render_model(&self, w: usize, h: usize) -> Frame {
         let mut frame = Frame {
@@ -465,6 +481,20 @@ impl App {
                 ),
                 c::INK_MUTED,
             );
+        } else if self.name().ends_with(".PAL") {
+            let colors = self.active_colors();
+            let cell = ((w - 32) / 16).min((h - 60) / 16).max(1);
+            let x = l + (w - cell * 16) / 2;
+            for (i, color) in colors.iter().enumerate() {
+                let xx = x + (i % 16) as i32 * cell;
+                let yy = 84 + (i / 16) as i32 * cell;
+                o.canvas
+                    .rect(xx, yy, cell - 1, cell - 1, theme::Rgb(rgb(*color)));
+                o.hit([xx, yy, cell, cell], Action::Brush(i as u8));
+                if i == self.brush as usize {
+                    border(&mut o.canvas, xx, yy, cell, cell, c::AMBER);
+                }
+            }
         } else if let Ok(p) = Pcm::parse(self.name(), &self.data) {
             let mid = 54 + h / 2;
             let left = l + 20;
@@ -523,6 +553,25 @@ impl App {
         let bottom = self.height - 24;
         o.canvas.rect(r + 1, 26, w - 1, 28, c::GM_700);
         o.canvas.label(r + 12, 44, "Livery / media", c::INK);
+        if self.pic.is_some() || self.model_for_paint().is_some() || self.name().ends_with(".PAL") {
+            let tab = (w - 24) / 3;
+            for (i, title) in ["Paint", "Materials", "Decals"].iter().enumerate() {
+                o.button(
+                    [r + 10 + i as i32 * (tab + 2), 58, tab, 24],
+                    title,
+                    Action::MediaTab(i as u8),
+                    self.media_tab == i as u8,
+                );
+            }
+            if self.media_tab == 1 {
+                self.material_inspector(o);
+                return;
+            }
+            if self.media_tab == 2 {
+                self.decal_inspector(o);
+                return;
+            }
+        }
         if self.pic.is_none() && self.model_for_paint().is_none() {
             label_fit(
                 &mut o.canvas,
@@ -561,7 +610,7 @@ impl App {
         let colors = picture
             .map(|p| p.colors(&self.base_palette))
             .unwrap_or(*self.base_palette);
-        let mut y = 70;
+        let mut y = 108;
         if let Some((i, f)) = self.selected_face.and_then(|i| {
             self.model_for_paint()
                 .and_then(|m| m.faces.get(i))

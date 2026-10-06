@@ -16,6 +16,8 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
+Version 0.6 adds viewport hardpoint tools, palette/UV editing, family texture
+cloning, and previewed PNG/text/national/squadron decals baked into PIC textures.
 Version 0.5 adds structured characteristic grafts, source-aware package reports,
 and multiple open LIBs with independent edits, view state and undo history.
 Version 0.4.1 protects retail LIB filenames and saves custom LIBs with backups.
@@ -165,7 +167,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently
-roughly half a megabyte. Copy it to a writable location and run it. No installer or runtime
+about 530–625 KiB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -290,8 +292,63 @@ A full embedded PIC palette or a base palette is needed for painting. Hangar
 loads `PALETTE.PAL` from the current LIB, or you can load a 768-byte 6-bit RGB
 PAL (or another LIB containing PALETTE.PAL) for preview. Missing colors are shown in grayscale and painting is blocked
 until a complete palette is available. Span holes are preserved; this brush
-does not create new opaque pixels outside existing spans. PNG/WAV export does
-not imply PNG import, arbitrary audio-format conversion or re-UV tools.
+does not create new opaque pixels outside existing spans. PNG decal import and
+bounded per-face UV transforms are also available. Arbitrary
+audio-format conversion and topology-aware UV unwrapping remain outside this version.
+
+## Hardpoints, materials and decals
+
+Select an aircraft PT and click **Hardpoints** above the model. Steel diamonds
+mark its stations; the selected station turns amber. Drag a diamond in an
+orthographic view, edit X/Y/Z numerically, or press G, X/Y/Z, an offset and Enter.
+H places a new station at the cursor's view-plane position. Add, duplicate,
+remove, move and store assignments each form one undo step. The inspector also
+exposes weight class, item count, location code and flags; **All station fields**
+opens the structured table for slew settings and other source operands.
+
+Coordinates and classifications remain stored FA values. A shared SH requires
+selecting its owning PT explicitly. Adding supports up to 64 stations; removing
+the last station is refused, so clear its store instead. Changing a store makes
+a private BRF reference block without changing another station's shared block.
+A valid resource name does not guarantee in-game weapon/station compatibility.
+
+The livery inspector has **Paint**, **Materials** and **Decals** tabs. Materials
+can edit saved PAL/embedded-PIC colors as 6-bit RGB components (0..63), transform
+the selected face's stored UVs, and clone a texture across the selected
+aircraft's reachable SH family. The latter scans complete stored module
+sections, including hidden texture names, rather than only the displayed pose.
+Palette edits affect all palette users; shared SH records and UVs remain shared.
+The cloned aircraft-ID PAL is an editor preview palette, not an override of FA's
+global PALETTE.PAL. Materials identifies that case explicitly. Use the intended
+game palette when judging a livery, and New aircraft when you need private assets.
+
+To add a marking:
+
+1. Select a textured model panel or open its PIC, then choose **Decals**.
+2. Import a transparent PNG, enter tail-number text, or choose a national preset.
+   Built-in presets are US stars-and-bars, UK and French roundels, and the
+   Japanese roundel. These are compact editor artwork; import PNG for exact
+   national variants or authentic squadron artwork.
+3. Imported PNG paths are remembered in **Squadron / PNG library**. The list
+   holds 16 files and is saved beside the executable in tore-hangar-decals.txt.
+   Artwork stays in its original file; removing a list item does not delete it.
+   A read-only executable folder retains new selections for the session only.
+4. Click or drag on the texture atlas or a visible model panel. Set width,
+   rotation, opacity and horizontal mirroring. Tail text uses built-in block
+   lettering, up to 24 ASCII letters/digits, spaces, dashes, slashes or periods,
+   with a selectable palette ink color.
+5. Inspect the palette-mapped texture and live model preview. **Apply decal**
+   bakes it into the PIC as one undo operation; Cancel or Esc discards the
+   preview. Save the LIB explicitly to write it to disk.
+
+PNG import accepts non-interlaced static grayscale, RGB, indexed and alpha PNGs
+at standard sample depths, up to 2048x2048 and 16 MiB. Alpha is blended into the
+existing texture and mapped to the nearest palette color. PIC transparency holes,
+headers and span tables are preserved; decals cannot create pixels outside
+existing opaque spans. A complete usable palette is required. The final LIB
+contains indexed pixels, not editable decal layers or a new game decal system.
+Mirrored/shared UVs can put the same marking on other panels; the preview shows
+those effects. PNG parsing follows the [PNG format specification](https://www.w3.org/TR/png-3/).
 
 ## Controls
 
@@ -314,6 +371,8 @@ not imply PNG import, arbitrary audio-format conversion or re-UV tools.
 | Zoom / frame | Wheel over viewport / Home or period |
 | Front / side / top / projection | 1 / 3 / 7 / 5, including numpad |
 | Transform supported static shape | G / R / S, X/Y/Z, numeric value, Enter |
+| Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
+| Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
 | Cancel transform or dialog | Esc or right mouse button |
 | Close with unsaved edits | Close window; type DISCARD or Esc to return |
 
@@ -325,8 +384,8 @@ in memory and displays its cause. The app writes only when explicitly asked.
 ## Scope still ahead
 
 A complete animated SH writer, geometric vertex/face editing, topology changes,
-UV layout editing, palette RGB editing, hardpoint tools, animation playback,
-complete dependency closure, richer grafting, unit-aware gameplay controls,
+topology-aware UV unwrapping, animation playback, complete runtime dependency
+closure, geometric grafting, verified gameplay-unit conversions,
 resizable editor splits and bitmap fonts.
 There are no inactive timeline controls pretending these features work.
 

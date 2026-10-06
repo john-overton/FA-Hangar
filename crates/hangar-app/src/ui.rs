@@ -75,6 +75,7 @@ pub enum FileAction {
     ReferenceSource,
     Report,
     GraftLibrary,
+    Decal,
 }
 #[derive(Clone)]
 enum PromptKind {
@@ -92,6 +93,16 @@ enum PromptKind {
     Isolate,
     CloseLibrary,
     ResourceName(bool),
+    StationValue(usize),
+    StationMove,
+    PaletteIndex,
+    PaletteColor,
+    UvMaterial,
+    FamilyTexture,
+    DecalText,
+    DecalInk,
+    DecalSetting(u8),
+    DecalLibrary,
     TransferReview,
 }
 struct Prompt {
@@ -138,6 +149,23 @@ pub struct App {
     pub path: String,
     pub status: String,
     pub selected: usize,
+    hp_context: Option<Box<hardpoint_ui::Context>>,
+    hp_selected: usize,
+    hp_tool: bool,
+    hp_visible: bool,
+    hp_drag: Option<hardpoint_ui::Drag>,
+    media_tab: u8,
+    decal_image: Option<hangar_core::decal::Image>,
+    decal_name: String,
+    decal_paths: Vec<String>,
+    decal_preset: usize,
+    decal_text: String,
+    decal_is_text: bool,
+    decal_ink: Option<u8>,
+    decal_placement: hangar_core::decal::Placement,
+    decal_draft: Option<Box<material_ui::DecalDraft>>,
+    decal_active: bool,
+    decal_dragging: bool,
     libraries: Vec<libraries_ui::Library>,
     library_id: u64,
     file_backed: bool,
@@ -243,6 +271,29 @@ impl App {
             path: String::new(),
             status: "Ready | Open a Fighters Anthology LIB or load the synthetic demo".into(),
             selected: 0,
+            hp_context: None,
+            hp_selected: 0,
+            hp_tool: false,
+            hp_visible: false,
+            hp_drag: None,
+            media_tab: 0,
+            decal_image: None,
+            decal_name: String::new(),
+            decal_paths: crate::platform::load_decals(),
+            decal_preset: 0,
+            decal_text: "AF 001".into(),
+            decal_is_text: false,
+            decal_ink: None,
+            decal_placement: hangar_core::decal::Placement {
+                center: [16, 16],
+                width: 32,
+                degrees: 0,
+                opacity: 100,
+                mirror: false,
+            },
+            decal_draft: None,
+            decal_active: false,
+            decal_dragging: false,
             libraries: Vec::new(),
             library_id: 0,
             file_backed: false,
@@ -429,6 +480,8 @@ impl App {
         self.model_paint = false;
 
         self.field_group = None;
+        self.hp_tool = false;
+        self.decal_active = false;
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
         self.collapsed[view::category_of(self.name())] = false;
         self.category = Some(view::category_of(self.name()));
@@ -452,8 +505,11 @@ impl App {
         }
         self.refresh();
         self.frame();
-        if matches!(extension(self.name()), "PIC" | "5K" | "11K" | "WAV") {
+        if matches!(extension(self.name()), "PIC" | "PAL" | "5K" | "11K" | "WAV") {
             self.mode = Mode::Media;
+            if self.name().ends_with(".PAL") {
+                self.media_tab = 1;
+            }
         } else if self.mode == Mode::Media {
             self.mode = Mode::Model;
         }
@@ -471,7 +527,20 @@ impl App {
         (self.zoom, self.pan, self.image_zoom, self.image_pan) = camera;
     }
     fn refresh_data(&mut self) {
+        self.hp_drag = None;
+        self.decal_draft = None;
+        self.decal_dragging = false;
         crate::platform::stop_audio();
+        if let Some(i) = self.context_entry {
+            self.context_model = self
+                .doc
+                .archive
+                .entries
+                .get(i)
+                .filter(|e| e.name.ends_with(".SH"))
+                .and_then(|e| e.read().ok())
+                .and_then(|b| Model::parse(&b).ok());
+        }
         self.pic = None;
         self.textures.clear();
         self.painting = false;
@@ -638,6 +707,7 @@ impl App {
             }
         }
         self.refresh_graft();
+        self.refresh_hardpoints();
         self.frame();
     }
     fn frame(&mut self) {
@@ -692,6 +762,8 @@ impl App {
         }
     }
     pub fn file_prompt(&mut self, a: FileAction) {
+        self.hp_drag = None;
+        self.decal_dragging = false;
         if matches!(a, FileAction::Variant | FileAction::VariantSh)
             && (self.doc.dirty() || !self.name().ends_with(".PT"))
         {
@@ -714,6 +786,7 @@ impl App {
             }
         }
         let title = match a {
+            FileAction::Decal => "Import transparent PNG decal or squadron artwork",
             FileAction::GraftLibrary => "Choose donor LIB, then choose any compatible entry",
             FileAction::ReferenceSource => "Add source LIB catalog for dependency checks",
             FileAction::Report => "Export package report as text",
@@ -786,6 +859,7 @@ impl App {
             return Err("Enter a file path".into());
         }
         match a {
+            FileAction::Decal => self.load_decal(path, true),
             FileAction::GraftLibrary => {
                 let a = Archive::parse(crate::platform::read(path)?)?;
                 self.graft_library = Some((path.into(), a));
@@ -1034,6 +1108,23 @@ impl App {
         }
     }
     pub fn key(&mut self, key: Key, ctrl: bool, shift: bool) {
+        if self.hp_drag.is_some()
+            && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
+        {
+            self.hp_drag = None;
+            self.status = "Station drag cancelled".into();
+            return;
+        }
+        if self.decal_draft.is_some()
+            && self.prompt.is_none()
+            && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
+        {
+            self.decal_draft = None;
+            self.decal_dragging = false;
+            self.decal_active = false;
+            self.status = "Decal preview cancelled".into();
+            return;
+        }
         if self.painting {
             if matches!(key, Key::Escape) {
                 self.painting = false;
@@ -1091,6 +1182,42 @@ impl App {
                     }
                     let p = self.prompt.take().unwrap();
                     let r = match p.kind {
+                        PromptKind::PaletteColor => self.palette_edit(&p.value),
+                        PromptKind::PaletteIndex => (|| {
+                            self.brush = p
+                                .value
+                                .parse()
+                                .map_err(|_| "Enter a palette index 0..255")?;
+                            Ok(())
+                        })(),
+                        PromptKind::UvMaterial => self.uv_edit(&p.value),
+                        PromptKind::FamilyTexture => self.family_texture(&p.value),
+                        PromptKind::DecalText => self.tail_text(&p.value),
+                        PromptKind::DecalInk => (|| {
+                            let index: u8 = p
+                                .value
+                                .parse()
+                                .map_err(|_| "Enter a palette index 0..255")?;
+                            self.decal_ink = Some(index);
+                            if self.decal_is_text {
+                                let text = self.decal_text.clone();
+                                self.tail_text(&text)?;
+                            }
+                            Ok(())
+                        })(),
+                        PromptKind::DecalSetting(key) => self.decal_setting(key, &p.value),
+                        PromptKind::DecalLibrary => Err("Choose a PNG row or press Esc".into()),
+                        PromptKind::StationMove => (|| {
+                            let delta: i32 =
+                                p.value.parse().map_err(|_| "Enter an integer offset")?;
+                            let c = self.hp_context.as_ref().ok_or("No station")?;
+                            let station = c.stations.get(self.hp_selected).ok_or("No station")?;
+                            let value = station.position[p.axis]
+                                .checked_add(delta)
+                                .ok_or("Coordinate overflow")?;
+                            self.station_value(p.axis + 1, &format!("{value}"))
+                        })(),
+                        PromptKind::StationValue(column) => self.station_value(column, &p.value),
                         PromptKind::CloseLibrary => {
                             if p.value == "DISCARD" {
                                 self.discard_library();
@@ -1359,7 +1486,9 @@ impl App {
                 }
                 Key::Char(ch) => {
                     let p = self.prompt.as_mut().unwrap();
-                    if matches!(p.kind, PromptKind::Transform(_)) && "xyzXYZ".contains(ch) {
+                    if matches!(p.kind, PromptKind::Transform(_) | PromptKind::StationMove)
+                        && "xyzXYZ".contains(ch)
+                    {
                         p.axis = match ch.to_ascii_lowercase() {
                             'x' => 0,
                             'y' => 1,
@@ -1397,6 +1526,8 @@ impl App {
         }
         match key {
             Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'c'=>{let r=self.copy_resource();self.result(r);},'v'=>{let r=self.paste_resources();self.result(r);},'d'=>self.rename_prompt(true),'w'=>{let r=self.close_library();self.result(r);},'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
+            Key::Char('h')|Key::Char('H')=>{let r=self.station_add(false,true);self.result(r);},
+            Key::Char('g')|Key::Char('G') if self.hp_tool&&self.mode==Mode::Model => {self.prompt=Some(Prompt{kind:PromptKind::StationMove,title:"Move station / X Y Z axis, source-unit offset".into(),value:"0".into(),axis:0});},
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.model.is_some()=>{
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
                 let op=ch.to_ascii_lowercase();self.prompt=Some(Prompt{kind:PromptKind::Transform(op),title:match op{'g'=>"Move in source units",'r'=>"Rotate in degrees",_=>"Scale in percent"}.into(),value:String::new(),axis:0});self.transform_preview();
@@ -1446,6 +1577,12 @@ impl App {
     pub fn click(&mut self, x: i32, y: i32, button: u8, down: bool) {
         self.mouse = [x, y];
         if button == 1 && !down {
+            if self.hp_drag.is_some() {
+                let result = self.finish_station_drag();
+                self.result(result);
+                return;
+            }
+            self.decal_dragging = false;
             if let Some((library, entry, start)) = self.resource_drag.take() {
                 if self.prompt.is_none()
                     && library == self.library_id
@@ -1486,6 +1623,33 @@ impl App {
             self.finish_stroke();
             return;
         }
+        if button == 1 && down && self.prompt.is_none() && self.mode == Mode::Model {
+            let hp = self
+                .layout()
+                .hits
+                .into_iter()
+                .rev()
+                .find(|h| h.contains(x, y) && matches!(h.action, view::Action::HardpointSelect(_)))
+                .map(|h| h.action);
+            if let Some(view::Action::HardpointSelect(i)) = hp {
+                self.start_station_drag(i);
+                return;
+            }
+        }
+        if button == 1
+            && down
+            && self.prompt.is_none()
+            && self.decal_active
+            && x > self.left() + if self.mode == Mode::Media { 12 } else { 40 }
+            && x < self.right() - 12
+            && y > 84
+            && y < self.dock_y() - 20
+            && matches!(self.mode, Mode::Model | Mode::Media)
+        {
+            let result = self.place_decal(x, y);
+            self.result(result);
+            return;
+        }
         if button == 1
             && down
             && self.prompt.is_none()
@@ -1497,6 +1661,7 @@ impl App {
             && y < self.dock_y()
         {
             if let Some((face, uv)) = self.model_hit(x, y) {
+                self.hp_tool = false;
                 self.selected_face = Some(face);
                 self.textured = true;
                 self.perspective = false;
@@ -1574,6 +1739,22 @@ impl App {
         }
     }
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
+        if self.decal_dragging {
+            let result = self.place_decal(x, y);
+            if let Err(e) = result {
+                self.status = e;
+            }
+            self.mouse = [x, y];
+            return;
+        }
+        if let Some(reference) = self.hp_drag.as_ref().map(|d| d.reference) {
+            match self.cursor_station(x, y, reference) {
+                Ok(p) => self.hp_drag.as_mut().unwrap().position = p,
+                Err(e) => self.status = e,
+            }
+            self.mouse = [x, y];
+            return;
+        }
         if let Some((_, _, start)) = self.resource_drag {
             if (x - start[0]).abs() + (y - start[1]).abs() > 6 {
                 self.status = "Drop on a LIB to copy / same-type entry to graft".into();
@@ -1875,3 +2056,8 @@ mod grafting_ui;
 
 #[path = "ui_libraries.rs"]
 mod libraries_ui;
+
+#[path = "ui_hardpoints.rs"]
+mod hardpoint_ui;
+#[path = "ui_materials.rs"]
+mod material_ui;
