@@ -1,0 +1,47 @@
+/* Generated from tokens.json. Gunmetal theme. */
+:root {
+  --gm-1000: #0f1113;
+  --gm-950: #15181b;
+  --gm-900: #1b1f23;
+  --gm-800: #23282d;
+  --gm-700: #2c3238;
+  --gm-600: #383f46;
+  --gm-500: #48515a;
+  --line-strong: #727b84;
+  --ink: #e4e8eb;
+  --ink-muted: #aab3bb;
+  --ink-faint: #808a93;
+  --amber: #e9a23b;
+  --amber-bright: #f6c066;
+  --amber-deep: #3a2f1c;
+  --on-amber: #1b1307;
+  --steel: #66aedb;
+  --steel-deep: #1d3140;
+  --focus: #66aedb;
+  --ok: #7ccc8a;
+  --danger: #ec6a58;
+  --axis-x: #e2595e;
+  --axis-y: #86c24a;
+  --axis-z: #4f8fe3;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 4px;
+  --lip: inset 0 1px 0 #3d444b;
+  --font-ui: "Barlow Semi Condensed", Tahoma, "MS Sans Serif", sans-serif;
+  --font-mono: "JetBrains Mono", "Lucida Console", "Courier New", monospace;
+  --font-display: "Barlow Condensed", "Barlow Semi Condensed", Tahoma, sans-serif;
+}
+.title { font: 600 14px/18px var(--font-ui); }
+.body { font: 400 13px/18px var(--font-ui); }
+.label { font: 500 12px/16px var(--font-ui); }
+.section { font: 600 11px/14px var(--font-ui); letter-spacing: 0.06em; }
+.hint { font: 400 11px/14px var(--font-ui); }
+.value { font: 400 12px/16px var(--font-mono); }
+.value-sm { font: 400 11px/15px var(--font-mono); }
+.badge { font: 500 10px/14px var(--font-mono); }
+.display { font: 600 64px/60px var(--font-display); }

@@ -1,0 +1,1 @@
+Hangar's own 16px line icon set: 1.5px stroke, round caps and joins, drawn on a 16 grid so it rasterizes clean at 1x. Files here are inked `ink-muted` (#aab3bb); in the app and previews the same paths are drawn with currentColor (see the `th-ic` class). `play` and `solid` are the only filled glyphs. No emoji anywhere.
