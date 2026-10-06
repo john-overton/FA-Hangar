@@ -49,6 +49,7 @@ pub fn sin_cos(degrees: i32) -> (i32, i32) {
         let t = d * (180 - d);
         sign * (4 * t * 1024 / (40500 - t))
     }
+    let degrees = degrees.rem_euclid(360);
     (sin(degrees), sin(degrees + 90))
 }
 pub fn rotate(p: [i32; 3], axis: usize, degrees: i32) -> [i32; 3] {
@@ -622,6 +623,7 @@ mod tests {
     fn rotations_and_limits() {
         assert_eq!(rotate([100, 0, 0], 2, 90), [0, 100, 0]);
         assert_eq!(sin_cos(-90), (-1024, 0));
+        assert_eq!(sin_cos(i32::MAX), sin_cos(i32::MAX % 360));
         assert!(Model::parse(&demo_shape())
             .unwrap()
             .transformed(Transform::Scale(None, 0))

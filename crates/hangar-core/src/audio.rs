@@ -11,7 +11,9 @@ impl<'a> Pcm<'a> {
             return Err(invalid("invalid PCM size"));
         }
         let clip = if bytes.starts_with(b"RIFF") {
-            if slice(bytes, 8, 4)? != b"WAVE" || u32_at(bytes, 4)? + 8 != bytes.len() {
+            if slice(bytes, 8, 4)? != b"WAVE"
+                || u32_at(bytes, 4)?.checked_add(8) != Some(bytes.len())
+            {
                 return Err(invalid("invalid WAV length/type"));
             }
             let mut at = 12;
@@ -91,6 +93,9 @@ mod tests {
         let decoded = Pcm::parse("test.5k", &wav).unwrap();
         assert_eq!(decoded.rate, 11025);
         assert_eq!(decoded.samples, pcm.samples);
+        let mut bad = wav.clone();
+        bad[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Pcm::parse("bad.wav", &bad).is_err());
         for n in 0..wav.len() {
             assert!(Pcm::parse("test.11k", &wav[..n]).is_err() || n < 4);
         }
