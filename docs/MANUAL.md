@@ -29,6 +29,7 @@ the game. No game data ships.
   - [Duplicate aircraft](#duplicate-aircraft)
 - [Work across LIBs](#work-across-libs)
 - [Flight envelope table](#flight-envelope-table)
+  - [Negative-G engine cut-out](#negative-g-engine-cut-out)
 - [Paint a livery](#paint-a-livery)
   - [Select panels](#select-panels)
   - [Per-panel textures](#per-panel-textures)
@@ -656,6 +657,46 @@ muted ink; changed cells are amber. Wheel scrolls the table. The **Field
 groups** panel picks the group (with field counts); **All fields** and the Raw
 fields dock keep the underlying BRF view with on-disk values and reset
 buttons.
+
+### Negative-G engine cut-out
+
+**Neg-G cut-out** in the Model inspector's Propulsion panel is the PT field
+`plane.negGLimit`, which is also in Flight's Propulsion field group. Both
+show it in its stored unit, 1/256 s. FA counts how long the aircraft holds negative G
+without a break. When the count reaches this value, FA cuts the throttle to
+0 and the engine spools down at the aircraft's throttle-down rate. As soon
+as G is back at 0 or above, the count restarts and the engine spools back
+up to the throttle you have set. You do not need to restart it.
+
+| Value | Effect |
+| --- | --- |
+| 0 | No cut-out. Most retail fighters, including the F-5E. |
+| seconds × 256 | Cut-out after that much continuous negative G: 2,560 is 10 s (retail F/A-18), 7,680 is 30 s (retail A-1 and SF.260). |
+| Negative | Engine held at 0% throttle at all times. Do not use. |
+
+Limits and why:
+
+- **There is no chance roll.** The cut-out always happens after the same
+  time. Any moment at 0 G or above resets the count, so pick a time longer
+  than your longest dive.
+- **The G level does not matter.** FA only checks whether G is below zero,
+  so -0.1 G counts as much as -4 G.
+- **Keep it at 30,720 (120 s) or less.** The count is a signed 16-bit
+  number. Near the 32,767 maximum it can wrap round and the cut-out stops
+  working reliably.
+- **How far below zero the aircraft can pull is set by the envelope**, not
+  by this field. FA uses the most negative envelope row that contains the
+  current speed and altitude, less a reduction for external stores. On the
+  retail F-5E, the -4 G row covers only about 570 to 760 ft/s below
+  3,000–4,000 ft. To pull -4 G anywhere else, widen that row in the
+  [envelope table](#flight-envelope-table).
+- **Afterburner during a cut-out** gives no extra thrust, but FA keeps
+  burning fuel at the afterburner rate until you deselect it.
+
+The evidence, with FA.EXE addresses, is in
+[ARCHITECTURE.md](ARCHITECTURE.md#engine-fields-negative-g-cut-out-and-throttle-rates).
+The throttle-up and throttle-down fields (`throttleAcc`, `throttleDacc`) show
+their unit, %/s, in the field table.
 
 ## Paint a livery
 
@@ -1486,7 +1527,7 @@ animation and cannot be imported back as a lossless SH edit.
 
 | Limit | Why | Instead |
 | --- | --- | --- |
-| Values are shown and edited in source storage units, not knots, pounds or Mach | No gameplay unit conversion has evidence behind it. A `^` marker is retained, not reinterpreted. Changing a field does not guarantee how the game uses it. | Compare against retail values. The gear swing is shown in degrees and gearPos in percent assuming OpenFA's 0 to -8192 range. |
+| Values are shown and edited in source storage units, not knots, pounds or Mach | No gameplay unit conversion has evidence behind it. A `^` marker is retained, not reinterpreted. Changing a field does not guarantee how the game uses it. | Compare against retail values. The gear swing is shown in degrees and gearPos in percent assuming OpenFA's 0 to -8192 range. Fields whose FA.EXE use is reviewed show their stored unit beside the value (`negGLimit` 1/256 s, throttle rates %/s). |
 | Opaque binary definitions can be exported or replaced but are not edited | Unknown data is preserved, not guessed. | |
 
 ### References and package checks

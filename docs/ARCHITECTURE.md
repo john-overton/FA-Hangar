@@ -1075,3 +1075,75 @@ the private set except sensors and stores, and share the rest; the aircraft
 and a name-derived HUD are always copied, and groups switch together. Private
 names are generated against the whole LIB, `.ORG` companions follow copied
 PICs, and the package is inserted as one transaction after a collision check.
+
+## Engine fields: negative-G cut-out and throttle rates
+
+Hangar labels three PT fields with a stored unit (`definition::unit`) and
+groups `negGLimit` with Propulsion: **Neg-G cut-out** in the Model
+inspector, plus Flight's Propulsion field group and Graft aspect. The evidence is FA.EXE disassembly; values stay in their
+source units and the raw field names stay in the field table.
+
+**Runtime offsets.** FA copies the loaded PT into the `_cpt` buffer at
+0x50D268, packed in BRF field order. That puts `vtLimitDown` at 0x50D3C5,
+which the sibling flight notes already tie to its reader at 0x47ADD0, and
+`engines` at 0x50D3B4, `negGLimit` at 0x50D3B5 (a signed word),
+`thrust`/`aftThrust` at 0x50D3B7/0x50D3BB, `throttleAcc`/`throttleDacc` at
+0x50D3BF/0x50D3C1 and `fuelConsumption` at 0x50D3C9. Only two routines read
+0x50D3B5, and no code reads `+0x14D` from a PT pointer. The `[ebx+0x14D]`
+accesses at 0x46F519 work on a network instance record, not a PT.
+
+**Timer, 0x451E80 (engine update).** `cp+0x19B` (0x50D01B) is the aircraft's
+controlled G in fixed8: 256 is 1 G and the stick drives it within the
+envelope limits. If G >= 0, the word counter at `cp+0x20F` (0x50D08F) is
+cleared. If G < 0 and `negGLimit` is nonzero and greater than the counter,
+the counter gains `_serviceTicks` (word 0x546BA0), the game time since this
+aircraft was last serviced. The game clock 0x552928 counts 1/256 s: TIMEUpdate
+derives whole seconds from it (`>> 8`) for the time of day modulo 86,400. So
+`negGLimit` is a duration in 1/256 s of uninterrupted negative G. The G
+magnitude does not matter: -0.1 G and -4 G count the same. The counter is
+also cleared when the aircraft is set up (0x4519CD).
+
+**Cut-out, 0x451A60 (throttle limit).** The routine starts from a 100%
+ceiling (the player's is lowered by the byte at 0x52254A) and drops it to 0
+with no fuel. If `negGLimit` is nonzero and not greater than the counter, the
+ceiling is 0. The commanded throttle (`cp+0x1F2`, 0x50D072) is clamped to it,
+and afterburner bit 0x20 of `cp+0x16F` is cleared unless the throttle is
+100. 0x451E80 then slews the actual throttle (0x50D06E, fixed8 percent)
+toward the command at `throttleDacc` or `throttleAcc` (0x451EC2..0x451EF0
+through 0x4119A0, step `rate × 256 × ticks >> 8`). Both rates are therefore
+percent per second. Thrust (0x47A8C0) scales `thrust` or `aftThrust` by the
+actual throttle (times a percentage at 0x54B6F4, less a speed term), and 0x47A860 gives
+none at all once that throttle reaches 0.
+The cut-out is a forced spool-down, not the damage flameout: it has no RNG
+call, message or restart step. When G returns to 0 or above, the counter
+resets and the next frame copies the throttle lever back into the command
+(0x451B00, from 0x5451F4), so the engine spools up at `throttleAcc`. The same
+update runs for AI aircraft through their throttle routine 0x452050.
+Selecting afterburner during a cut-out sets the afterburner bit again after
+the clamp (0x451B18..0x451B33). Thrust still follows the falling throttle, but
+fuel use reads that bit (0x451F3A) and stays at the afterburner rate.
+
+**Values.** 0 disables the cut-out: neither routine acts. FA_2.LIB stores 0
+for most fighters (F-5E, F-14, F-16, MiG-29, Su-27), 2,560 (10 s) for the
+F/A-18s, airliners and most helicopters, 4,608 (18 s) for the Strikemaster and
+7,680 (30 s) for the A-1 and SF.260. A negative value always caps the throttle
+at 0, because the signed comparison in 0x451A60 is true whatever the G. The
+counter is a signed word that stops gaining time only after reaching the
+limit, so a limit within one service step of 32,767 can wrap negative and
+never trip.
+
+**Envelope interplay.** Once per game second, 0x452140 sets the G limits
+(0x50D0D7 minimum, 0x50D0D9 maximum). It scans envelope rows `envMin` to
+`envMax` and keeps the most negative and most positive rows whose polygon
+contains the current speed and altitude (0x49D230 class 0). It interpolates
+by speed toward the next row out, then applies the stores-load reduction
+scaled by `loadedElevator`. AI with the byte at `cp+0xE2` at or below 1 lose
+1 G each way. A global option bit (0x4EB6F8 & 0x20, unidentified) gives the
+player 1 G more each way within `envMin`/`envMax`. The minimum is held at or
+below 0 and the maximum at or above 2 G. 0x477ED0 scales the player's limits
+by `100 − byte 0x522547` percent and passes them to the pitch StickInput at
+0x47C106. How much negative G an aircraft can pull is therefore set by its
+negative envelope rows, not by `negGLimit`.
+
+Weak-structure damage (fault 30, byte 0x5224EC) is separate. At G >= 6 or
+G < -3, it rolls the RNG and can break up the aircraft (0x410D86).
