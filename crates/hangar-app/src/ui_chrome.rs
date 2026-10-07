@@ -229,6 +229,10 @@ impl App {
                 Item::new("Paste resources", Action::PasteResources).key("Ctrl+V"),
                 Item::new("Rename resource", Action::RenameResource(false)),
                 Item::new("Duplicate resource", Action::RenameResource(true)).key("Ctrl+D"),
+                Item::new("Rename reference ID\u{2026}", Action::RenameAircraft)
+                    .enabled(self.name().ends_with(".PT")),
+                Item::new("Duplicate aircraft\u{2026}", Action::DuplicateAircraft)
+                    .enabled(self.name().ends_with(".PT")),
                 Item::new("References and users", Action::Dock(4)),
                 Item::sep(),
                 Item::new("Export entry", Action::File(FileAction::Export)).key("Ctrl+E"),

@@ -81,6 +81,18 @@ pub(super) enum Action {
     ClonePickOther,
     /// Acknowledge exporting with kept unresolved names.
     CloneAck,
+    /// Identity panel: edit the short (false) or long (true) name.
+    IdentityEdit(bool),
+    /// Identity panel: restore the saved short or long name.
+    IdentityReset(bool),
+    /// Rename the selected aircraft's reference ID (review first).
+    RenameAircraft,
+    /// Duplicate the selected aircraft in this LIB (wizard, then review).
+    DuplicateAircraft,
+    /// Duplicate review: copy (false) or share (true) toggle row.
+    DuplicateToggle(usize, bool),
+    /// Rename or duplicate review: back to the previous step.
+    IdentityBack,
     BrowserUp,
     BrowserRoots,
     BrowserPick(usize),
@@ -449,30 +461,29 @@ impl App {
                     "Export waits for the unresolved references to be acknowledged".into()
                 };
             }
-            Action::CloneBack => {
-                if self
-                    .prompt
-                    .as_ref()
-                    .is_some_and(|p| matches!(p.kind, PromptKind::CloneReview))
-                {
+            Action::CloneBack => match self.prompt.as_ref().map(|p| (&p.kind, p.value.clone())) {
+                Some((PromptKind::CloneReview, _)) => {
                     self.clone_draft = None;
-                    self.prompt = Some(Prompt {
-                        kind: PromptKind::CloneTitle,
-                        title: "Export object, step 2: display name".into(),
-                        value: self.clone_title.clone(),
-                        axis: 0,
-                    });
-                } else {
-                    if let Some(p) = &self.prompt {
-                        self.clone_title = p.value.clone();
-                    }
-                    self.prompt = Some(Prompt {
-                        kind: PromptKind::CloneId,
-                        title: "Export object, step 1: new object ID".into(),
-                        value: self.variant_id.clone(),
-                        axis: 0,
-                    });
+                    self.clone_step(3);
                 }
+                Some((PromptKind::CloneTitle, value)) => {
+                    self.clone_title = value;
+                    self.clone_step(2);
+                }
+                Some((PromptKind::CloneShort, value)) => {
+                    self.identity.short = value;
+                    self.clone_step(1);
+                }
+                _ => {}
+            },
+            Action::IdentityBack => self.identity_back(),
+            Action::IdentityEdit(long) => self.identity_edit(long),
+            Action::IdentityReset(long) => self.identity_reset(long),
+            Action::RenameAircraft => self.rename_aircraft_prompt(),
+            Action::DuplicateAircraft => self.begin_duplicate(),
+            Action::DuplicateToggle(row, share) => {
+                let r = self.duplicate_toggle(row, share);
+                self.result(r);
             }
             Action::Menu(n) => self.menu = if self.menu == Some(n) { None } else { Some(n) },
             Action::Mode(m) => {
@@ -1233,6 +1244,20 @@ impl App {
             });
             return Ok(());
         }
+        if name == "rename-review" || name == "duplicate-review" {
+            // The selected PT (the demo's otherwise); NEO / TWIN as the new ID.
+            if !self.name().ends_with(".PT") {
+                let at = self.doc.archive.find("DEMO.PT").ok_or("Select a PT")?;
+                self.select_entry(at);
+            }
+            if name == "rename-review" {
+                self.rename_aircraft_prompt();
+                return self.rename_review("NEO");
+            }
+            self.begin_duplicate();
+            self.variant_id = "TWIN".into();
+            return self.duplicate_review_prompt();
+        }
         if name == "clone-unresolved" {
             // Synthetic dangling texture; the picker is open on its row.
             self.smoke_ghost_review("GHJET");
@@ -1408,6 +1433,18 @@ impl App {
             .is_some_and(|p| matches!(p.kind, PromptKind::CloneReview))
         {
             self.clone_review(&mut out);
+        } else if self
+            .prompt
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, PromptKind::RenameReview))
+        {
+            self.rename_review_layout(&mut out);
+        } else if self
+            .prompt
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, PromptKind::DuplicateReview))
+        {
+            self.duplicate_review_layout(&mut out);
         } else if self.prompt.is_some() {
             if matches!(self.prompt.as_ref().unwrap().kind, PromptKind::File(_))
                 && self.browser.is_some()
@@ -2177,6 +2214,7 @@ impl App {
             }
             None => self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, 0),
         };
+        self.identity_panel(o, &mut s);
         let rows = self.property_rows();
         let mut group = "";
         for (section, label, i) in &rows {
@@ -2297,6 +2335,7 @@ impl App {
             return;
         };
         let mut s = self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, 0);
+        self.identity_panel(o, &mut s);
         if self.pane(o, &mut s, pane::LIB_ENTRY, "Lib entry", Icon::Lib) {
             o.info(&mut s, "Type", GROUPS[category_of(&e.name)].0, "");
             o.info(
@@ -2761,13 +2800,13 @@ impl App {
                 Style::Label,
             );
         }
-        let left: &[(&str, Action)] = if matches!(p.kind, PromptKind::CloneTitle) {
-            &[
+        let left: &[(&str, Action)] = match p.kind {
+            PromptKind::CloneTitle if !self.identity.in_place => &[
                 ("Add source LIB", Action::File(FileAction::CloneSource)),
                 ("Back", Action::CloneBack),
-            ]
-        } else {
-            &[]
+            ],
+            PromptKind::CloneTitle | PromptKind::CloneShort => &[("Back", Action::CloneBack)],
+            _ => &[],
         };
         self.dialog_actions(
             o,
@@ -2811,6 +2850,7 @@ impl App {
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();
+        self.smoke_identity();
         self.smoke_library_moves();
         self.smoke_material_tools();
         self.smoke_advanced_tools();
@@ -2969,7 +3009,7 @@ impl App {
     /// window sizes.
     pub(super) fn smoke_hit_geometry(&mut self) {
         for (w, h) in [(1280, 800), (800, 600)] {
-            for state in 0..26 {
+            for state in 0..30 {
                 self.libraries.clear();
                 self.demo();
                 self.width = w;
@@ -3093,6 +3133,30 @@ impl App {
                         assert_eq!(self.context.sub, 1);
                         "context menu"
                     }
+                    26 => {
+                        self.select_entry(1);
+                        self.rename_aircraft_prompt();
+                        self.rename_review("NEO").unwrap();
+                        "rename review"
+                    }
+                    27 | 28 => {
+                        self.select_entry(1);
+                        self.begin_duplicate();
+                        self.variant_id = "TWIN".into();
+                        if state == 27 {
+                            self.duplicate_review_prompt().unwrap();
+                            "duplicate review"
+                        } else {
+                            self.clone_step(2);
+                            "duplicate step"
+                        }
+                    }
+                    29 => {
+                        self.select_entry(1);
+                        self.mode = Mode::Model;
+                        self.identity_commit(false, "Changed").unwrap();
+                        "identity panel changed"
+                    }
                     20..=24 => {
                         self.doc
                             .replace(0, hangar_core::shape_testkit::demo_parts())
@@ -3149,6 +3213,7 @@ impl App {
                 self.clone_draft = None;
                 self.prompt = None;
                 self.browser = None;
+                self.identity_cancel();
                 self.dock = 0;
                 self.panels = 0;
                 self.doc.mark_saved();
@@ -3170,7 +3235,8 @@ impl App {
             self.width = w;
             self.height = h;
             self.mode = Mode::Model;
-            self.panels = 0;
+            // Identity collapsed: the envelope rows stay in view at 800x600.
+            self.panels = 1 << pane::IDENTITY;
             self.select_entry(1);
             let original = self.doc.archive.bytes().unwrap();
             let fields = &self.brf.as_ref().unwrap().fields;
@@ -3202,7 +3268,7 @@ impl App {
             press(self, weights);
             self.modifiers(false);
             assert!(!self.panel_closed(pane::WEIGHTS) && self.panel_closed(pane::ENVELOPE));
-            self.panels = 0;
+            self.panels = 1 << pane::IDENTITY;
             // Wheel over the panels scrolls them; the thumb shows the position.
             let max = self.layout().inspector_max;
             assert!(max > 0, "Panels overflow at {w}x{h}");

@@ -55,37 +55,63 @@ impl App {
     pub(super) fn begin_clone(&mut self) {
         self.clone_draft = None;
         self.clone_scroll = 0;
-        self.clone_unresolved = Unresolved::default();
+        self.clone_unresolved = Box::default();
         self.clone_sources.clear();
         self.browser = None;
         let stem = self.name().split('.').next().unwrap_or("NEW");
         let prefix: String = stem.chars().take(4).collect();
-        let display = self
+        let names = self
             .brf
             .as_ref()
-            .and_then(|b| b.fields.iter().find(|f| f.label == "object.ot_names"))
-            .and_then(|p| {
-                self.brf
-                    .as_ref()
-                    .unwrap()
-                    .fields
-                    .iter()
-                    .find(|f| f.block == p.value && f.kind == "string")
-            })
-            .map(|f| f.value.trim_matches('"'))
-            .unwrap_or(stem);
-        self.clone_title = format!("{} variant", display.chars().take(30).collect::<String>());
-        self.prompt = Some(Prompt {
-            kind: PromptKind::CloneId,
-            title: format!(
-                "Export object from {}, step 1: new ID of 1 to 6 letters or digits",
-                self.name()
-            ),
-            value: format!("{prefix}V1"),
-            axis: 0,
-        });
+            .and_then(hangar_core::identity::read)
+            .unwrap_or_else(|| hangar_core::identity::Identity {
+                short: stem.into(),
+                long: stem.into(),
+                reference: String::new(),
+            });
+        let limit = hangar_core::identity::NAME_LIMIT;
+        self.identity.in_place = false;
+        self.identity.short = names.short.chars().take(limit).collect();
+        self.clone_title = format!(
+            "{} variant",
+            names.long.chars().take(limit - 8).collect::<String>()
+        );
+        self.variant_id = format!("{prefix}V1");
+        self.clone_step(1);
         self.status =
             "The selected object and its resource graph will be copied into a separate LIB".into();
+    }
+    /// Wizard step prompt: 1 new ID, 2 short name, 3 long name. The same
+    /// steps export to a new LIB or, in place, duplicate an aircraft.
+    pub(super) fn clone_step(&mut self, step: u8) {
+        let task = if self.identity.in_place {
+            format!("Duplicate aircraft {}", self.name())
+        } else {
+            format!("Export object from {}", self.name())
+        };
+        let (kind, title, value) = match step {
+            1 => (
+                PromptKind::CloneId,
+                format!("{task}, step 1: new ID of 1 to 6 letters or digits"),
+                self.variant_id.clone(),
+            ),
+            2 => (
+                PromptKind::CloneShort,
+                format!("{task}, step 2: short name, as in lists"),
+                self.identity.short.clone(),
+            ),
+            _ => (
+                PromptKind::CloneTitle,
+                format!("{task}, step 3: long name"),
+                self.clone_title.clone(),
+            ),
+        };
+        self.prompt = Some(Prompt {
+            kind,
+            title,
+            value,
+            axis: 0,
+        });
     }
     pub(super) fn add_clone_source(&mut self, path: &str) -> Result<()> {
         if index(path)?.is_none() {
@@ -94,12 +120,7 @@ impl App {
         self.clone_sources
             .retain(|p| normalized(p) != normalized(path));
         self.clone_sources.push(path.into());
-        self.prompt = Some(Prompt {
-            kind: PromptKind::CloneTitle,
-            title: "Export object, step 2: display name".into(),
-            value: self.clone_title.clone(),
-            axis: 0,
-        });
+        self.clone_step(3);
         self.status = "Source LIB added; press Enter to rebuild the review".into();
         Ok(())
     }
@@ -157,7 +178,10 @@ impl App {
             &catalog,
             self.name(),
             &self.variant_id,
-            &self.clone_title,
+            clone_aircraft::Names {
+                short: &self.identity.short,
+                long: &self.clone_title,
+            },
             // Built with every unresolved name kept so the review can list
             // them; the Export button stays gated on the acknowledgement.
             &clone_aircraft::Policy {
@@ -662,7 +686,7 @@ impl App {
             PromptKind::CloneId
         ));
         assert!(self.browser.is_none());
-        for value in ["NEWJET", "New aircraft"] {
+        for value in ["NEWJET", "New", "New aircraft"] {
             self.key(Key::Char('a'), true, false);
             for c in value.chars() {
                 self.key(Key::Char(c), false, false);
@@ -689,6 +713,13 @@ impl App {
         assert!(self.prompt.as_ref().unwrap().value.ends_with("NEWJET.LIB"));
         assert!(self.doc.dirty());
         assert_eq!(self.doc.archive.entries[0].name, "NEWJET.PT");
+        // Steps 2 and 3 fill the short and long names separately.
+        let bytes = self.doc.archive.entries[0].read().unwrap();
+        let id = hangar_core::identity::read(&Brf::parse(&bytes, "PT").unwrap()).unwrap();
+        assert_eq!(
+            (id.short.as_str(), id.long.as_str(), id.reference.as_str()),
+            ("New", "New aircraft", "NEWJET.PT")
+        );
         let reopened = Archive::parse(self.doc.archive.bytes().unwrap()).unwrap();
         assert_eq!(reopened.entries.len(), 8);
         self.key(Key::Escape, false, false);
@@ -710,7 +741,7 @@ impl App {
         self.refresh();
         self.select_entry(self.doc.archive.find("DEMO.PT").unwrap());
         self.file_prompt(FileAction::Variant);
-        for value in [id, "Ghost test"] {
+        for value in [id, "Ghost", "Ghost test"] {
             self.key(Key::Char('a'), true, false);
             for c in value.chars() {
                 self.key(Key::Char(c), false, false);
@@ -858,7 +889,7 @@ impl App {
         self.select_entry(at);
         let before = self.doc.archive.bytes()?;
         self.file_prompt(FileAction::Variant);
-        for value in [id, title] {
+        for value in [id, title, title] {
             self.key(Key::Char('a'), true, false);
             for c in value.chars() {
                 self.key(Key::Char(c), false, false);

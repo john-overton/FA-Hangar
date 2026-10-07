@@ -302,8 +302,15 @@ enum PromptKind {
     VariantTitle,
     VariantReview,
     CloneId,
+    /// Export wizard step 2 (step 3, `CloneTitle`, is the long name).
+    CloneShort,
     CloneTitle,
     CloneReview,
+    /// Identity panel: short (false) or long (true) name of the selection.
+    IdentityName(bool),
+    RenameId,
+    RenameReview,
+    DuplicateReview,
     /// Type a source PIC for one Unresolved in source review row.
     CloneTexture(usize),
     Recolor,
@@ -443,7 +450,10 @@ pub struct App {
     clone_sources: Vec<String>,
     clone_title: String,
     clone_scroll: usize,
-    clone_unresolved: cloning_ui::Unresolved,
+    /// Boxed with the identity drafts to keep `App` (built on the stack once) small.
+    clone_unresolved: Box<cloning_ui::Unresolved>,
+    /// Identity panel drafts: rename and same-LIB duplicate reviews.
+    identity: Box<identity_ui::State>,
     suggested_output: Option<String>,
     variant_shape: Vec<u8>,
     variant_id: String,
@@ -598,6 +608,7 @@ impl App {
             clone_title: String::new(),
             clone_scroll: 0,
             clone_unresolved: Default::default(),
+            identity: Box::default(),
             suggested_output: None,
             variant_shape: Vec::new(),
             variant_id: String::new(),
@@ -1598,21 +1609,23 @@ impl App {
                         matches!(p.kind, PromptKind::File(FileAction::CloneSource))
                     }) {
                         self.browser = None;
-                        self.prompt = Some(Prompt {
-                            kind: PromptKind::CloneTitle,
-                            title: "Export object, step 2: display name".into(),
-                            value: self.clone_title.clone(),
-                            axis: 0,
-                        });
+                        self.clone_step(3);
                         return;
                     }
                     if self.prompt.as_ref().is_some_and(|p| {
                         matches!(
                             p.kind,
-                            PromptKind::CloneId | PromptKind::CloneTitle | PromptKind::CloneReview
+                            PromptKind::CloneId
+                                | PromptKind::CloneShort
+                                | PromptKind::CloneTitle
+                                | PromptKind::CloneReview
+                                | PromptKind::RenameId
+                                | PromptKind::RenameReview
+                                | PromptKind::DuplicateReview
                         )
                     }) {
                         self.clone_draft = None;
+                        self.identity_cancel();
                     }
                     self.prompt = None;
                     self.preview = None;
@@ -1776,17 +1789,42 @@ impl App {
                                     Err("That object ID already exists; choose a new ID".into())
                                 } else {
                                     self.variant_id = id;
-                                    self.prompt = Some(Prompt {
-                                        kind: PromptKind::CloneTitle,
-                                        title: "Export object, step 2: display name".into(),
-                                        value: self.clone_title.clone(),
-                                        axis: 0,
-                                    });
+                                    self.clone_step(2);
                                     Ok(())
                                 }
                             }
                             Err(e) => Err(e),
                         },
+                        PromptKind::CloneShort => {
+                            match hangar_core::identity::validate_display("Short name", &p.value) {
+                                Ok(()) => {
+                                    self.identity.short = p.value.clone();
+                                    self.clone_step(3);
+                                    Ok(())
+                                }
+                                Err(e) => Err(e),
+                            }
+                        }
+                        PromptKind::IdentityName(long) => self.identity_commit(long, &p.value),
+                        PromptKind::RenameId => self.rename_review(&p.value),
+                        PromptKind::RenameReview => {
+                            let r = self.rename_apply();
+                            if r.is_ok() {
+                                self.identity_cancel();
+                            }
+                            r
+                        }
+                        PromptKind::DuplicateReview => {
+                            let r = self.duplicate_apply();
+                            if r.is_ok() {
+                                self.identity_cancel();
+                            }
+                            r
+                        }
+                        PromptKind::CloneTitle if self.identity.in_place => {
+                            self.clone_title = p.value.clone();
+                            self.duplicate_review_prompt()
+                        }
                         PromptKind::CloneTitle => {
                             self.clone_title = p.value.clone();
                             // Sources or names may have changed: choices start over.
@@ -2380,6 +2418,15 @@ impl App {
                 .clamp(0, len.saturating_sub(1) as i32) as usize;
             return;
         }
+        if self.prompt.as_ref().is_some_and(|p| {
+            matches!(
+                p.kind,
+                PromptKind::RenameReview | PromptKind::DuplicateReview
+            )
+        }) {
+            self.identity_wheel(delta);
+            return;
+        }
 
         if self
             .prompt
@@ -2712,6 +2759,9 @@ mod mesh_ui;
 
 #[path = "ui_animation.rs"]
 mod animation_ui;
+
+#[path = "ui_identity.rs"]
+mod identity_ui;
 
 #[path = "ui_edit.rs"]
 mod edit_ui;

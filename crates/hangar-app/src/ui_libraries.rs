@@ -1355,11 +1355,25 @@ impl App {
             Item::sep(),
             Item::new("Copy", Action::CopyResource).key("Ctrl+C"),
             paste,
-            Item::new("Duplicate", Action::RenameResource(true)).key("Ctrl+D"),
-            Item::new("Rename\u{2026}", Action::RenameResource(false)),
+        ];
+        // An aircraft duplicates and renames with its private resources.
+        if self.name().ends_with(".PT") {
+            items.push(Item::new(
+                "Duplicate aircraft\u{2026}",
+                Action::DuplicateAircraft,
+            ));
+            items.push(Item::new(
+                "Rename reference ID\u{2026}",
+                Action::RenameAircraft,
+            ));
+        } else {
+            items.push(Item::new("Duplicate", Action::RenameResource(true)).key("Ctrl+D"));
+            items.push(Item::new("Rename\u{2026}", Action::RenameResource(false)));
+        }
+        items.extend([
             Item::sep(),
             Item::new("Export entry\u{2026}", Action::File(FileAction::Export)).key("Ctrl+E"),
-        ];
+        ]);
         if object {
             items.push(Item::new(
                 "Export object\u{2026}",
@@ -1496,10 +1510,12 @@ impl App {
             assert!(self.draw().commands.iter().any(
                 |d| matches!(d, Draw::Text(_, _, s, c, _) if s == "Paste" && *c == c::INK_FAINT.0)
             ));
+            // On an aircraft, Duplicate and Rename carry its private resources.
+            assert!(hit(self, &|a| matches!(a, Action::RenameResource(_))).is_none());
             for action in [
                 Action::CopyResource,
-                Action::RenameResource(true),
-                Action::RenameResource(false),
+                Action::DuplicateAircraft,
+                Action::RenameAircraft,
                 Action::File(FileAction::Export),
                 Action::File(FileAction::Variant),
                 Action::DeleteEntry,

@@ -20,10 +20,13 @@ fn export_object(args: &[String]) -> Result<()> {
     };
     let mut policy = Policy::default();
     let mut positional = Vec::new();
+    let (mut short, mut long) = (None, None);
     let mut rest = args.iter().skip(1);
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--keep-unresolved" => policy.keep_unresolved = true,
+            "--short" => short = Some(rest.next().ok_or("--short needs NAME")?.as_str()),
+            "--long" => long = Some(rest.next().ok_or("--long needs NAME")?.as_str()),
             "--substitute" => {
                 let value = rest.next().ok_or("--substitute needs OLD.PIC=NEW.PIC")?;
                 let (old, new) = value
@@ -66,7 +69,11 @@ fn export_object(args: &[String]) -> Result<()> {
         &catalog,
         positional[1],
         positional[2],
-        positional[3],
+        // TITLE fills both names unless --short or --long replaces one.
+        hangar_core::clone_aircraft::Names {
+            short: short.unwrap_or(positional[3]),
+            long: long.unwrap_or(positional[3]),
+        },
         &policy,
         |name| {
             let (l, i) = providers
@@ -128,7 +135,7 @@ pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]...\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]...\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  --shape-inventory INPUT.LIB [ENTRY.SH]\n  --shape-pose INPUT.LIB ENTRY.SH [NAME=VALUE...]\n  --stub-census NEW_OUTPUT.txt INPUT.LIB...\n  --geometry-check OUTPUT_DIR INPUT.LIB [ENTRY.SH...]\n  --edit-check INPUT.LIB ENTRY.SH...\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]... [--short NAME] [--long NAME]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]...\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  --shape-inventory INPUT.LIB [ENTRY.SH]\n  --shape-pose INPUT.LIB ENTRY.SH [NAME=VALUE...]\n  --stub-census NEW_OUTPUT.txt INPUT.LIB...\n  --geometry-check OUTPUT_DIR INPUT.LIB [ENTRY.SH...]\n  --edit-check INPUT.LIB ENTRY.SH...\n  --identity-check INPUT.LIB RENAME.PT NEW_ID DUPLICATE.PT DUPLICATE_ID NEW_OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -213,6 +220,7 @@ pub fn run() -> Result<()> {
             if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
             let s=app.draw().svg(app.width,app.height);platform::write_new(argument(&args,1)?,s.as_bytes())?;
         },
+        Some("--identity-check")=>{app.open(argument(&args,1)?)?;print!("{}",app.identity_check(argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,argument(&args,5)?,argument(&args,6)?)?);println!("PASS rename and same-LIB duplicate through the review, undo byte identity, create-new save");},
         Some("--clone-check")=>{app.open(argument(&args,1)?)?;app.clone_export_check(argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,argument(&args,5)?)?;println!("PASS selected-object wizard, automatic sources, review, named LIB export and reopen");},
         Some("clone-aircraft"|"export-object") => export_object(&args)?,
         Some("variant") => {
