@@ -120,26 +120,22 @@ pub fn cloned(archive: &Archive, from: &str, to: &str) -> Result<Option<Entry>> 
     }
     Ok(Some(org.renamed(&name)?))
 }
-/// Raw square sheet exactly as Hangar generates for flat-color panels: header,
-/// one raster and a full 256-color palette, nothing else.
+/// Raw sheet exactly as Hangar generates for flat-color panels: header, one
+/// raster of 8 to 256 pixels a side (square in older versions, now sized to
+/// the panel) and a full 256-color palette, nothing else.
 pub fn panel_sheet(bytes: &[u8]) -> bool {
     let field = |at| u32_at(bytes, at).ok();
-    let Some(size) = field(2) else {
+    let (Some(w), Some(h)) = (field(2), field(6)) else {
         return false;
     };
-    (8..=256).contains(&size)
-        && size.is_power_of_two()
+    let n = w * h;
+    (8..=256).contains(&w)
+        && (8..=256).contains(&h)
         && u16_at(bytes, 0) == Ok(0)
-        && bytes.len() == 64 + size * size + 768
-        && [
-            (6, size),
-            (10, 64),
-            (14, size * size),
-            (18, 64 + size * size),
-            (22, 768),
-        ]
-        .iter()
-        .all(|(at, n)| field(*at) == Some(*n))
+        && bytes.len() == 64 + n + 768
+        && [(10, 64), (14, n), (18, 64 + n), (22, 768)]
+            .iter()
+            .all(|(at, n)| field(*at) == Some(*n))
         && bytes[26..64].iter().all(|b| *b == 0)
 }
 
@@ -365,6 +361,21 @@ mod tests {
         assert!(Pic::parse(&sheet).is_ok());
         assert!(panel_sheet(&sheet));
         assert!(!panel_sheet(&texture()[..100]));
+        // Rectangular sheets sized to the panel: 128 x 32.
+        let mut wide = vec![0; 64 + 128 * 32 + 768];
+        for (at, n) in [
+            (2, 128u32),
+            (6, 32),
+            (10, 64),
+            (14, 4096),
+            (18, 4160),
+            (22, 768),
+        ] {
+            wide[at..at + 4].copy_from_slice(&n.to_le_bytes());
+        }
+        assert!(Pic::parse(&wide).is_ok() && panel_sheet(&wide));
+        wide[6] = 4;
+        assert!(!panel_sheet(&wide));
         sheet[40] = 1;
         assert!(!panel_sheet(&sheet));
     }
