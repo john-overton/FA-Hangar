@@ -539,3 +539,66 @@ Formatting, strict Clippy, all tests and the smoke test pass; the PE audit
 reports 1,219,584 bytes (32-bit, was 1,180,672) and 1,391,104 bytes (64-bit,
 was 1,346,048) with the same 60 reviewed imports. No exported aircraft has
 been flown in the original game yet; steps are in WINDOWS-TEST.md.
+
+## Unreleased identity panel, rename and duplicate
+
+Real data: a copy of `FA_2.LIB` (5,405 entries) under a scratch folder,
+`--identity-check FA_2.LIB F14.PT F14Z F18.PT F18Z IDENTITY.LIB` (release
+build, 3.8 s for both reviews, the undo/redo check and the save).
+
+- Rename F14 -> F14Z: 14 resources renamed (`F14.PT`, `F14.SH`, `F14_A.SH`
+  to `F14_S.SH`, `_F14.PIC` and `_F14_A.PIC` to `_F14_D.PIC`, `F14.ECM`,
+  `F14R.SEE` -> `F14ZR.SEE`), 0 other entries rewritten, 24 shared resources
+  left alone: 8 sounds, 4 weapons (by convention), `PALETTE.PAL`, and by use
+  `F14CC.HUD` (also ALPH, BUC, CKUO and Q5), `F.BI`, `F250.GAS`,
+  `VIS340.SEE` and the weapons' shapes and skins. No refusals, no private file
+  kept. 69 missions in the LIB name `F14.PT` and are not rewritten; `F14.HUD`
+  and `F14.PTS` keep their names (no stored link from `F14.PT`). Undo restored
+  the exact LIB bytes and redo the rename.
+- Duplicate F18 -> F18Z with the default choices: 2 copied (`F18.PT`, and
+  `F18.HUD` -> `F18Z.HUD`, which the game finds by the aircraft's name) and
+  20 names shared. `F18.SH`, the damage family and the `_F18` skins are also
+  used by `F18C.PT`, so they stay shared; `F18Z.PT` refers to them and to
+  `F18_S.SH` unchanged. The new PT was selected.
+- `validate`: the source reports 0 errors / 1,729 warnings; the result
+  0 errors / 1,743 warnings. The 14 new warnings are `F18Z.HUD`'s copies of
+  `F18.HUD`'s unresolved cockpit names (`~F18`, `~F18H`, ...; the cockpit art
+  is in another disc LIB). Entries 5,405 -> 5,407; observed references that
+  resolve inside the LIB 4,859 -> 4,879. The saved file is 31,627,535 bytes
+  (source 31,546,692): changed entries are stored uncompressed.
+- `references`: `F14Z.PT` links only local names (`F14Z.SH`, `F14Z_S.SH`,
+  `F14ZR.SEE`, `F14Z.ECM`, `F14Z_A` to `F14Z_D` by the damage-family
+  convention, the shared weapons, sounds and `F14CC.HUD`); `F14Z.SH` draws
+  `_F14Z.PIC`; `F14CC.HUD` lists ALPH, BUC, CKUO, F14Z and Q5 as users.
+  `F18Z.PT` links `F18Z.HUD` (default HUD convention) and the shared F18
+  family. No `F14*` name but `F14.HUD`, `F14.PTS` and the shared `F14CC.HUD`
+  remains.
+- `export-object FA_2.LIB F14.PT F14X "My F-14" ... --keep-unresolved
+  --short F-14X` writes `"F-14X"`, `"My F-14"`, `"F14X.PT"` (38 resources
+  with FA_2 alone).
+
+Core tests cover names-block edits (bytes outside the operand unchanged,
+`si_names` following matching text, validation), ownership (private versus
+shared by convention and by use, damage and skin families moving together),
+a rename rewriting the self reference, another object's reference, E2 and
+HUD fixed slots with nothing else changed and undo restoring the bytes,
+collision, 8.3, slot and shared-HUD refusals, the same-ID rename being empty,
+and duplicates with the default and toggled Copy/Share choices referencing
+shared names, `.ORG` companions following copied PICs and the LIB validating.
+The smoke test drives, at 800x600 and 1280x800, the Identity fields (a
+refused name, amber with the saved value, reset, undo), Rename review, Back,
+apply, undo and the empty same-ID review, the duplicate wizard and review
+with Copy/Share toggles (weapon and icon, main shape and its skin), apply
+with the new PT selected and validating, undo, and the context menu on a PT
+and on a shape. Hit geometry covers the rename and duplicate reviews, the
+wizard's short-name step and the changed Identity panel at both sizes.
+
+Formatting, strict Clippy, all tests and the smoke test pass. `App` was
+3,856 bytes after adding the boxed drafts, enough to put `mainCRTStartup`
+over the 4 KiB frame the x86_64 build cannot probe; the export review's
+unresolved-name state moved into a box (3,808 bytes) and the build links.
+Collecting name sets into a `BTreeSet` pulled in the stable sort; the names
+are inserted one by one. The PE audit reports 1,342,464 bytes (32-bit) and
+1,536,512 bytes (64-bit) with the same 60 reviewed imports. Neither aircraft
+has been listed or flown in the original game yet; steps are in
+WINDOWS-TEST.md.

@@ -362,6 +362,33 @@ In-game checks:
    texture…** and pick its own skin; after export the face that used the
    missing name shows that skin in game.
 
+## Names, reference ID rename and duplicate aircraft (unreleased)
+
+Open `FA_2.LIB`, make the edits below and save them under a custom name
+(for example `IDENT.LIB`). In a copied game installation, replace `FA_2.LIB`
+with that file, renaming it there (Hangar never saves under a retail name;
+keeping both would leave two copies of every other entry). On Linux,
+`tore-hangar --identity-check FA_2.LIB F14.PT F14Z F18.PT F18Z IDENT.LIB`
+makes the same renames with the default names instead (`F-14` / `F- 14D
+Tomcat` kept, the duplicate listed as `F/A- 18D Hornet variant`).
+
+1. Select `F14.PT`. In **Identity**, set the short name to `F-14Z` and the
+   long name to `F-14Z Test`; both show amber with the saved value. Click
+   **Rename…**, enter `F14Z`, check the review (14 renamed, the shared
+   weapons, sounds and `F14CC.HUD` left alone, the mission warning) and click
+   **Rename**.
+2. Select `F18.PT`, click **Duplicate aircraft…**, enter `F18Z`, `F/A-18Z`
+   and `F/A-18Z Test`, keep the defaults and click **Duplicate aircraft**.
+   `F18Z.PT` is selected.
+3. Save, install as above, start Fighters Anthology and open the aircraft
+   list (single mission or quick mission): **F-14Z Test** and **F/A-18Z Test** appear
+   with their new names, and the stock F/A-18 is still listed. Fly each: the
+   F-14Z shows the F-14 model, skins, damage states and cockpit; the F/A-18Z
+   behaves like the stock F/A-18.
+4. Load a stock mission that uses the F-14 (one of the 69 `FA_2.LIB`
+   missions that name `F14.PT`) and record what the game does without
+   `F14.PT`: an error, a substitute aircraft or a missing flight.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

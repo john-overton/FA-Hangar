@@ -20,6 +20,10 @@ the game. No game data ships.
 - [Command line](#command-line)
 - [Export an object and its resources](#export-an-object-and-its-resources)
   - [Unresolved in source](#unresolved-in-source)
+- [Names, reference ID and duplicates](#names-reference-id-and-duplicates)
+  - [Identity panel](#identity-panel)
+  - [Rename reference ID](#rename-reference-id)
+  - [Duplicate aircraft](#duplicate-aircraft)
 - [Work across LIBs](#work-across-libs)
 - [Flight envelope table](#flight-envelope-table)
 - [Paint a livery](#paint-a-livery)
@@ -158,7 +162,11 @@ sizes and weights.
 - Edit PT/NT/JT/OT/SEE/ECM textual BRF operands. Recognized schemas get named
   fields; other blocks retain their indexed labels. Comments, whitespace,
   line endings, labels, scaling markers and untouched values survive edits.
-- Export the selected object into a separate LIB with a new ID/display name.
+- Edit an object's short and long names in place, rename an aircraft's
+  reference ID with its private files, or duplicate it in the same LIB
+  ([Names, reference ID and duplicates](#names-reference-id-and-duplicates)).
+- Export the selected object into a separate LIB with a new ID, short name
+  and long name.
   Aircraft, weapons, equipment, shapes and individual resources use the same
   reviewed dependency graph and filename map. Aircraft retain the reviewed
   damage/shadow family. Unknown binary objects copy unchanged and report that
@@ -243,7 +251,9 @@ Manual checks against your own LIBs (never part of CI) are also in
 and part setting, including each reachable gear direction and range form, on
 in-memory copies and writes the results create-new to `NEW_DIR`;
 `--edit-check FA_2.LIB F18.SH` drives Edit Mesh and Parts through the app,
-undoing each step.
+undoing each step; `--identity-check FA_2.LIB F14.PT F14Z F18.PT F18Z
+NEW.LIB` renames one aircraft and duplicates another through their reviews,
+checks that undo restores the exact bytes and saves the result create-new.
 
 Use `inspect` to confirm field indices and values for your own file first.
 The example changes the recognized object weight operand, in its source units.
@@ -257,7 +267,9 @@ repair have CLI forms, described in
 
 1. Open the source LIB and select an object, such as `A10.PT` or `AIM9M.JT`.
 2. Click **Export object**. Enter a new ID, for example `A10V1` or `MYAIM9`,
-   then its display name. The selected entry supplies the source object.
+   then its short name (as in lists, for example `A-10V`) and its long name.
+   **Back** returns to the previous step. The selected entry supplies the
+   source object.
 3. Review the filename map. Hangar copies the resolved resource graph and
    assigns private names that do not collide with any scanned source entry.
    Use Back to change names, or Add source LIB when dependencies are elsewhere.
@@ -339,10 +351,12 @@ cargo run --locked -- export-object FA_2.LIB A10.PT A10V1 "My A-10" A10V1.LIB FA
 cargo run --locked -- export-object FA_2.LIB AIM9M.JT MYAIM9 "My missile" MYAIM9.LIB FA_1.LIB
 cargo run --locked -- export-object FA_2.LIB MIG31.PT MIG31X "My MiG-31" MIG31X.LIB FA_1.LIB --keep-unresolved
 cargo run --locked -- export-object FA_2.LIB F14.PT F14X "My F-14" F14X.LIB FA_1.LIB --substitute OLD.PIC=_F14.PIC
+cargo run --locked -- export-object FA_2.LIB F14.PT F14X "F-14X Tomcat" F14X.LIB FA_1.LIB --short F-14X
 ```
 
-Without a flag, an unresolved name refuses the export and lists each name with
-its resource. `--keep-unresolved` keeps every unresolved name as in the source.
+TITLE is written as both the short and the long name; `--short NAME` and
+`--long NAME` replace one of them. Without a flag, an unresolved name refuses
+the export and lists each name with its resource. `--keep-unresolved` keeps every unresolved name as in the source.
 `--substitute OLD.PIC=NEW.PIC` (repeatable) retargets every reference to
 `OLD.PIC` in the copied resources to `NEW.PIC`, which must be in a searched
 LIB; a substitute for a name that is not unresolved is an error. Source LIBs
@@ -351,6 +365,91 @@ the export needs, so the 140–186 MiB disc LIBs (`FA_7.LIB`, `FA_10.LIB`,
 `FA_11.LIB` and their `B` copies) work as sources.
 
 See [the Windows test checklist](WINDOWS-TEST.md).
+
+## Names, reference ID and duplicates
+
+An object definition's names block holds three strings. In `F14.PT`:
+`"F-14"` is the short name, `"F- 14D Tomcat"` the long name (the space is in
+the retail file) and `"F14.PT"` the object's reference to itself. The game
+lists aircraft by these names; missions and other files find the aircraft
+by its file name, the reference ID `F14` plus `.PT`.
+
+### Identity panel
+
+Select a PT, NT, JT or OT whose names block Hangar recognizes. The first
+panel of the inspector is **Identity**:
+
+- **Short name** and **Long name**: click either field and type the new
+  name. Each change is one undo step and changes only that string in the
+  definition. A changed name shows in amber with its **Saved** value below and
+  a reset button. A weapon's second names block (`si_names`) follows when it
+  held the same text.
+- Names are 1 to 40 plain ASCII characters without quotes, semicolons or
+  control characters. 40 is Hangar's limit, not a known game limit; retail
+  names reach 11 (short) and 28 (long) characters, so check longer names in
+  the game.
+- **Reference ID** shows the file stem, such as `F14`. On an aircraft,
+  **Rename…** beside it and **Duplicate aircraft…** below it open the
+  reviews described next. Other objects show the ID only.
+
+### Rename reference ID
+
+**Rename…** in the Identity panel, **Entry > Rename reference ID…** or
+**Rename reference ID…** in a PT's context menu asks for the new ID (1 to 6
+letters, digits or underscore) and opens a review. Nothing changes until
+**Rename**.
+
+The review lists every resource renamed, old → new, the resources whose
+stored references are rewritten in place, private files kept because their
+names do not start with the old ID, and the shared resources left alone with
+the reason. Renamed are the aircraft and the files private to it: its main
+and shadow shapes with the A–D damage family, skins and cockpit art, its
+HUD, sensors or stores no other object uses (with their `$` icons) and the
+stored originals (`.ORG`) of renamed textures. The old ID in each name is
+replaced, so `F14_C.SH` becomes `F14Z_C.SH` and `_F14_A.PIC` becomes
+`_F14Z_A.PIC`. Weapons, sounds, the game palette and anything another object
+in the LIB uses keep their names.
+
+Every recognized reference in the LIB is rewritten: BRF strings (including
+the aircraft's own `F14.PT` string), module filenames and texture names, each
+within its stored slot. The review refuses, listing why, when a new name is
+already in the LIB, does not fit an 8.3 name, or does not fit the compiled
+slot that stores it, or when the HUD the game finds by the aircraft's name is
+shared with another aircraft. Choose a shorter or different ID.
+
+The review warns: **Missions and other LIBs that refer to F14.PT by name
+will not find the renamed aircraft.** It also counts the missions and other
+unparsed text resources in this LIB that name it; they are not rewritten.
+Same-stem files the aircraft holds no stored reference to, such as `F14.PTS`
+and `F14.HUD` in `FA_2.LIB`, keep their names and are listed as notes. One
+undo step restores the exact bytes. Retail LIB names stay protected on save;
+save the result as a custom LIB.
+
+### Duplicate aircraft
+
+**Duplicate aircraft…** in the Identity panel, **Entry > Duplicate
+aircraft…** or a PT's context menu (where it replaces the plain Duplicate)
+runs the export steps — new ID, short name, long name — and then reviews a
+copy inside the same LIB.
+
+Each row is a resource the new aircraft uses, with **Copy** or **Share**:
+
+- **Copy** gives the new aircraft its own file under a new private name.
+  By default the aircraft, its shapes and damage family, skins and HUD are
+  copied when nothing else in the LIB uses them. A HUD the game finds by the
+  aircraft's name is always copied.
+- **Share** keeps the existing name: the copy refers to the same file. By
+  default weapons, sounds, sensors and stores, the game palette and every
+  resource already shared in the LIB are shared. Sharing a shape also shares
+  what only it uses, such as its skins.
+- A damage family, a texture with its suffix family (`_F18`, `_F18_A`, …) and
+  a store with its icon switch together.
+
+Names are checked against the whole LIB, and copied textures take their
+stored originals along. **Duplicate aircraft** applies it as one undo step
+and selects the new PT. In `FA_2.LIB`, `F18.PT` shares its shapes and skins
+with `F18C.PT`, so by default only the PT and its HUD are copied; choose
+**Copy** on `F18.SH` and the damage family for a separate model.
 
 ## Work across LIBs
 
@@ -370,8 +469,10 @@ See [the Windows test checklist](WINDOWS-TEST.md).
 4. **Entry > Rename resource** previews changes to decoded stored references in
    the active LIB. Compiled filename capacity is checked before applying. Known
    implicit-family bindings and users in other open LIBs can block a rename;
-   use **Export object** for private aircraft families. **Ctrl+D** duplicates
-   one resource under a new name, retaining its shared dependencies.
+   use [Rename reference ID](#rename-reference-id) for an aircraft and its
+   private files. **Ctrl+D** duplicates one resource under a new name,
+   retaining its shared dependencies; [Duplicate
+   aircraft](#duplicate-aircraft) copies an aircraft with its private files.
 5. Pin a definition with **Entry > Use as graft donor**, switch LIBs and select
    a target. Graft's selectable groups work across library boundaries. Dragging
    onto a same-type definition in the active outliner also prepares a graft.
@@ -405,7 +506,8 @@ repeats the release action. **Esc** or the right mouse button cancels the drag.
 
 Right-click an entry for its context menu. It selects the entry first
 (switching LIB if needed) and lists **Copy to** and **Move to** submenus with
-every other open LIB, then **Copy**, **Paste**, **Duplicate**, **Rename…**,
+every other open LIB, then **Copy**, **Paste**, **Duplicate**, **Rename…**
+(on a PT, **Duplicate aircraft…** and **Rename reference ID…**),
 **Export entry…**, **Export object…** for definitions, and **Delete**, with
 their shortcuts. **Copy to** and **Move to** open the same transfer review
 with Copy or Move already chosen. Right-click a LIB root for **Paste**,

@@ -7,6 +7,27 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Identity panel.** PT, NT, JT and OT definitions open with an Identity
+  panel: the short and long names edit in place (one undo step each, amber
+  with the saved value and a reset) and the reference ID shows beside
+  **Rename…**; aircraft add **Duplicate aircraft…**.
+- **Rename reference ID.** Renames an aircraft and the files private to it
+  (shapes, damage family, skins, cockpit art, HUD, unshared sensors and
+  stores with their icons, stored originals) in place, and rewrites every
+  recognized reference in the LIB, including the aircraft's own name. The
+  review lists renamed, rewritten and shared resources, refuses collisions,
+  names beyond 8.3 and names too long for their stored slot, and warns that
+  missions and other LIBs still name the old ID. One undo step.
+- **Duplicate aircraft.** Copies an aircraft inside the same LIB under a new
+  ID and names. A review offers Copy or Share per resource: private shapes,
+  skins and HUD are copied by default; weapons, sounds, sensors and anything
+  already shared keep their names. One undo step; the new PT is selected.
+  On a PT the context menu's Duplicate opens it, and the Entry menu lists
+  both new actions.
+- **Short and long names in the export.** Export object asks for the short
+  and the long name separately instead of writing one title into both.
+  `export-object` keeps its TITLE argument and adds `--short NAME` and
+  `--long NAME`.
 - **App icon.** A gold outline on a gunmetal plate with TORE over HANGAR
   ([design](../tore-hangar-design/icons/app/README.md)). Windows builds embed
   it at 16, 24, 32 and 48 px in 8-bit and 32-bit color plus a 256 px PNG, so

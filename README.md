@@ -33,6 +33,9 @@ the game. No game data ships.
 - Export an aircraft, weapon or other object with its resources into a new,
   privately named LIB. Names no LIB provides are kept as in the source, or a
   texture is retargeted, after an explicit review.
+- Edit an object's short and long names in place, rename an aircraft's
+  reference ID with its private files, or duplicate it in the same LIB with
+  a Copy/Share review per resource.
 - View SH static poses and place hardpoints. Edit Mesh selects vertices or
   faces (click, box, part) and moves, scales, deletes, flips, duplicates,
   extrudes and adds geometry on retail aircraft, region by region.

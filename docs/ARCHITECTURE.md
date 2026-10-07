@@ -324,7 +324,8 @@ Rename plans rewrite recognized BRF and module literals only, preserving fixed
 compiled slots and unknown bytes. They refuse known damage/HUD/store/palette
 conventions that need family-wide identity changes, and known external users
 without a local resource in another open LIB. Unknown runtime names remain
-unverified. Aircraft-family creation stays in the dedicated Export object wizard.
+unverified. Aircraft-family renames and copies go through `identity.rs` (see
+Identity, rename and duplicate ownership); the plain rename keeps refusing them.
 
 
 ## Object export and initial SH authoring (0.7)
@@ -806,3 +807,49 @@ rather than overwriting it; texture clones copy the companion when present.
 Package checks parse changed `.ORG` payloads as PIC, warn on originals without
 their PIC and note raster-layout mismatches. FA is expected to ignore entries it
 never looks up by name; original-game acceptance is listed in WINDOWS-TEST.md.
+
+## Identity, rename and duplicate ownership
+
+`hangar-core/src/identity.rs` owns names blocks and in-place aircraft
+identity changes. A names block is any `ot_names`/`si_names` pointer whose
+block holds exactly three strings: short name, long name, self reference
+(`F14.PT`). Name edits replace only the quoted operand through the lossless
+BRF editor; a weapon's `si_names` follows when it held the same text. Names
+are ASCII without quotes, semicolons or control characters, 1..40 long. No
+game-side limit was found in the sibling format notes; retail names reach 11
+(short) and 28 (long) characters, so 40 is the existing export limit, kept.
+The export takes separate short and long names (`clone_aircraft::Names`);
+a single title still fills both.
+
+Ownership starts from the export graph (`clone_aircraft::graph`, the same
+traversal as the export: PT, main/shadow and A–D damage family, explicit or
+name-derived HUD, private or game palette, BRF and module references, store
+icons). Users come from a full scan of the LIB: every BRF/PL/PE entry's
+stored references and the reviewed conventions (damage family, default HUD,
+store icon), bounded at 128 MiB decoded; unparsed entries are only searched
+for the aircraft's file name. A graph resource is shared when it is shared by
+convention (weapons `JT`, sounds, fonts, other objects, the game palette) or
+when any user lies outside the private set; this repeats until stable.
+Groups move as one: the damage family, a texture with its suffix family, a
+store with its `$` icon. Sensors, ECM and fuel tanks are private when no other
+object uses them.
+
+Rename substitutes the old ID after any `~ _ $ & # ^` prefix in each private
+name; a private name without the ID keeps its name. `.ORG` companions follow
+their PICs. Every BRF/module entry in the LIB is rewritten through the same
+bounded slot rules as resource rename, so the self reference and other
+objects' references follow. Refusals: a new name already present (and not
+leaving), longer than 8.3, two names colliding, a slot too small, or a
+name-derived HUD that is shared. The plan applies as one transaction, with
+stale-entry checks; undo restores the exact bytes and a same-ID rename is
+empty. Missions and unparsed text are not rewritten; the review counts the
+ones that name the aircraft and warns that other LIBs are not searched.
+Same-stem files with no stored link (`F14.PTS`, `F14.HUD`) keep their names.
+
+Duplicate builds the export package against the current document with
+`clone_aircraft::build_sharing`: names in the share set are not traversed or
+copied, and copied resources keep their stored bytes for them. Defaults copy
+the private set except sensors and stores, and share the rest; the aircraft
+and a name-derived HUD are always copied, and groups switch together. Private
+names are generated against the whole LIB, `.ORG` companions follow copied
+PICs, and the package is inserted as one transaction after a collision check.
