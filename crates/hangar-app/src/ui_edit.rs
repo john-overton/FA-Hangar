@@ -142,14 +142,18 @@ impl App {
         let Some(model) = &self.model else {
             return;
         };
+        let mut faces = self.ed.mesh_faces.clone();
+        faces.sort_unstable();
+        let mut seen = vec![false; model.vertices.len()];
         let mut out = Vec::new();
         for f in model
             .faces
             .iter()
-            .filter(|f| self.ed.mesh_faces.contains(&f.offset))
+            .filter(|f| faces.binary_search(&f.offset).is_ok())
         {
             for i in &f.indices {
-                if !out.contains(i) {
+                if seen.get(*i) == Some(&false) {
+                    seen[*i] = true;
                     out.push(*i);
                 }
             }
@@ -162,14 +166,23 @@ impl App {
         let Some(model) = self.preview.as_ref().or(self.model.as_ref()) else {
             return Vec::new();
         };
+        // Sorted offsets and a vertex mask keep this linear for large selections.
+        let mut faces = self.ed.mesh_faces.clone();
+        faces.sort_unstable();
+        let mut picked = vec![false; model.vertices.len()];
+        for i in &self.mesh_vertices {
+            if let Some(p) = picked.get_mut(*i) {
+                *p = true;
+            }
+        }
         (0..model.faces.len())
             .filter(|f| {
                 let face = &model.faces[*f];
                 if self.ed.face_select {
-                    self.ed.mesh_faces.contains(&face.offset)
+                    faces.binary_search(&face.offset).is_ok()
                 } else {
                     !face.indices.is_empty()
-                        && face.indices.iter().all(|i| self.mesh_vertices.contains(i))
+                        && face.indices.iter().all(|i| picked.get(*i) == Some(&true))
                 }
             })
             .collect()
