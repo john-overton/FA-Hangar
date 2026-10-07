@@ -150,12 +150,15 @@ impl Brf {
         let root_len = fields.iter().take_while(|f| f.block.is_empty()).count();
         let mut layout = Vec::new();
         match extension.to_ascii_uppercase().as_str() {
-            "PT" => {
+            "PT" | "NT" => {
                 for (prefix, s) in [
                     ("object", schema::OBJECT),
                     ("npc", schema::NPC),
                     ("plane", schema::PLANE),
                 ] {
+                    if prefix == "plane" && extension.eq_ignore_ascii_case("NT") {
+                        continue;
+                    }
                     for (kind, name) in s {
                         layout.push((prefix, *kind, *name));
                     }
@@ -341,6 +344,24 @@ pub fn demo_with_records() -> Vec<u8> {
     }
     text.push_str("end\r\n");
     text.into_bytes()
+}
+
+/// Synthetic NPC definition for editor checks; contains no game values.
+pub fn demo_npc() -> Vec<u8> {
+    let mut bytes = demo_with_records();
+    let b = Brf::parse(&bytes, "PT").unwrap();
+    for f in b
+        .fields
+        .iter()
+        .rev()
+        .filter(|f| f.label.starts_with("plane."))
+    {
+        bytes.drain(f.kind_start..f.end);
+    }
+    String::from_utf8(bytes)
+        .unwrap()
+        .replace("DEMO.PT", "DEMO.NT")
+        .into_bytes()
 }
 
 #[cfg(test)]

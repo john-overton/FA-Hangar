@@ -271,7 +271,14 @@ pub fn texture_panel(
         ));
     }
     let mut payload = source[code.start..code.start + code.len].to_vec();
+    // The original polygon was copied into the continuation. Replace its dead
+    // bytes with valid padding so whole-module readers keep later boundaries.
+    if successor - local < 8 {
+        return Err(invalid("Face too short for a continuation stub"));
+    }
+    payload[local..successor].fill(0x1e);
     payload[local..local + 4].copy_from_slice(&jump(local, code.len)?);
+    payload[successor - 4..successor].copy_from_slice(&jump(successor - 4, successor)?);
     payload.extend(extension);
     let mut out = source.to_vec();
     let new_start;

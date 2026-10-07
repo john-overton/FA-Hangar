@@ -17,6 +17,8 @@ pub struct Face {
     pub sub: u8,
     pub flags: u8,
     pub color: u8,
+    pub colors: Vec<u8>,
+    pub normal: Option<[i32; 3]>,
     pub texture: String,
     pub uv: Vec<[i32; 2]>,
     pub uv_offsets: Vec<usize>,
@@ -32,6 +34,16 @@ pub struct Model {
     pub writable: bool,
     pub reason: String,
     pub records: Vec<Record>,
+    pub state_words: BTreeSet<usize>,
+    pub parts: Vec<Part>,
+}
+#[derive(Clone, Debug)]
+pub struct Part {
+    pub offset: usize,
+    pub target: usize,
+    pub position: [i32; 3],
+    /// Stored C4 angles; native arithmetic can overwrite these at runtime.
+    pub rotation: [i32; 3],
 }
 #[derive(Clone, Debug)]
 pub struct Record {
@@ -114,6 +126,10 @@ fn section(data: &[u8]) -> Result<(usize, usize, usize)> {
 }
 impl Model {
     pub fn parse(data: &[u8]) -> Result<Self> {
+        Self::with_state(data, &BTreeMap::new())
+    }
+    /// Reviewed state switches only. Imported code and angle arithmetic are inert.
+    pub fn with_state(data: &[u8], state: &BTreeMap<usize, i32>) -> Result<Self> {
         let (start, len, base) = section(data)?;
         let c = &data[start..start + len];
         let mut out = Self {
@@ -124,8 +140,11 @@ impl Model {
             writable: true,
             reason: String::new(),
             records: Vec::new(),
+            state_words: BTreeSet::new(),
+            parts: Vec::new(),
         };
         let mut slots = BTreeMap::<usize, usize>::new();
+        let mut vertex_colors = BTreeMap::<usize, u8>::new();
         let mut seen = BTreeSet::new();
         let mut texture = String::new();
         let mut material_selector = Vec::new();
@@ -156,6 +175,36 @@ impl Model {
             }
             let record_start = p;
             match op {
+                0xeb => {
+                    out.writable = false;
+                    // Reviewed CHAP/SA2 loaded-launcher selection envelope.
+                    // This chooses the loaded static branch; no HARD callback runs.
+                    if slice(c, p, 7)? != [0xeb, 5, 0xb8, 1, 0, 0, 0] {
+                        return Err(invalid("Unsupported launcher selection envelope"));
+                    }
+                    let draw = if slice(c, p + 7, 2)? == [0x83, 0xf8]
+                        && (1..=4).contains(&slice(c, p + 9, 1)?[0])
+                        && slice(c, p + 10, 2)? == [0x72, 0x11]
+                    {
+                        p + 12
+                    } else if slice(c, p + 7, 4)? == [0x0b, 0xc0, 0x74, 0x11] {
+                        p + 11
+                    } else {
+                        return Err(invalid("Unsupported launcher load comparison"));
+                    };
+                    if slice(c, draw, 1)? != [0x68]
+                        || slice(c, draw + 5, 1)? != [0x68]
+                        || slice(c, draw + 10, 1)? != [0xc3]
+                    {
+                        return Err(invalid("Invalid launcher drawing reference"));
+                    }
+                    p = u32_at(c, draw + 1)?
+                        .checked_sub(base)
+                        .ok_or("Launcher drawing address underflow")?;
+                    if slice(c, p, 2)? != [0x12, 0] {
+                        return Err(invalid("Launcher reference is not an SH drawing call"));
+                    }
+                }
                 0x38 => {
                     out.writable = false;
                     let t = target(p + 3, word(c, p + 1)?, len)?;
@@ -178,6 +227,14 @@ impl Model {
                 0xc4 => {
                     out.writable = false;
                     let t = target(p + 16, word(c, p + 14)?, len)?;
+                    if !out.parts.iter().any(|part| part.offset == start + p) {
+                        out.parts.push(Part {
+                            offset: start + p,
+                            target: start + t,
+                            position: [word(c, p + 2)?, word(c, p + 6)?, word(c, p + 4)?],
+                            rotation: [word(c, p + 8)?, word(c, p + 10)?, word(c, p + 12)?],
+                        });
+                    }
                     stack.push((
                         p + 16,
                         end,
@@ -204,10 +261,13 @@ impl Model {
                         if slice(c, at, 3)? != [0x66, 0x83, 0x3d] {
                             break;
                         }
-                        let imm = slice(c, at + 7, 1)?[0] as i8;
+                        let address = u32_at(c, at + 3)?;
+                        out.state_words.insert(address);
+                        let value = state.get(&address).copied().unwrap_or(0);
+                        let imm = slice(c, at + 7, 1)?[0] as i8 as i32;
                         let take = match slice(c, at + 8, 1)?[0] {
-                            0x74 => imm == 0,
-                            0x75 => imm != 0,
+                            0x74 => value == imm,
+                            0x75 => value != imm,
                             _ => return Err(invalid("Unsupported SH pose guard")),
                         };
                         if take {
@@ -255,6 +315,12 @@ impl Model {
                     }
                     p += 6 + count * 6;
                 }
+                0xf6 => {
+                    out.writable = false;
+                    vertex_colors.insert(u16_at(c, p + 1)?, slice(c, p + 3, 1)?[0]);
+                    slice(c, p, 7)?;
+                    p += 7;
+                }
                 0xfc => {
                     let addr = p;
                     let h = slice(c, p, 5)?;
@@ -270,6 +336,7 @@ impl Model {
                         return Err(invalid("Invalid SH polygon"));
                     }
                     let mut indices = Vec::with_capacity(count);
+                    let mut colors = Vec::with_capacity(count);
                     for _ in 0..count {
                         let i = if flags & 4 != 0 {
                             let i = u16_at(c, p)?;
@@ -280,6 +347,11 @@ impl Model {
                             p += 1;
                             i
                         };
+                        colors.push(if sub == 0xee {
+                            *vertex_colors.get(&i).unwrap_or(&c[addr + 3])
+                        } else {
+                            c[addr + 3]
+                        });
                         indices.push(
                             *slots
                                 .get(&i)
@@ -309,6 +381,12 @@ impl Model {
                             sub,
                             flags,
                             color: c[addr + 3],
+                            colors,
+                            normal: if sub & 0x60 != 0 {
+                                Some([word(c, addr + 5)?, word(c, addr + 9)?, word(c, addr + 7)?])
+                            } else {
+                                None
+                            },
                             texture: texture.clone(),
                             uv,
                             uv_offsets,
@@ -376,7 +454,7 @@ impl Model {
             let length = match op {
                 0x12 | 0x48 => 4,
                 0xc4 => 16,
-                0xf0 => 2,
+                0xf0 | 0xeb => 2,
                 _ => p.saturating_sub(record_start),
             };
             out.records.push(Record {

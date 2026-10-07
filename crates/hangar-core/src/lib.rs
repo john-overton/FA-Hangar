@@ -5,6 +5,7 @@ extern crate alloc;
 extern crate std;
 #[macro_use]
 extern crate alloc as alloc_macros;
+pub mod animation;
 pub mod archive;
 pub mod audio;
 pub mod authoring;

@@ -18,8 +18,10 @@ pub enum Aspect {
     Seeker,
     Motor,
     Warhead,
+    Movement,
+    Engagement,
 }
-pub const ASPECTS: [Aspect; 10] = [
+pub const ASPECTS: [Aspect; 12] = [
     Aspect::Envelope,
     Aspect::Propulsion,
     Aspect::Handling,
@@ -30,6 +32,8 @@ pub const ASPECTS: [Aspect; 10] = [
     Aspect::Seeker,
     Aspect::Motor,
     Aspect::Warhead,
+    Aspect::Movement,
+    Aspect::Engagement,
 ];
 impl Aspect {
     pub fn label(self) -> &'static str {
@@ -44,6 +48,8 @@ impl Aspect {
             Self::Seeker => "Seeker",
             Self::Motor => "Motor",
             Self::Warhead => "Warhead",
+            Self::Movement => "Movement",
+            Self::Engagement => "Engagement / firing",
         }
     }
     pub fn bit(self) -> u16 {
@@ -51,6 +57,31 @@ impl Aspect {
     }
 }
 pub fn aspect(label: &str) -> Option<Aspect> {
+    if matches!(label, "object._acc" | "object._dacc") {
+        return Some(Aspect::Movement);
+    }
+    if matches!(
+        label,
+        "npc.searchFrequencyT"
+            | "npc.unreadyAttackT"
+            | "npc.attackT"
+            | "npc.retargetT"
+            | "npc.zoneDist"
+    ) || label.starts_with("projectile.offsetFire")
+        || label.starts_with("projectile.gameRound")
+        || label.starts_with("projectile.gameBurst")
+        || matches!(
+            label,
+            "projectile.reloadT"
+                | "projectile.startupShots"
+                | "projectile.actualRoundsPerGame"
+                | "projectile.randomFirePercent"
+                | "projectile.launchRetard"
+        )
+    {
+        return Some(Aspect::Engagement);
+    }
+
     if label.starts_with("hardpoint[") || label == "npc.numHards" {
         return Some(Aspect::Hardpoints);
     }

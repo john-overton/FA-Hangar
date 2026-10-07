@@ -42,6 +42,7 @@ fn resource_extension(s: &str) -> bool {
             | "BI"
             | "JT"
             | "OT"
+            | "NT"
             | "SEE"
             | "ECM"
             | "GAS"

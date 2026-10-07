@@ -1,4 +1,4 @@
-//! Source-coordinate PT stations. Geometry and executable sections are untouched.
+//! Source-coordinate PT/NT stations. Geometry and executable sections are untouched.
 use crate::{
     brf::{Brf, Field},
     invalid, Result,
@@ -12,6 +12,15 @@ pub struct Station {
     pub position: [i32; 3],
     pub store: Option<String>,
     pub fields: Vec<usize>,
+}
+fn parse(bytes: &[u8]) -> Result<Brf> {
+    let b = Brf::parse(bytes, "PT")?;
+    if b.fields.iter().any(|f| f.label == "npc.hards") {
+        return Ok(b);
+    }
+    let b = Brf::parse(bytes, "NT")?;
+    header(&b)?;
+    Ok(b)
 }
 fn number(f: &Field) -> Result<i32> {
     if let Some(v) = f.value.strip_prefix('$') {
@@ -32,12 +41,12 @@ fn header(brf: &Brf) -> Result<(usize, usize)> {
         .fields
         .iter()
         .position(|f| f.label == "npc.numHards")
-        .ok_or("Unrecognized PT station schema")?;
+        .ok_or("Unrecognized PT/NT station schema")?;
     let ptr = brf
         .fields
         .iter()
         .position(|f| f.label == "npc.hards")
-        .ok_or("Unrecognized PT station pointer")?;
+        .ok_or("Unrecognized PT/NT station pointer")?;
     if brf
         .issues
         .iter()
@@ -105,7 +114,7 @@ fn patch(bytes: &[u8], mut edits: Vec<(usize, usize, String)>) -> Result<Vec<u8>
         last = a;
         out.splice(a..b, value.bytes());
     }
-    let brf = Brf::parse(&out, "PT")?;
+    let brf = parse(&out)?;
     read(&brf)?;
     Ok(out)
 }
@@ -149,7 +158,7 @@ pub fn position(bytes: &[u8], station: usize, xyz: [i32; 3]) -> Result<Vec<u8>> 
             "Station coordinates must fit signed 16-bit source values",
         ));
     }
-    let b = Brf::parse(bytes, "PT")?;
+    let b = parse(bytes)?;
     let rows = read(&b)?;
     let row = rows.get(station).ok_or("No selected station")?;
     b.edit_many(
@@ -158,11 +167,15 @@ pub fn position(bytes: &[u8], station: usize, xyz: [i32; 3]) -> Result<Vec<u8>> 
             .filter(|i| row.position[*i] != xyz[*i])
             .map(|i| (row.fields[i + 1], xyz[i].to_string()))
             .collect::<Vec<_>>(),
-        "PT",
+        if b.fields.iter().any(|f| f.label.starts_with("plane.")) {
+            "PT"
+        } else {
+            "NT"
+        },
     )
 }
 pub fn add(bytes: &[u8], donor: Option<usize>, xyz: [i32; 3]) -> Result<Vec<u8>> {
-    let b = Brf::parse(bytes, "PT")?;
+    let b = parse(bytes)?;
     let rows = read(&b)?;
     if rows.len() >= 64 {
         return Err(invalid("At most 64 stations"));
@@ -215,7 +228,7 @@ pub fn add(bytes: &[u8], donor: Option<usize>, xyz: [i32; 3]) -> Result<Vec<u8>>
     position(&out, rows.len(), xyz)
 }
 pub fn remove(bytes: &[u8], station: usize) -> Result<Vec<u8>> {
-    let b = Brf::parse(bytes, "PT")?;
+    let b = parse(bytes)?;
     let rows = read(&b)?;
     if rows.len() <= 1 {
         return Err(invalid(
@@ -244,7 +257,7 @@ pub fn remove(bytes: &[u8], station: usize) -> Result<Vec<u8>> {
     )
 }
 pub fn store(bytes: &[u8], station: usize, name: &str) -> Result<Vec<u8>> {
-    let b = Brf::parse(bytes, "PT")?;
+    let b = parse(bytes)?;
     let rows = read(&b)?;
     let row = rows.get(station).ok_or("No selected station")?;
     let f = &b.fields[row.fields[8]];
@@ -334,5 +347,43 @@ mod tests {
             .replace("end\r\n", ":alias\r\nptr stations\r\nend\r\n");
         assert!(add(source.as_bytes(), None, [0; 3]).is_err());
         assert!(remove(source.as_bytes(), 0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod npc_tests {
+    use super::*;
+    #[test]
+    fn npc_stations_support_move_slew_store_and_structural_undo() {
+        let bytes = crate::brf::demo_npc();
+        let b = Brf::parse(&bytes, "NT").unwrap();
+        assert!(b.issues.is_empty());
+        assert_eq!(read(&b).unwrap().len(), 2);
+        let moved = position(&bytes, 0, [12, -5, 30]).unwrap();
+        let b = Brf::parse(&moved, "NT").unwrap();
+        assert_eq!(read(&b).unwrap()[0].position, [12, -5, 30]);
+        let i = read(&b).unwrap()[0].fields[6];
+        let slew = b.edit(&moved, i, "16000", "NT").unwrap();
+        let added = add(&slew, Some(0), [20, 10, 5]).unwrap();
+        assert_eq!(read(&Brf::parse(&added, "NT").unwrap()).unwrap().len(), 3);
+        let stored = store(&added, 2, "TEST.JT").unwrap();
+        assert_eq!(
+            read(&Brf::parse(&stored, "NT").unwrap()).unwrap()[2]
+                .store
+                .as_deref(),
+            Some("TEST.JT")
+        );
+        let removed = remove(&added, 2).unwrap();
+        assert_eq!(removed, slew);
+        for (before, after) in Brf::parse(&bytes, "NT")
+            .unwrap()
+            .fields
+            .iter()
+            .zip(Brf::parse(&moved, "NT").unwrap().fields)
+        {
+            if !before.label.starts_with("hardpoint[0].pos.") {
+                assert_eq!(before.value, after.value);
+            }
+        }
     }
 }
