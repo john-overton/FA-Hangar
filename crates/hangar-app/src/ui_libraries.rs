@@ -291,6 +291,8 @@ impl App {
     pub(super) fn copy_resource(&mut self) -> Result<()> {
         self.transfer_source = None;
         self.transfer_move = false;
+        // Ctrl+C/V includes linked files by default; drops opt out after this call.
+        self.include_dependencies = true;
         self.finish_stroke();
         if self.doc.archive.entries.get(self.selected).is_none() {
             return Err("Select a resource to copy".into());
