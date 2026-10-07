@@ -194,6 +194,7 @@ impl App {
                     .ok_or("Coordinate overflow")?;
             }
         }
+        preview.refresh_normals(&d.model);
         self.mesh_drag.as_mut().unwrap().delta = delta;
         self.preview = Some(preview);
         Ok(())

@@ -511,6 +511,7 @@ impl Model {
                 return Err(invalid("Transform exceeds signed 16-bit coordinates"));
             }
         }
+        out.refresh_normals(self);
         Ok(out)
     }
     pub fn write(&self, source: &[u8]) -> Result<Vec<u8>> {
@@ -943,6 +944,13 @@ mod tests {
         let mut edit = m.clone();
         edit.vertices[0].point = [400, 0, 0];
         assert!(edit.write(&b).unwrap_err().contains("byte width"));
+        let m = Model::parse(&b).unwrap();
+        let rotated = m.transformed(Transform::Rotate(0, 90)).unwrap();
+        assert_eq!(rotated.faces[0].normal, Some([0, 32765, 0]));
+        let written = Model::parse(&rotated.write(&b).unwrap()).unwrap();
+        for (preview, stored) in rotated.faces.iter().zip(&written.faces) {
+            assert_eq!(preview.normal, stored.normal, "Preview culls as written");
+        }
         assert_eq!(face_normal(&[[0, 0, 0], [1, 0, 0], [2, 0, 0]]), None);
         assert_eq!(
             face_normal(&[[0, 0, 0], [30000, 0, 0], [0, 30000, 0]]),

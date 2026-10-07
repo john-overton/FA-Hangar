@@ -12,6 +12,9 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   use the winding found in retail shapes (previously they were written
   inverted), skip collinear leading vertices, and keep the stored normal when
   a face has no non-degenerate vertex triple.
+- Transform and vertex-drag previews refresh face normals the same way the
+  write does, so the textured preview hides the same rear faces the saved
+  shape will.
 
 ## 0.8.2
 
