@@ -172,6 +172,10 @@ pub(super) fn category_of(name: &str) -> usize {
         _ => 8,
     }
 }
+/// The outliner group icon for an entry name.
+pub(super) fn group_icon(name: &str) -> Icon {
+    GROUPS[category_of(name)].2
+}
 /// Draw a generated icon on the default editor ground (`gm-800`).
 pub(super) fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
     d.icon(x, y, i, color, c::GM_800);
@@ -2170,7 +2174,12 @@ impl App {
         o.stack_end(s);
     }
 
+    /// Raw BRF field table: name, type, value (NumberField), on-disk value
+    /// and a reset button for changed operands. `full` is the Flight editor
+    /// (with its own header and the group filter); otherwise the dock.
     fn fields_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32, full: bool) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, Btn};
         if full
             && self.field_group == Some(hangar_core::definition::Aspect::Envelope)
             && !self.envelope_rows().is_empty()
@@ -2181,38 +2190,58 @@ impl App {
         o.canvas.rect(x, y, w, h, c::GM_800);
         let mut top = y;
         if full {
-            o.canvas
-                .label(x + 12, y + 19, "Definition fields / stored values", c::INK);
-            top += 28;
+            let d = &mut o.canvas;
+            d.rect(x, y + m::EDITOR_HEADER_H - 1, w, 1, c::GM_1000);
+            let title = self
+                .field_group
+                .map_or("All fields".into(), |g| format!("{} fields", g.label()));
+            d.styled(
+                x + space::SPACE_3,
+                baseline(y, m::EDITOR_HEADER_H, Style::Strong),
+                &fit(&title, w - 2 * space::SPACE_3, Style::Strong),
+                c::INK,
+                Style::Strong,
+            );
+            top += m::EDITOR_HEADER_H;
         }
         let wide = w > 570;
         let typed = w > 440;
-        let vx = x + if wide { w * 59 / 100 } else { w / 2 };
-        let tx = x + w * 44 / 100;
-        let ox = x + w * 80 / 100;
-        let valuew = if wide { ox - vx - 12 } else { w / 2 - 36 };
-        o.canvas.rect(x, top, w, 24, c::GM_900);
-        o.canvas.label(x + 10, top + 16, "FIELD", c::INK_MUTED);
+        let reset_w = m::ROW_H;
+        let vx = x + if wide { w * 52 / 100 } else { w / 2 };
+        let tx = x + w * 36 / 100;
+        let ox = x + w * 78 / 100;
+        let vw = if wide {
+            ox - vx - space::SPACE_2
+        } else {
+            x + w - reset_w - 6 - vx
+        };
+        let d = &mut o.canvas;
+        d.rect(x, top, w, m::ROW_H, c::GM_900);
+        let head = baseline(top, m::ROW_H, Style::Section);
+        d.styled(x + 10, head, "FIELD", c::INK_MUTED, Style::Section);
         if typed {
-            o.canvas.label(tx, top + 16, "TYPE", c::INK_MUTED);
+            d.styled(tx, head, "TYPE", c::INK_MUTED, Style::Section);
         }
-        o.canvas.label(vx, top + 16, "VALUE", c::INK_MUTED);
+        d.styled(vx, head, "VALUE", c::INK_MUTED, Style::Section);
         if wide {
-            o.canvas.label(ox, top + 16, "ON DISK", c::INK_MUTED);
+            d.styled(ox, head, "ON DISK", c::INK_MUTED, Style::Section);
         }
         let Some(b) = &self.brf else {
-            label_fit(
-                &mut o.canvas,
-                x + 12,
-                top + 50,
-                w - 24,
-                "Select a PT / JT / NT / OT definition to edit.",
-                c::INK_FAINT,
+            d.styled(
+                x + space::SPACE_3,
+                baseline(top + m::ROW_H + space::SPACE_2, m::ROW_H, Style::Label),
+                &fit(
+                    "Select a PT, JT, NT or OT definition to edit its fields.",
+                    w - 2 * space::SPACE_3,
+                    Style::Label,
+                ),
+                c::INK_MUTED,
+                Style::Label,
             );
             return;
         };
-        let rowh = if full { 26 } else { 22 };
-        let start = top + 24;
+        let rowh = m::ROW_H;
+        let start = top + m::ROW_H;
         for (row, (i, f)) in b
             .fields
             .iter()
@@ -2228,131 +2257,169 @@ impl App {
             .enumerate()
         {
             let yy = start + row as i32 * rowh;
+            let pick = [x, yy, vx - x, rowh];
+            let fill = if i == self.field_selected {
+                c::AMBER_DEEP
+            } else if o.over(pick) {
+                c::GM_700
+            } else if row % 2 == 0 {
+                c::GM_800
+            } else {
+                c::GM_900
+            };
             let d = &mut o.canvas;
-            d.rect(
-                x,
-                yy,
-                w,
-                rowh,
-                if i == self.field_selected {
-                    c::AMBER_DEEP
-                } else if row % 2 == 0 {
-                    c::GM_800
-                } else {
-                    c::GM_900
-                },
-            );
-            text_fit(
-                d,
+            d.rect(x, yy, w, rowh, fill);
+            let base = baseline(yy, rowh, Style::Value);
+            d.styled(
                 x + 10,
-                yy + 16,
-                if typed { tx - x - 20 } else { w / 2 - 20 },
-                &f.label,
+                base,
+                &fit(
+                    &f.label,
+                    if typed { tx - x - 20 } else { vx - x - 20 },
+                    Style::Value,
+                ),
                 c::INK_MUTED,
+                Style::Value,
             );
             if typed {
-                text_fit(d, tx, yy + 16, vx - tx - 10, &f.kind, c::INK_FAINT);
-            }
-            text_fit(
-                d,
-                vx,
-                yy + 16,
-                valuew,
-                &format!("{}{}", if f.scaled { "^" } else { "" }, f.value),
-                if self.field_changed(i) {
-                    c::AMBER
+                let kind = if f.scaled {
+                    format!("{} \u{b7} scaled", f.kind)
                 } else {
-                    c::INK
-                },
-            );
+                    f.kind.clone()
+                };
+                d.styled(
+                    tx,
+                    base,
+                    &fit(&kind, vx - tx - 10, Style::Value),
+                    c::INK_MUTED,
+                    Style::Value,
+                );
+            }
+            o.hit(pick, Action::PickField(i));
+            self.field_control(o, [vx, yy, vw, rowh], i);
+            let changed = self.field_changed(i);
             if wide {
                 let old = self
                     .original_brf
                     .as_ref()
                     .and_then(|b| b.fields.get(i))
-                    .map_or_else(
-                        || "new".into(),
-                        |f| format!("{}{}", if f.scaled { "^" } else { "" }, f.value),
-                    );
-                text_fit(d, ox, yy + 16, x + w - ox - 32, &old, c::INK_FAINT);
+                    .map_or_else(|| "new".into(), |f| f.value.clone());
+                o.canvas.styled(
+                    ox,
+                    base,
+                    &fit(&old, x + w - reset_w - 8 - ox, Style::Value),
+                    c::INK_MUTED,
+                    Style::Value,
+                );
             }
-            o.hit([x, yy, vx - x, rowh], Action::PickField(i));
-            o.hit([vx, yy, valuew, rowh], Action::Field(i));
-            if self.field_changed(i) && self.original_brf.is_some() {
-                icon(&mut o.canvas, x + w - 24, yy + 4, Icon::Rotate, c::STEEL);
-                o.hit([x + w - 29, yy, 29, rowh], Action::ResetField(i));
+            if changed && self.original_brf.is_some() {
+                o.button_on(
+                    [x + w - reset_w - 2, yy, reset_w, rowh],
+                    Btn::icon(Icon::Rotate).ghost(),
+                    Action::ResetField(i),
+                    fill,
+                );
             }
         }
     }
     fn dock_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
+        use theme::{metric as m, space};
+        use widgets::baseline;
         o.canvas.rect(x, y, w, h, c::GM_800);
         self.dock_header(o, x, y, w);
-        let top = theme::metric::EDITOR_HEADER_H;
+        let top = m::EDITOR_HEADER_H;
         if self.dock == 4 {
             self.references_layout(o, x, y + top, w, h - top);
             return;
         }
         if self.dock == 3 && self.context_model.is_some() {
             self.draw_model(o, x, y + top, w, h - top);
-            label_fit(
-                &mut o.canvas,
-                x + 12,
-                y + 49,
-                w - 24,
-                "Live model / MMB orbit / wheel zoom",
-                c::INK_FAINT,
+            o.canvas.styled(
+                x + space::SPACE_3,
+                y + top + 16,
+                &fit(
+                    "Live model \u{b7} MMB orbit \u{b7} wheel zoom",
+                    w - 24,
+                    Style::ValueSm,
+                ),
+                c::INK_MUTED,
+                Style::ValueSm,
             );
         } else if self.dock == 0 && self.brf.is_some() {
             self.fields_layout(o, x, y + top, w, h - top, false);
         } else if self.dock == 1 || (self.dock == 0 && self.brf.is_none()) {
             o.canvas.rect(x, y + top, w, h - top, c::GM_950);
-            let count = ((w - 88) / 21).clamp(4, 16) as usize;
+            let cell = text_width("00 ", Style::Value);
+            let count = ((w - 88) / cell).clamp(4, 16) as usize;
             for (row, bytes) in self
                 .data
                 .chunks(count)
-                .take(((h - 43) / 20).max(0) as usize)
+                .take(((h - top - space::SPACE_2) / m::ROW_H).max(0) as usize)
                 .enumerate()
             {
-                let yy = y + 49 + row as i32 * 20;
-                o.canvas
-                    .text(x + 12, yy, &format!("{:06X}", row * count), c::INK_FAINT);
+                let yy = y + top + space::SPACE_1 + row as i32 * m::ROW_H;
+                let base = baseline(yy, m::ROW_H, Style::Value);
+                o.canvas.styled(
+                    x + space::SPACE_3,
+                    base,
+                    &format!("{:06X}", row * count),
+                    c::INK_MUTED,
+                    Style::Value,
+                );
                 let mut value = String::new();
                 for b in bytes {
                     value.push_str(&format!("{b:02X} "));
                 }
-                o.canvas.text(x + 76, yy, &value, c::INK_MUTED);
+                o.canvas
+                    .styled(x + 76, base, value.trim_end(), c::INK, Style::Value);
             }
         } else {
-            label_fit(
-                &mut o.canvas,
-                x + 14,
-                y + 56,
-                w - 28,
-                &self.detail,
-                c::STEEL,
-            );
-            text_fit(
-                &mut o.canvas,
-                x + 14,
-                y + 82,
-                w - 28,
-                &self.status,
-                if self.status.starts_with("Error:") {
-                    c::DANGER
-                } else {
-                    c::INK_MUTED
-                },
-            );
-            text_fit(
-                &mut o.canvas,
-                x + 14,
-                y + 109,
-                w - 28,
-                &self.path,
-                c::INK_FAINT,
-            );
+            // Details: what the entry is, the last message, where it lives.
+            let mut yy = y + top + space::SPACE_2;
+            let col = 96.min(w / 3);
+            let error = self.status.starts_with("Error:");
+            for (label, value) in [
+                ("Entry", self.name()),
+                ("Decoded", self.detail.as_str()),
+                ("LIB", self.path.as_str()),
+            ] {
+                o.canvas.styled(
+                    x + space::SPACE_3 + col - text_width(label, Style::Label),
+                    baseline(yy, m::ROW_H, Style::Label),
+                    label,
+                    c::INK_MUTED,
+                    Style::Label,
+                );
+                o.canvas.styled(
+                    x + space::SPACE_3 + col + space::SPACE_2,
+                    baseline(yy, m::ROW_H, Style::Value),
+                    &fit(
+                        value,
+                        w - col - 2 * space::SPACE_3 - space::SPACE_2,
+                        Style::Value,
+                    ),
+                    c::INK,
+                    Style::Value,
+                );
+                yy += m::ROW_H + space::SPACE_1;
+            }
+            if !self.status.is_empty() && yy + 30 < y + h {
+                widgets::notice(
+                    &mut o.canvas,
+                    x + space::SPACE_3,
+                    yy,
+                    w - 2 * space::SPACE_3,
+                    if error {
+                        widgets::Tone::Danger
+                    } else {
+                        widgets::Tone::Neutral
+                    },
+                    self.status.strip_prefix("Error: ").unwrap_or(&self.status),
+                );
+            }
         }
     }
+
     fn prompt_layout(&self, o: &mut Layout) {
         let p = self.prompt.as_ref().unwrap();
         let w = (self.width - 48).min(710);

@@ -3,8 +3,24 @@ use super::view::{icon, label_fit, text_fit, Action, Icon, Layout};
 use super::*;
 use hangar_core::validation::Level;
 
+/// What a reference or validation row shows.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Kind {
+    /// Section head: uppercase title and a count.
+    Head,
+    /// A resource present in an open LIB.
+    Link,
+    /// A referenced name no open LIB or catalog holds.
+    Missing,
+    /// A scan note or limitation.
+    Note,
+    Text,
+}
 pub(super) struct Row {
     text: String,
+    /// Evidence or explanation after the name, `ink-muted`.
+    detail: String,
+    kind: Kind,
     color: Rgb,
     entry: Option<usize>,
     library: Option<u64>,
@@ -66,7 +82,7 @@ impl App {
     pub(super) fn reference_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
         let providers = self.dependency_providers();
-        let mut add = |text: String, name: Option<&str>, color| {
+        let mut add = |kind: Kind, text: String, detail: String, name: Option<&str>| {
             let local = name.and_then(|n| self.doc.archive.find(n));
             let external: Vec<_> = name
                 .map(|n| {
@@ -83,76 +99,82 @@ impl App {
             };
             rows.push(Row {
                 text,
-                color,
+                detail,
+                kind,
+                color: c::INK,
                 entry,
                 library,
             });
         };
         if let Some(scan) = self.dependencies.get(self.name()) {
-            add(format!("REFERENCES / {}", scan.links.len()), None, c::INK);
+            add(
+                Kind::Head,
+                "References".into(),
+                format!("{}", scan.links.len()),
+                None,
+            );
             for link in &scan.links {
                 let present = self.doc.archive.find(&link.target).is_some();
-                add(
-                    format!(
-                        "{} / {}",
-                        link.target,
-                        if present {
-                            link.evidence
-                        } else if providers.contains_key(&link.target) {
-                            "external / see Package"
-                        } else {
-                            "not in source catalogs"
-                        }
-                    ),
-                    Some(&link.target),
-                    if present { c::STEEL } else { c::AMBER },
-                );
+                let (kind, detail) = if present {
+                    (Kind::Link, link.evidence.to_string())
+                } else if providers.contains_key(&link.target) {
+                    (Kind::Link, "in another LIB; see Package".into())
+                } else {
+                    (Kind::Missing, "not in any open LIB or catalog".into())
+                };
+                add(kind, link.target.clone(), detail, Some(&link.target));
             }
             if let Some(error) = &scan.unavailable {
-                add(format!("Unverified: {error}"), None, c::AMBER);
+                add(
+                    Kind::Note,
+                    format!("Unverified: {error}"),
+                    String::new(),
+                    None,
+                );
             }
             for note in &scan.notes {
-                add(note.clone(), None, c::AMBER);
+                add(Kind::Note, note.clone(), String::new(), None);
             }
             add(
-                format!(
-                    "REFERENCED BY / {}",
-                    self.dependencies.incoming(self.name()).count()
-                ),
+                Kind::Head,
+                "Referenced by".into(),
+                format!("{}", self.dependencies.incoming(self.name()).count()),
                 None,
-                c::INK,
             );
             for source in self.dependencies.incoming(self.name()) {
-                add(source.clone(), Some(source), c::STEEL);
+                add(Kind::Link, source.clone(), String::new(), Some(source));
             }
             add(
-                format!("AIRCRAFT USERS / {}", self.aircraft_users.len()),
+                Kind::Head,
+                "Aircraft users".into(),
+                format!("{}", self.aircraft_users.len()),
                 None,
-                c::INK,
             );
             for source in &self.aircraft_users {
-                add(source.clone(), Some(source), c::STEEL);
+                add(Kind::Link, source.clone(), String::new(), Some(source));
             }
         } else {
             add(
-                "Select a resource to inspect its relationships".into(),
+                Kind::Note,
+                "Select a resource to see what it references and what uses it.".into(),
+                String::new(),
                 None,
-                c::INK_MUTED,
             );
         }
         for library in &self.libraries {
             for source in library.dependencies.incoming(self.name()) {
                 rows.push(Row {
-                    text: format!(
-                        "{} / user in {}",
-                        source,
+                    text: source.clone(),
+                    detail: format!(
+                        "user in {}",
                         library
                             .path
                             .rsplit(['/', '\\'])
                             .next()
                             .unwrap_or(&library.path)
                     ),
-                    color: c::STEEL,
+                    kind: Kind::Link,
+                    color: c::INK,
                     entry: library.doc.archive.find(source),
                     library: Some(library.id),
                 });
@@ -160,51 +182,122 @@ impl App {
         }
         rows
     }
+    /// Reference rows that fit in the dock.
+    pub(super) fn reference_visible(&self) -> usize {
+        let h = self.height - theme::metric::STATUSBAR_H - self.dock_y();
+        ((h - theme::metric::EDITOR_HEADER_H - 2 * theme::metric::ROW_H) / theme::metric::ROW_H)
+            .max(1) as usize
+    }
     pub(super) fn references_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
-        o.canvas.rect(x, y, w, h, c::GM_950);
-        let count = self.dependencies.unavailable_count();
-        let scope = if count > 0 {
-            format!(
-                "Current LIB / {} aircraft / partial scan",
-                self.aircraft_users.len()
-            )
-        } else {
-            format!(
-                "Current LIB / {}",
-                super::view::count(self.aircraft_users.len(), "aircraft user", "aircraft users")
-            )
-        };
-        label_fit(&mut o.canvas, x + 12, y + 16, w - 24, &scope, c::INK_FAINT);
+        use theme::{metric as m, space};
+        use widgets::baseline;
+        o.canvas.rect(x, y, w, h, c::GM_800);
+        let partial = self.dependencies.unavailable_count() > 0;
+        let scope = format!(
+            "Current LIB \u{b7} {}{}",
+            super::view::count(self.aircraft_users.len(), "aircraft user", "aircraft users"),
+            if partial { " \u{b7} partial scan" } else { "" }
+        );
+        o.canvas.styled(
+            x + space::SPACE_3,
+            baseline(y, m::ROW_H, Style::ValueSm),
+            &fit(&scope, w - 2 * space::SPACE_3, Style::ValueSm),
+            c::INK_MUTED,
+            Style::ValueSm,
+        );
         let rows = self.reference_rows();
-        let visible = ((h - 32) / 22).max(0) as usize;
+        let visible = self.reference_visible();
+        let top = y + m::ROW_H;
         for (i, row) in rows
             .iter()
             .skip(self.reference_scroll)
             .take(visible)
             .enumerate()
         {
-            let yy = y + 25 + i as i32 * 22;
-            if row.entry.is_some() {
-                o.canvas.rect(x + 8, yy, w - 16, 21, c::GM_900);
+            let yy = top + i as i32 * m::ROW_H;
+            let rect = [x + space::SPACE_1, yy, w - 2 * space::SPACE_1 - 4, m::ROW_H];
+            let link = row.entry.filter(|_| row.kind == Kind::Link);
+            let hover = link.is_some() && o.over(rect);
+            let fill = if hover { c::GM_700 } else { c::GM_800 };
+            let d = &mut o.canvas;
+            if hover {
+                d.rect(rect[0], yy, rect[2], m::ROW_H, fill);
             }
-            text_fit(&mut o.canvas, x + 14, yy + 15, w - 28, &row.text, row.color);
-            if let Some(entry) = row.entry {
+            let mut tx = x + space::SPACE_3;
+            let right = rect[0] + rect[2] - space::SPACE_2;
+            match row.kind {
+                Kind::Head => {
+                    let head = row.text.to_ascii_uppercase();
+                    d.styled(
+                        tx,
+                        baseline(yy, m::ROW_H, Style::Section),
+                        &head,
+                        c::INK_MUTED,
+                        Style::Section,
+                    );
+                    d.styled(
+                        tx + text_width(&head, Style::Section) + space::SPACE_2,
+                        baseline(yy, m::ROW_H, Style::ValueSm),
+                        &row.detail,
+                        c::INK_MUTED,
+                        Style::ValueSm,
+                    );
+                    continue;
+                }
+                Kind::Note | Kind::Text => {
+                    d.icon(tx, yy + 2, Icon::Info, c::INK_MUTED, fill);
+                    tx += m::ICON + space::SPACE_1;
+                    d.styled(
+                        tx,
+                        baseline(yy, m::ROW_H, Style::Label),
+                        &fit(&row.text, right - tx, Style::Label),
+                        c::INK_MUTED,
+                        Style::Label,
+                    );
+                    continue;
+                }
+                Kind::Missing => d.icon(tx, yy + 2, Icon::Warning, c::AMBER, fill),
+                Kind::Link => d.icon(
+                    tx,
+                    yy + 2,
+                    super::view::group_icon(&row.text),
+                    c::INK_MUTED,
+                    fill,
+                ),
+            }
+            tx += m::ICON + space::SPACE_1;
+            let name = fit(&row.text, (right - tx) * 3 / 5, Style::Value);
+            d.styled(
+                tx,
+                baseline(yy, m::ROW_H, Style::Value),
+                &name,
+                if link.is_some() { c::STEEL } else { c::INK },
+                Style::Value,
+            );
+            let dx = tx + text_width(&name, Style::Value) + space::SPACE_2;
+            if !row.detail.is_empty() && dx < right {
+                d.styled(
+                    dx,
+                    baseline(yy, m::ROW_H, Style::Label),
+                    &fit(&row.detail, right - dx, Style::Label),
+                    c::INK_MUTED,
+                    Style::Label,
+                );
+            }
+            if let Some(entry) = link {
                 o.hit(
-                    [x + 8, yy, w - 16, 21],
+                    rect,
                     row.library
                         .map_or(Action::Related(entry), |id| Action::LibraryEntry(id, entry)),
                 );
             }
         }
         if rows.len() > visible {
-            label_fit(
-                &mut o.canvas,
-                x + 12,
-                y + h - 4,
-                w - 24,
-                "Wheel scroll / click a resource to select",
-                c::INK_FAINT,
-            );
+            let track = visible as i32 * m::ROW_H - 4;
+            let thumb = (track * visible as i32 / rows.len() as i32).max(16);
+            let span = (rows.len() - visible) as i32;
+            let ty = top + 2 + (track - thumb) * (self.reference_scroll as i32).min(span) / span;
+            o.canvas.rect(x + w - 5, ty, 3, thumb, c::GM_600);
         }
     }
     pub(super) fn validation_lines(&self) -> Vec<Row> {
@@ -218,6 +311,8 @@ impl App {
                         check.level.label(),
                         check.entry.as_deref().unwrap_or("Package")
                     ),
+                    detail: String::new(),
+                    kind: Kind::Text,
                     library: None,
                     color: color(check.level),
                     entry: check.entry.as_ref().and_then(|n| self.doc.archive.find(n)),
@@ -225,6 +320,8 @@ impl App {
                 for text in wrap(&check.message, columns) {
                     lines.push(Row {
                         text,
+                        detail: String::new(),
+                        kind: Kind::Text,
                         color: c::INK_MUTED,
                         entry: None,
                         library: None,
@@ -232,6 +329,8 @@ impl App {
                 }
                 lines.push(Row {
                     text: String::new(),
+                    detail: String::new(),
+                    kind: Kind::Text,
                     color: c::INK_MUTED,
                     entry: None,
                     library: None,
@@ -240,6 +339,8 @@ impl App {
             if report.omitted > 0 {
                 lines.push(Row {
                     text: format!("{} further results omitted", report.omitted),
+                    detail: String::new(),
+                    kind: Kind::Text,
                     color: c::AMBER,
                     entry: None,
                     library: None,

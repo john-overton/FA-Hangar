@@ -2377,7 +2377,7 @@ impl App {
             && self.mouse[0] < self.right()
             && self.mouse[1] >= self.dock_y()
         {
-            let rows = ((self.height - self.dock_y() - 84) / 22).max(1) as usize;
+            let rows = self.reference_visible();
             self.reference_scroll = (self.reference_scroll as i32 - delta * 3)
                 .clamp(0, self.reference_rows().len().saturating_sub(rows) as i32)
                 as usize;
