@@ -258,6 +258,9 @@ fn sh_record(c: &[u8], p: usize) -> Result<(usize, Vec<Pointer>)> {
             if !matches!(slice(c, p + 10, 1)?[0], 0x38 | 0x48 | 0x50) {
                 return Err(invalid("Unrecognized 6C record trailer"));
             }
+            // The word at +8, measured from the end of the 10-byte head, lands on
+            // a record start for all 10,557 retail 6Cs in FA_2.LIB: a branch.
+            ptr.push(rel(c, Rel16, p + 8, p + 10)?);
             10
         }
         // OpenFA: 12 + count at +10. Retail counts are 0, 5 or 8 and, like 06,
@@ -695,7 +698,7 @@ impl Inventory {
         }
     }
     /// Static traversal over every branch: calls (12/6E/C4/C6) return to the next
-    /// record, 06/A6/C8/AC continue on both paths, 48 and 40 jump, 1E and 00
+    /// record, 06/0C/0E/10/6C/A6/C8/AC continue on both paths, 48 and 40 jump, 1E and 00
     /// end a path, and F0 entries reach every SH resume of their x86 flow.
     fn reach(&mut self, flows: &[x86::Flow]) {
         let mut seen = BTreeSet::new();
@@ -715,7 +718,10 @@ impl Inventory {
             });
             match r.kind {
                 Kind::Sh(0x48 | 0x40) => work.extend(targets),
-                Kind::Sh(0x06 | 0x12 | 0x6e | 0xc4 | 0xc6 | 0xa6 | 0xc8 | 0xac) => {
+                Kind::Sh(
+                    0x06 | 0x0c | 0x0e | 0x10 | 0x6c | 0x12 | 0x6e | 0xc4 | 0xc6 | 0xa6 | 0xc8
+                    | 0xac,
+                ) => {
                     work.extend(targets);
                     work.push(r.end());
                 }
@@ -1175,6 +1181,7 @@ mod tests {
             (0x30, Rel16, 0x30, 0x32),
             (0x42, Rel16, 0x44, 0x47),
             (0x53, Rel16, 0x55, 0x55),
+            (0x60, Rel16, 0x62, 0x66),
             (0x64, Rel16, 0x66, 0x66),
         ] {
             assert_eq!(
