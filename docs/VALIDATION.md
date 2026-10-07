@@ -281,3 +281,36 @@ and compiler success alone is not recorded as native-game acceptance.
 Formatting, strict Clippy, shared UI smoke, both Windows cross-builds and PE
 audits pass. The binaries are 672,256 bytes (32-bit) and 786,944 bytes (64-bit),
 with the same 59 reviewed imports and no runtime DLL additions.
+
+## Unreleased bug-fix sweep
+
+A read-only probe over the user's retail FA_2.LIB (1,275 SH entries, 1,249
+decodable by Hangar's reader) checked the face-normal grammar before changing
+the SH writer. No retail face sets content flag 0x20 without 0x40: every
+0x2x face also carries 0x40, so the 0x40 (OpenFA) and 0x60 (previous Hangar)
+has-normal rules decode identical faces in all 1,249 shapes. 137,908 faces
+store a normal; all have unit length (32765). Recomputing them from their
+vertices, the stored normal matches (c-a)x(b-a) in right/forward/up order:
+the new writer's normal agrees (cosine > 0.9) for 128,632 faces, is opposite
+for 89, and 3,196 are degenerate. Previously written normals were inverted.
+Stored centres equal the truncated vertex average (including C4 translation)
+within one unit for 134,608 of 134,707 non-degenerate faces. No FA_2 shape is
+writable by the static-subset writer, so the corrected writer is exercised by
+synthetic core tests (byte/word centres, collinear leading vertices, fully
+degenerate faces, byte-centre overflow, untouched faces byte-identical).
+
+The same probe generated up to 12 successive panel textures on each of the
+757 FA_2 shapes that accept one (6,566 outputs). Every output's SizeOfImage
+covered all sections; retail SH modules always order sections CODE[, .idata],
+.reloc, $$DOSX by RVA. A synthetic module with .reloc last and a 1 KiB
+relocation table reproduced an understated SizeOfImage (0x7000 for a section
+ending at 0x7200), now fixed. Tail detection refused no FA_2 shape; first-panel
+failures were CODE room (11), degenerate panels (17) and special colors (4).
+
+Strict Clippy, 68 core tests, the shared UI smoke test (including edit-mode
+G/R/S, vertex drag threshold/grab offset/Shift selection, textured framing,
+Parts state revalidation and scroll, toolbar/menu fixes) and both Windows
+cross-builds with PE audits pass: 689,664 bytes (32-bit) and 805,376 bytes
+(64-bit), the same 59 reviewed imports and no runtime DLLs. Windows
+interaction and original-game checks remain pending.
+

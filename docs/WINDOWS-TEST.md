@@ -230,6 +230,24 @@ separately. No retail data is included in the test package.
 4. Paint another supported blank panel using the updated editor, save/reopen
    and retest it in FA. Already repaired files must report no repair needed.
 
+## Edit mode and viewport fixes (unreleased)
+
+1. Load the demo, select DEMO.SH and press Tab. Click a vertex without moving:
+   it selects and the LIB stays unmodified. Shift+click a second vertex, then
+   Shift+click it again to remove it. A selects all; A again clears.
+2. Press on a selected vertex slightly off its centre and drag: the vertex
+   keeps its offset from the pointer and every selected vertex moves. Press X
+   during the drag to lock the X axis; release, then undo once.
+3. With two vertices selected, press S, type 200 and Enter: only those two
+   vertices scale about their midpoint. Press R, Z, 90, Enter: they rotate
+   about their midpoint. Undo restores the exact LIB; the selection remains.
+4. Toggle Textured, then press G and type 300 in Object mode: the textured
+   preview must move away from the cursor rather than staying centred.
+5. Open a File menu and hover a toolbar button outside it: no hover highlight.
+   Click the menu's top padding: the menu stays open and nothing else changes.
+6. Press 5 for perspective in Edit mode and press a vertex: it selects and
+   the status asks for an orthographic view instead of the station message.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window
