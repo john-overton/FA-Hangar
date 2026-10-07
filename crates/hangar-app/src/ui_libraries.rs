@@ -757,6 +757,7 @@ impl App {
             app.prompt.as_ref().map(|p| &p.kind),
             Some(PromptKind::TransferReview)
         ));
+        assert!(!app.transfer_move, "A drop opens the review with Copy");
         app.key(Key::Escape, false, false);
         // A model defined in a third LIB can resolve one unique open-library shape.
         let mut third = Archive::empty();
@@ -867,7 +868,8 @@ impl App {
         self.include_dependencies = false;
         self.paste_resources()?;
         self.transfer_source = Some(source);
-        self.transfer_move = true;
+        // Copy is the safe default; Move is one click away in the review.
+        self.transfer_move = false;
         self.transfer_plan.as_mut().unwrap().notes.push("When moving, known shared dependencies stay in the source. Linked files supplied by other LIBs are copied. Each changed LIB has its own undo step.".into());
         if let Some(prompt) = &mut self.prompt {
             prompt.title = format!(
@@ -876,7 +878,7 @@ impl App {
             );
         }
         self.status =
-            "Review the item or its linked resources before moving; files change only when saved"
+            "Review the copy, or choose Move to take it out of the source; files change only when saved"
                 .into();
         Ok(())
     }
@@ -920,7 +922,7 @@ impl App {
         a.switch_library(source).unwrap();
         a.select_entry(0);
         a.prepare_drop(target).unwrap();
-        assert!(a.transfer_move);
+        assert!(!a.transfer_move, "Drops default to Copy");
         assert!(!a.include_dependencies);
         assert_eq!(a.transfer_plan.as_ref().unwrap().items.len(), 1);
         a.act(Action::TransferDependencies);
@@ -944,6 +946,12 @@ impl App {
         a.switch_library(source).unwrap();
         a.select_entry(0);
         a.prepare_drop(target).unwrap();
+        // Move stays one click away in the review.
+        let seg = a
+            .chrome_hit(&|h| matches!(h, Action::TransferMove(true)))
+            .unwrap();
+        a.chrome_click(seg);
+        assert!(a.transfer_move);
         a.apply_transfer().unwrap();
         a.prompt = None;
         assert!(a.doc.archive.find("DEMO.SH").is_some());
