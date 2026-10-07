@@ -1522,13 +1522,18 @@ without treating every existing payload as newly edited.
 ### Runtime markings
 
 Some faces draw no named texture: the game fills them with markings at run
-time. Hangar shows them blank in the preview and refuses to remap them. How
-they work is a working model, **not yet verified**:
+time. Hangar shows them blank in the preview and refuses to remap them.
 
-- the shape decides whether a face carries a marking, where, and which
-  marking slot (0 to 4) it uses;
-- the game picks the image for each slot at run time, believed to be by
-  nation or unit.
+- The shape decides whether a face carries a marking, where it sits, and
+  which slot it uses: an `E0` record selects a runtime texture slot for the
+  faces that follow, until an `E2` restores the skin. The community SH guide
+  (cited in the T.O.R.E Fighters format notes, `objects-and-shapes.md`) names
+  slots 0/1 left/right tail art, 2 nose art and 3/4 left/right wing markings;
+  aircraft need not place them where the names suggest. Retail F5EV.SH, for
+  example, draws one face under slot 4 and one under slot 3 (its roundels).
+- The game picks the image for each slot at run time. That this follows the
+  aircraft's nation or unit is **not yet verified**; where FA.EXE loads slot
+  images has not been traced.
 
 Tools for runtime markings are planned. Until then, bake markings into a
 texture with [Decals](#hardpoints-materials-and-decals).
