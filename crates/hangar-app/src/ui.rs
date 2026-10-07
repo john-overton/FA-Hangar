@@ -319,7 +319,6 @@ enum PromptKind {
     FamilyTexture,
     DecalText,
     DecalInk,
-    DecalSetting(u8),
     DecalLibrary,
     TransferReview,
     Number(widgets::NumberTarget),
@@ -488,7 +487,8 @@ pub struct App {
     last_paint: Option<(usize, usize)>,
     paint_enabled: bool,
     eraser: bool,
-    original_note: Option<(String, bool)>,
+    /// The Paint panel's original row: label, value, restorable.
+    original_note: Option<(String, String, bool)>,
     pick_color: bool,
     textures: BTreeMap<String, Pic>,
     textured: bool,
@@ -1624,7 +1624,6 @@ impl App {
                             }
                             Ok(())
                         })(),
-                        PromptKind::DecalSetting(key) => self.decal_setting(key, &p.value),
                         PromptKind::DecalLibrary => Err("Choose a PNG row or press Esc".into()),
                         PromptKind::StationMove => (|| {
                             let delta: i32 =
@@ -2399,7 +2398,10 @@ impl App {
         }
         if self.mode == Mode::Media
             && self.context_model.is_some()
-            && (self.mouse[0] >= self.right() || self.mouse[1] >= self.dock_y())
+            && ((self.mouse[1] >= self.dock_y() && self.mouse[0] < self.right())
+                || self.layout().zoom_rect.is_some_and(|[x, y, w, h]| {
+                    (x..x + w).contains(&self.mouse[0]) && (y..y + h).contains(&self.mouse[1])
+                }))
         {
             self.zoom = (self.zoom + delta * 10).clamp(10, 1000);
             return;

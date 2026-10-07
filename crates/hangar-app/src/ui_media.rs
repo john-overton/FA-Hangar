@@ -1,4 +1,4 @@
-use super::view::{border, label_fit, text_fit, Action, Layout};
+use super::view::{border, label_fit, Action, Icon, Layout};
 use super::*;
 use hangar_core::originals;
 struct Frame {
@@ -665,8 +665,53 @@ impl App {
         let l = self.left();
         let w = self.right() - l;
         let h = self.dock_y() - 54;
-        o.canvas.rect(l + 1, 26, w - 2, 28, c::GM_800);
-        text_fit(&mut o.canvas, l + 12, 44, w - 24, self.name(), c::INK);
+        {
+            use theme::{metric as m, space};
+            let top = m::MENUBAR_H;
+            let d = &mut o.canvas;
+            d.rect(l + 1, top, w - 2, m::EDITOR_HEADER_H, c::GM_800);
+            d.rect(l + 1, top + m::EDITOR_HEADER_H - 1, w - 2, 1, c::GM_1000);
+            let info = self.current_picture().map(|p| {
+                format!(
+                    "{} \u{d7} {} \u{b7} {}{}",
+                    p.width,
+                    p.height,
+                    if p.palette.len() == 256 || self.palette_loaded {
+                        "indexed"
+                    } else {
+                        "no palette, grayscale"
+                    },
+                    if originals::texture_of(self.name()).is_some() {
+                        " \u{b7} read-only"
+                    } else {
+                        ""
+                    }
+                )
+            });
+            let mut right = l + w - 1 - space::SPACE_3;
+            if let Some(info) = &info {
+                let info = fit(info, (w - 24) / 2, Style::ValueSm);
+                right -= text_width(&info, Style::ValueSm);
+                d.styled(
+                    right,
+                    widgets::baseline(top, m::EDITOR_HEADER_H, Style::ValueSm),
+                    &info,
+                    c::INK_MUTED,
+                    Style::ValueSm,
+                );
+            }
+            d.styled(
+                l + 1 + space::SPACE_3,
+                widgets::baseline(top, m::EDITOR_HEADER_H, Style::Value),
+                &fit(
+                    self.name(),
+                    right - space::SPACE_4 - l - space::SPACE_3,
+                    Style::Value,
+                ),
+                c::INK,
+                Style::Value,
+            );
+        }
         if let Some(p) = self.current_picture() {
             let [x, y, iw, ih] = self.image_rect().unwrap();
             let colors = p.colors(&self.base_palette);
@@ -733,28 +778,6 @@ impl App {
                     }
                 }
             }
-            label_fit(
-                &mut o.canvas,
-                l + 16,
-                72,
-                w - 32,
-                &format!(
-                    "{} x {} / {}{}",
-                    p.width,
-                    p.height,
-                    if p.palette.len() == 256 || self.palette_loaded {
-                        "Indexed palette"
-                    } else {
-                        "Palette missing: grayscale preview"
-                    },
-                    if originals::texture_of(self.name()).is_some() {
-                        " / read-only"
-                    } else {
-                        ""
-                    }
-                ),
-                c::INK_MUTED,
-            );
         } else if self.name().ends_with(".PAL") {
             let colors = self.active_colors();
             let cell = ((w - 32) / 16).min((h - 60) / 16).max(1);
@@ -795,20 +818,23 @@ impl App {
                 l + 20,
                 88,
                 w - 40,
-                &format!("{} Hz / {} samples / PCM8 mono", p.rate, p.samples.len()),
+                &format!(
+                    "{} Hz \u{b7} {} samples \u{b7} PCM8 mono",
+                    p.rate,
+                    widgets::format_number(p.samples.len() as i64, 0)
+                ),
                 c::INK,
             );
-            o.button(
-                [l + 20, self.dock_y() - 50, 100, 26],
-                "Play",
+            let by = self.dock_y() - 50;
+            o.button_ex(
+                [l + 20, by, 100, theme::metric::BUTTON_H],
+                widgets::Btn::new("Play").with_icon(Icon::Play).primary(),
                 Action::PlayAudio,
-                true,
             );
-            o.button(
-                [l + 130, self.dock_y() - 50, 100, 26],
-                "Stop",
+            o.button_ex(
+                [l + 128, by, 100, theme::metric::BUTTON_H],
+                widgets::Btn::new("Stop").with_icon(Icon::Pause),
                 Action::StopAudio,
-                false,
             );
         } else {
             label_fit(
@@ -821,63 +847,77 @@ impl App {
             );
         }
     }
-    pub(super) fn media_inspector(&self, o: &mut Layout) {
+    /// The Paint, Materials and Decals tabs above the media inspector panels.
+    fn media_tabs(&self, o: &mut Layout) -> i32 {
+        use theme::{metric as m, space};
+        use widgets::Btn;
         let r = self.right();
-        let w = self.width - r;
-        let bottom = self.height - 24;
-        o.canvas.rect(r + 1, 26, w - 1, 28, c::GM_700);
-        o.canvas.label(r + 12, 44, "Livery / media", c::INK);
+        let y = m::MENUBAR_H + m::EDITOR_HEADER_H + space::SPACE_1;
+        let items: Vec<(Btn, Action)> = ["Paint", "Materials", "Decals"]
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                (
+                    Btn::new(t).on(self.media_tab == i as u8),
+                    Action::MediaTab(i as u8),
+                )
+            })
+            .collect();
+        let x = r + 1 + space::SPACE_1;
+        o.segmented(
+            [x, y, self.width - space::SPACE_1 - 4 - x, m::BUTTON_H],
+            &items,
+        );
+        y + m::BUTTON_H + space::SPACE_1
+    }
+    pub(super) fn media_inspector(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{pane, Btn, Check, Tone};
+        self.inspector_header(o, None);
         if let Some(pic) = originals::texture_of(self.name()) {
             self.original_inspector(o, &pic);
             return;
         }
+        let mut top = m::MENUBAR_H + m::EDITOR_HEADER_H;
         if self.pic.is_some() || self.model_for_paint().is_some() || self.name().ends_with(".PAL") {
-            let tab = (w - 24) / 3;
-            for (i, title) in ["Paint", "Materials", "Decals"].iter().enumerate() {
-                o.button(
-                    [r + 10 + i as i32 * (tab + 2), 58, tab, 24],
-                    title,
-                    Action::MediaTab(i as u8),
-                    self.media_tab == i as u8,
-                );
-            }
+            top = self.media_tabs(o);
             if self.media_tab == 1 {
-                self.material_inspector(o);
+                self.material_inspector(o, top);
                 return;
             }
             if self.media_tab == 2 {
-                self.decal_inspector(o);
+                self.decal_inspector(o, top);
                 return;
             }
         }
+        let mut s = self.inspector_stack(top, 0);
         if self.pic.is_none() && self.model_for_paint().is_none() {
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                84,
-                w - 24,
-                &self.detail,
-                c::INK_MUTED,
-            );
-            o.button(
-                [r + 12, 112, w - 24, 26],
-                "Play audio",
-                Action::PlayAudio,
-                true,
-            );
-            o.button([r + 12, 148, w - 24, 26], "Stop", Action::StopAudio, false);
-            o.button(
-                [r + 12, 198, w - 24, 26],
-                "Export WAV",
-                Action::File(FileAction::Wav),
-                false,
-            );
-            o.button(
-                [r + 12, 234, w - 24, 26],
-                "Export original",
-                Action::File(FileAction::Export),
-                false,
-            );
+            if self.pane(o, &mut s, pane::AUDIO, "Sound", Icon::Sound) {
+                o.info(&mut s, "Format", &self.detail, "");
+                if let Some([x, y, w, h]) = o.wide(&mut s, m::BUTTON_H) {
+                    let half = (w - space::SPACE_1) / 2;
+                    o.button_ex(
+                        [x, y, half, h],
+                        Btn::new("Play").with_icon(Icon::Play).primary(),
+                        Action::PlayAudio,
+                    );
+                    o.button_ex(
+                        [x + half + space::SPACE_1, y, w - half - space::SPACE_1, h],
+                        Btn::new("Stop").with_icon(Icon::Pause),
+                        Action::StopAudio,
+                    );
+                }
+                for (title, action) in [
+                    ("Export WAV", Action::File(FileAction::Wav)),
+                    ("Export original", Action::File(FileAction::Export)),
+                ] {
+                    if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                        o.button_ex(rect, Btn::new(title), action);
+                    }
+                }
+            }
+            o.panel_end(&mut s);
+            o.stack_end(s);
             return;
         }
         let picture = self.current_picture().or_else(|| {
@@ -888,219 +928,219 @@ impl App {
         let colors = picture
             .map(|p| p.colors(&self.base_palette))
             .unwrap_or(*self.base_palette);
-        let mut y = 108;
-        if let Some((i, f)) = self.selected_face.and_then(|i| {
-            self.model_for_paint()
-                .and_then(|m| m.faces.get(i))
-                .map(|f| (i, f))
-        }) {
-            text_fit(
-                &mut o.canvas,
-                r + 12,
-                y,
-                w - 24,
-                &format!("Panel {} / color index {}", i + 1, f.color),
-                c::AMBER,
-            );
-            y += 25;
-            let full = if f.texture.contains('.') {
-                f.texture.clone()
-            } else {
-                format!("{}.PIC", f.texture)
-            };
-            if let Some(entry) = self.doc.archive.find(&full) {
-                o.button(
-                    [r + 10, y, w - 20, 24],
-                    &format!("UV / paint {full}"),
-                    Action::OpenTexture(entry),
-                    false,
+        if self.pane(o, &mut s, pane::PAINT, "Paint", Icon::Brush) {
+            if let Some((i, f)) = self.selected_face.and_then(|i| {
+                self.model_for_paint()
+                    .and_then(|m| m.faces.get(i))
+                    .map(|f| (i, f))
+            }) {
+                o.info(
+                    &mut s,
+                    "Panel",
+                    &format!("{} \u{b7} color {}", i + 1, f.color),
+                    "",
                 );
-                y += 32;
-            }
-            if f.uv.is_empty() || f.texture.is_empty() {
-                o.button(
-                    [r + 10, y, w - 20, 24],
-                    "Create paintable panel texture",
-                    Action::PanelTexture,
-                    false,
-                );
-                y += 30;
-                o.button(
-                    [r + 10, y, w - 20, 24],
-                    "Panel color",
-                    Action::BaseColor(true),
-                    false,
-                );
-                y += 30;
-            }
-        }
-        if self.mode == Mode::Model {
-            o.button(
-                [r + 10, y, w - 20, 24],
-                "Paint model / auto-create texture",
-                Action::ModelPaint,
-                self.model_paint,
-            );
-            y += 30;
-            o.button(
-                [r + 10, y, w - 20, 24],
-                if self.paint_lock {
-                    "Panel lock: on"
+                let full = if f.texture.contains('.') {
+                    f.texture.clone()
                 } else {
-                    "Panel lock: off / cross panels"
-                },
-                Action::PaintLock,
-                self.paint_lock,
-            );
-            y += 30;
-            let half = (w - 26) / 2;
-            o.button(
-                [r + 10, y, half, 24],
-                "Brush",
-                Action::PaintToggle,
-                self.model_paint && !self.eraser,
-            );
-            o.button(
-                [r + 16 + half, y, w - 26 - half, 24],
-                "Eraser",
-                Action::Eraser,
-                self.model_paint && self.eraser,
-            );
-            y += 32;
-        }
-        if self.pic.is_some() {
-            // Widths fit "Pick color" at the 800 px minimum window.
-            let (brush, erase) = ((w - 32) * 26 / 100, (w - 32) * 30 / 100);
-            o.button(
-                [r + 10, y, brush, 24],
-                "Brush",
-                Action::PaintToggle,
-                self.paint_enabled && !self.eraser,
-            );
-            o.button(
-                [r + 16 + brush, y, erase, 24],
-                "Eraser",
-                Action::Eraser,
-                self.paint_enabled && self.eraser,
-            );
-            o.button(
-                [r + 22 + brush + erase, y, w - 32 - brush - erase, 24],
-                "Pick color",
-                Action::PickColor,
-                self.pick_color,
-            );
-            y += 30;
-            if let Some((note, restorable)) = self.original_note.clone() {
-                label_fit(&mut o.canvas, r + 12, y + 12, w - 24, &note, c::INK_MUTED);
-                y += 20;
-                if restorable {
-                    o.button(
-                        [r + 10, y, w - 20, 24],
-                        "Restore texture",
-                        Action::RestoreTexture,
-                        false,
-                    );
-                    y += 30;
+                    format!("{}.PIC", f.texture)
+                };
+                if let Some(entry) = self.doc.archive.find(&full) {
+                    if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                        o.button_ex(
+                            rect,
+                            Btn::new(&format!("Paint {full}")).with_icon(Icon::Textured),
+                            Action::OpenTexture(entry),
+                        );
+                    }
+                }
+                if f.uv.is_empty() || f.texture.is_empty() {
+                    for (title, action) in [
+                        ("Create paintable texture", Action::PanelTexture),
+                        ("Panel color", Action::BaseColor(true)),
+                    ] {
+                        if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                            o.button_ex(rect, Btn::new(title), action);
+                        }
+                    }
                 }
             }
-        }
-        o.canvas.label(
-            r + 12,
-            y + 12,
-            &format!("PALETTE / index {}", self.brush),
-            c::INK_MUTED,
-        );
-        y += 22;
-        let cell = ((w - 24) / 16).max(8);
-        for i in 0..256 {
-            let x = r + 12 + (i % 16) * cell;
-            let yy = y + (i / 16) * cell;
-            if yy + cell >= bottom {
-                break;
+            if self.mode == Mode::Model {
+                for (label, on, action) in [
+                    ("Paint on the model", self.model_paint, Action::ModelPaint),
+                    (
+                        "Lock strokes to the panel",
+                        self.paint_lock,
+                        Action::PaintLock,
+                    ),
+                ] {
+                    if let Some(rect) = o.wide(&mut s, m::ROW_H) {
+                        o.checkbox_row(
+                            rect,
+                            None,
+                            label,
+                            "",
+                            if on { Check::On } else { Check::Off },
+                            action,
+                        );
+                    }
+                }
+                if let Some(rect) = o.prop(&mut s, "Tool") {
+                    let active = self.model_paint;
+                    o.segmented(
+                        rect_h(rect, m::BUTTON_H),
+                        &[
+                            (
+                                Btn::new("Brush")
+                                    .with_icon(Icon::Brush)
+                                    .on(active && !self.eraser),
+                                Action::PaintToggle,
+                            ),
+                            (Btn::new("Eraser").on(active && self.eraser), Action::Eraser),
+                        ],
+                    );
+                }
             }
-            o.canvas.rect(
-                x,
-                yy,
-                cell - 1,
-                cell - 1,
-                theme::Rgb(rgb(colors[i as usize])),
+            if self.pic.is_some() {
+                if let Some(rect) = o.prop(&mut s, "Tool") {
+                    let on = self.paint_enabled;
+                    o.segmented(
+                        rect_h(rect, m::BUTTON_H),
+                        &[
+                            (
+                                Btn::new("Brush").on(on && !self.eraser),
+                                Action::PaintToggle,
+                            ),
+                            (Btn::new("Eraser").on(on && self.eraser), Action::Eraser),
+                            (Btn::new("Pick").on(self.pick_color), Action::PickColor),
+                        ],
+                    );
+                }
+            }
+            if let Some(rect) = o.prop(&mut s, "Brush size") {
+                let items: Vec<(Btn, Action)> =
+                    [(0, "1 px"), (1, "3 px"), (3, "7 px"), (7, "15 px")]
+                        .into_iter()
+                        .map(|(n, label)| {
+                            (
+                                Btn::new(label).on(self.brush_radius == n),
+                                Action::Radius(n),
+                            )
+                        })
+                        .collect();
+                o.segmented(rect_h(rect, m::BUTTON_H), &items);
+            }
+            if self.pic.is_some() {
+                if let Some(note) = &self.original_note {
+                    original_rows(o, &mut s, note);
+                    if note.2 {
+                        if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                            o.button_ex(
+                                rect,
+                                Btn::new("Restore texture").with_icon(Icon::Rotate),
+                                Action::RestoreTexture,
+                            );
+                        }
+                    }
+                }
+            }
+            o.stack_notice(
+                &mut s,
+                Tone::Neutral,
+                "Shared textures and UVs change every panel that uses them.",
             );
-            if i == self.brush as i32 {
-                border(&mut o.canvas, x - 1, yy - 1, cell + 1, cell + 1, c::INK);
-            }
-            o.hit([x, yy, cell, cell], Action::Brush(i as u8));
         }
-        y += 16 * cell + 12;
-        if y + 26 < bottom {
-            for (i, n) in [0, 1, 3, 7].into_iter().enumerate() {
-                o.button(
-                    [r + 10 + i as i32 * 58, y, 52, 23],
-                    &format!("{} px", n * 2 + 1),
-                    Action::Radius(n),
-                    self.brush_radius == n,
+        o.panel_end(&mut s);
+        if self.pane(
+            o,
+            &mut s,
+            pane::PALETTE,
+            &format!("Palette \u{b7} index {}", self.brush),
+            Icon::Palette,
+        ) {
+            let cell = ((s.w - 2 * space::SPACE_2) / 16).max(8);
+            for row in 0..16 {
+                if s.collapsed() {
+                    break;
+                }
+                let Some([x, y, ..]) = s.take(cell) else {
+                    continue;
+                };
+                for col in 0..16 {
+                    let i = row * 16 + col;
+                    let xx = x + col * cell;
+                    o.canvas.rect(
+                        xx,
+                        y,
+                        cell - 1,
+                        cell - 1,
+                        theme::Rgb(rgb(colors[i as usize])),
+                    );
+                    if i == self.brush as i32 {
+                        widgets::frame(&mut o.canvas, [xx - 1, y - 1, cell + 1, cell + 1], c::INK);
+                    }
+                    o.hit([xx, y, cell - 1, cell - 1], Action::Brush(i as u8));
+                }
+            }
+            s.gap(space::SPACE_1);
+            if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                o.button_ex(
+                    rect,
+                    Btn::new("Load palette").with_icon(Icon::Folder),
+                    Action::File(FileAction::Palette),
                 );
             }
-            y += 34;
         }
-        if y + 24 < bottom {
-            o.button(
-                [r + 10, y, w - 20, 23],
-                "Load palette from PAL / LIB",
-                Action::File(FileAction::Palette),
-                false,
-            );
-            y += 31;
+        o.panel_end(&mut s);
+        let mut actions = Vec::new();
+        if self.pic.is_some() {
+            actions.push(("Export PNG", Action::File(FileAction::Png)));
         }
-        if self.pic.is_some() && y + 24 < bottom {
-            o.button(
-                [r + 10, y, w - 20, 23],
-                "Export PNG",
-                Action::File(FileAction::Png),
-                false,
-            );
-            y += 31;
+        if Pcm::parse(self.name(), &self.data).is_ok() {
+            actions.push(("Export WAV", Action::File(FileAction::Wav)));
         }
-        if Pcm::parse(self.name(), &self.data).is_ok() && y + 24 < bottom {
-            o.button(
-                [r + 10, y, w - 20, 23],
-                "Export WAV",
-                Action::File(FileAction::Wav),
-                false,
-            );
-            y += 31;
+        if self.model.is_some() {
+            actions.push(("Remap untextured colors", Action::Recolor));
         }
-        if self.model.is_some() && y + 24 < bottom {
-            o.button(
-                [r + 10, y, w - 20, 23],
-                "Remap untextured face colors",
-                Action::Recolor,
-                false,
-            );
-            y += 31;
+        if self.selected_face.is_some() {
+            actions.push(("Clone texture for this shape", Action::Isolate));
         }
-        if self.selected_face.is_some() && y + 24 < bottom {
-            o.button(
-                [r + 10, y, w - 20, 23],
-                "Clone texture for this shape",
-                Action::Isolate,
-                false,
-            );
-            y += 31;
+        if !actions.is_empty() {
+            if self.pane(o, &mut s, pane::MEDIA_EXPORT, "Texture", Icon::Image) {
+                for (title, action) in actions {
+                    if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                        o.button_ex(rect, Btn::new(title), action);
+                    }
+                }
+            }
+            o.panel_end(&mut s);
         }
-        if self.context_model.is_some() && self.dock != 3 && y + 52 < bottom {
-            let ph = (bottom - y - 38).min(160);
-            self.draw_model(o, r + 12, y, w - 24, ph);
+        if self.context_model.is_some() && self.dock != 3 {
+            if self.pane(o, &mut s, pane::PREVIEW, "Model preview", Icon::Shape) {
+                if let Some(rect) = o.wide(&mut s, 150) {
+                    self.draw_model(o, rect[0], rect[1], rect[2], rect[3]);
+                    o.zoom_rect = Some(rect);
+                }
+            }
+            o.panel_end(&mut s);
         }
-        if y + 28 < bottom {
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                bottom - 8,
-                w - 24,
-                "Shared PICs / UVs affect other referencing panels.",
-                c::INK_FAINT,
-            );
-        }
+        o.stack_end(s);
+    }
+}
+/// `rect` with height `h`, centred on the same row.
+pub(super) fn rect_h([x, y, w, rh]: [i32; 4], h: i32) -> [i32; 4] {
+    [x, y + (rh - h) / 2, w, h]
+}
+/// The original's rows: what it is, then its stored size when known
+/// (notes carry it as "NAME · 1,234 B").
+fn original_rows(o: &mut Layout, s: &mut widgets::Stack, note: &(String, String, bool)) {
+    let (value, size) = match note.1.split_once(" \u{b7} ") {
+        Some((value, size)) => (value, size.strip_suffix(" B")),
+        None => (note.1.as_str(), None),
+    };
+    o.info(s, &note.0, value, "");
+    if let Some(size) = size {
+        o.info(s, "Stored size", size, "B");
     }
 }
 fn grouped(n: usize) -> String {
@@ -1190,24 +1230,27 @@ impl App {
     }
     /// The selected PIC or ORG's original for the Paint inspector, computed on
     /// refresh so drawing never decodes payloads.
-    pub(super) fn compute_original_note(&self) -> Option<(String, bool)> {
+    pub(super) fn compute_original_note(&self) -> Option<(String, String, bool)> {
         let e = self.doc.archive.entries.get(self.selected)?;
+        let note = |label: &str, value: String, restorable| Some((label.into(), value, restorable));
         if let Some(pic) = originals::texture_of(&e.name) {
-            return Some(if originals::valid(e) {
-                (
-                    format!("Stored original of {pic} / {} B", grouped(e.stored_len())),
+            return if originals::valid(e) {
+                note(
+                    "Original of",
+                    format!("{pic} \u{b7} {} B", grouped(e.stored_len())),
                     true,
                 )
             } else {
-                ("Not a PIC payload; not a stored original".into(), false)
-            });
+                note("Original", "not a PIC payload".into(), false)
+            };
         }
         let org = originals::companion(&e.name)?;
         if let Some(backup) = originals::backup(&self.doc.archive, &e.name) {
-            return Some((
-                format!("Original kept: {org} / {} B", grouped(backup.stored_len())),
+            return note(
+                "Original kept",
+                format!("{org} \u{b7} {} B", grouped(backup.stored_len())),
                 true,
-            ));
+            );
         }
         if let Some(color) = self.panel_color(&e.name) {
             let solid = self.pic.as_ref().is_some_and(|p| {
@@ -1216,7 +1259,7 @@ impl App {
                     .zip(&p.mask)
                     .all(|(v, m)| !*m || *v == color)
             });
-            return Some((format!("Original: panel color {color}"), !solid));
+            return note("Original", format!("panel color {color}"), !solid);
         }
         let junk = self.doc.archive.find(&org).is_some();
         if self
@@ -1224,16 +1267,13 @@ impl App {
             .saved_entry(&e.name)
             .is_some_and(|s| !s.same_storage(e))
         {
-            return Some(("Original: saved entry, until the next save".into(), true));
+            return note("Original", "saved entry".into(), true);
         }
-        Some((
-            if junk {
-                format!("{org} is not a PIC; no stored original")
-            } else {
-                "No stored original yet / kept on first edit".into()
-            },
-            false,
-        ))
+        if junk {
+            note("Original", format!("{org} not a PIC"), false)
+        } else {
+            note("Original", "kept on first edit".into(), false)
+        }
     }
     /// Restore texture: X.PIC takes X.ORG's exact bytes and flag and X.ORG is
     /// removed, in one undo step. Without one, a generated panel returns to its
@@ -1310,54 +1350,44 @@ impl App {
     }
     /// A stored original previews read-only; edits go to its PIC.
     fn original_inspector(&self, o: &mut Layout, pic: &str) {
-        let r = self.right();
-        let w = self.width - r;
-        let mut y = 84;
-        if let Some((note, restorable)) = self.original_note.clone() {
-            let (title, size) = note.split_once(" / ").unwrap_or((note.as_str(), ""));
-            label_fit(&mut o.canvas, r + 12, y, w - 24, title, c::INK);
-            y += 22;
-            let detail = if size.is_empty() {
-                "Read-only".to_string()
-            } else {
-                format!("{size} / read-only")
-            };
-            label_fit(&mut o.canvas, r + 12, y, w - 24, &detail, c::INK_MUTED);
-            y += 18;
-            if let Some(i) = self.doc.archive.find(pic) {
-                o.button(
-                    [r + 10, y, w - 20, 24],
-                    &format!("Open {pic}"),
-                    Action::Entry(i),
-                    false,
-                );
-                y += 30;
+        use theme::metric as m;
+        use widgets::{pane, Btn};
+        let mut s = self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, 0);
+        if self.pane(o, &mut s, pane::ORIGINAL, "Stored original", Icon::Image) {
+            if let Some((label, value, restorable)) = &self.original_note {
+                original_rows(o, &mut s, &(label.clone(), value.clone(), *restorable));
+                o.info(&mut s, "Access", "Read-only", "");
+                if let Some(i) = self.doc.archive.find(pic) {
+                    if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                        o.button_ex(
+                            rect,
+                            Btn::new(&format!("Open {pic}")).with_icon(Icon::Image),
+                            Action::Entry(i),
+                        );
+                    }
+                }
+                if *restorable {
+                    if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                        o.button_ex(
+                            rect,
+                            Btn::new("Restore texture").with_icon(Icon::Rotate),
+                            Action::RestoreTexture,
+                        );
+                    }
+                }
             }
-            if restorable {
-                o.button(
-                    [r + 10, y, w - 20, 24],
-                    "Restore texture",
-                    Action::RestoreTexture,
-                    false,
-                );
-                y += 30;
+            let mut exports = vec![("Export entry", Action::File(FileAction::Export))];
+            if self.pic.is_some() {
+                exports.insert(0, ("Export PNG", Action::File(FileAction::Png)));
+            }
+            for (title, action) in exports {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.button_ex(rect, Btn::new(title), action);
+                }
             }
         }
-        if self.pic.is_some() {
-            o.button(
-                [r + 10, y, w - 20, 24],
-                "Export PNG",
-                Action::File(FileAction::Png),
-                false,
-            );
-            y += 30;
-        }
-        o.button(
-            [r + 10, y, w - 20, 24],
-            "Export entry",
-            Action::File(FileAction::Export),
-            false,
-        );
+        o.panel_end(&mut s);
+        o.stack_end(s);
     }
     /// Package: drop every stored original for a distribution build, one undo step.
     pub(super) fn remove_originals(&mut self) -> Result<()> {
@@ -1716,7 +1746,7 @@ impl App {
         let count = a.doc.archive.entries.len();
         a.select_entry(entry);
         assert!(a.mode == Mode::Media && a.pic.is_some());
-        assert!(shows(&mut a, "No stored original yet"));
+        assert!(shows(&mut a, "kept on first edit"));
         press(&mut a, |x| matches!(x, Action::PaintToggle));
         assert!(a.paint_enabled && !a.eraser);
         a.brush = 7;
@@ -1741,7 +1771,9 @@ impl App {
         assert_eq!(a.doc.archive.entries.len(), count + 1);
         assert!(a.doc.archive.entries[org].same_storage(&backup));
         let painted = a.doc.archive.entries[entry].read().unwrap();
-        assert!(shows(&mut a, "Original kept: DEMO.ORG / 1,856 B"));
+        assert!(
+            shows(&mut a, "Original kept") && shows(&mut a, "DEMO.ORG") && shows(&mut a, "1,856")
+        );
         // The eraser paints the original back over the same brush circle.
         press(&mut a, |x| matches!(x, Action::Eraser));
         assert!(a.paint_enabled && a.eraser);
@@ -1799,7 +1831,7 @@ impl App {
         a.doc = Document::new(reopened);
         a.select_entry(org);
         assert!(a.pic.is_some() && a.mode == Mode::Media);
-        assert!(shows(&mut a, "Stored original of DEMO.PIC"));
+        assert!(shows(&mut a, "Original of") && shows(&mut a, "1,856"));
         assert!(!a
             .layout()
             .hits
@@ -1836,6 +1868,55 @@ impl App {
     }
 }
 impl App {
+    /// The Brush / Eraser segmented control in Paint and in the Model
+    /// inspector, and the Paint-on-model checkbox, through their hit regions.
+    #[inline(never)]
+    pub(super) fn smoke_paint_tools(&mut self) {
+        let mut a = brush_test_app();
+        let rect = |a: &App, predicate: &dyn Fn(Action) -> bool| {
+            a.layout()
+                .hits
+                .into_iter()
+                .rev()
+                .find(|h| predicate(h.action))
+                .map(|h| h.rect)
+                .expect("Paint control missing")
+        };
+        for (w, h) in [(1280, 800), (800, 600)] {
+            a.demo();
+            a.width = w;
+            a.height = h;
+            for model in [false, true] {
+                if model {
+                    a.select_entry(0);
+                    a.mode = Mode::Model;
+                    a.media_tab = 0;
+                    a.selected_face = Some(0);
+                    press(&mut a, |x| matches!(x, Action::ModelPaint));
+                    assert!(a.model_paint, "Paint on the model checkbox");
+                } else {
+                    a.select_entry(a.doc.archive.find("DEMO.PIC").unwrap());
+                }
+                let brush = rect(&a, &|x| matches!(x, Action::PaintToggle));
+                let eraser = rect(&a, &|x| matches!(x, Action::Eraser));
+                assert!(
+                    brush[1] == eraser[1]
+                        && brush[3] == eraser[3]
+                        && brush[0] + brush[2] == eraser[0],
+                    "Brush and Eraser are one segmented control"
+                );
+                press(&mut a, |x| matches!(x, Action::Eraser));
+                assert!(a.eraser);
+                assert!(
+                    a.layout().canvas.commands.iter().any(|d| matches!(d,
+                    Draw::Rect(x, _, _, _, color) if *x == eraser[0] && *color == c::AMBER_DEEP.0))
+                );
+                press(&mut a, |x| matches!(x, Action::PaintToggle));
+                assert!(!a.eraser && (a.paint_enabled || a.model_paint));
+                assert!(!a.doc.dirty());
+            }
+        }
+    }
     #[inline(never)]
     pub(super) fn smoke_render_and_brush(&mut self) {
         let mut a = brush_test_app();

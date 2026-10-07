@@ -1,4 +1,4 @@
-use super::view::{border, label_fit, Action, Layout};
+use super::view::{Action, Icon, Layout};
 use super::*;
 use hangar_core::{
     decal::{self, Image, Placement},
@@ -376,22 +376,7 @@ impl App {
         }
         Ok(())
     }
-    pub(super) fn decal_setting_prompt(&mut self, key: u8) {
-        let p = self.decal_placement;
-        let (label, value) = match key {
-            0 => ("Texture X", p.center[0]),
-            1 => ("Texture Y", p.center[1]),
-            2 => ("Width in texture pixels", p.width as i32),
-            3 => ("Clockwise rotation in degrees", p.degrees),
-            _ => ("Opacity percent", p.opacity as i32),
-        };
-        self.prompt = Some(Prompt {
-            kind: PromptKind::DecalSetting(key),
-            title: label.into(),
-            value: format!("{value}"),
-            axis: 0,
-        });
-    }
+
     pub(super) fn apply_decal(&mut self) -> Result<()> {
         let d = self.decal_draft.as_ref().ok_or("Place a decal first")?;
         if d.changed == 0 {
@@ -417,301 +402,359 @@ impl App {
         self.status = format!("Decal baked into {count} indexed pixels / one Ctrl+Z undo step");
         Ok(())
     }
-    pub(super) fn material_inspector(&self, o: &mut Layout) {
-        let (r, w, h) = (self.right(), self.width - self.right(), self.height);
+    pub(super) fn material_inspector(&self, o: &mut Layout, top: i32) {
+        use theme::{metric as m, space};
+        use widgets::{pane, Btn, Tone};
+        let mut s = self.inspector_stack(top, 0);
         let colors = self.active_colors();
-        let c = colors[self.brush as usize];
-        o.canvas.rect(
-            r + 12,
-            106,
-            40,
-            30,
-            theme::Rgb((c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32),
-        );
-        o.button(
-            [r + 62, 106, w - 74, 26],
-            &format!("Palette index {}", self.brush),
-            Action::MaterialPrompt(0),
-            false,
-        );
-        let rgb = self
-            .palette_rgb()
-            .map(|v| format!("RGB {} {} {} / 0..63", v[0], v[1], v[2]))
-            .unwrap_or_else(|_| "Edit saved palette color".into());
-        o.button(
-            [r + 12, 146, w - 24, 26],
-            &rgb,
-            Action::MaterialPrompt(1),
-            false,
-        );
-        let palette = self
-            .palette_target()
-            .ok()
-            .map(|(i, pic, _)| (&self.doc.archive.entries[i], pic));
-        if let Some((entry, _)) = palette {
-            label_fit(&mut o.canvas, r + 12, 192, w - 24, &entry.name, c::STEEL);
+        let color = colors[self.brush as usize];
+        if self.pane(o, &mut s, pane::MATERIAL, "Palette color", Icon::Palette) {
+            if let Some([x, y, w, h]) = o.prop(&mut s, "Index") {
+                widgets::notched(
+                    &mut o.canvas,
+                    [x, y, h, h],
+                    Some(theme::Rgb(
+                        (color[0] as u32) << 16 | (color[1] as u32) << 8 | color[2] as u32,
+                    )),
+                    Some(c::LINE_STRONG),
+                );
+                o.button_ex(
+                    [
+                        x + h + space::SPACE_1,
+                        y - 1,
+                        w - h - space::SPACE_1,
+                        m::BUTTON_H,
+                    ],
+                    Btn::new(&format!("{}", self.brush)),
+                    Action::MaterialPrompt(0),
+                );
+            }
+            if let Some(rect) = o.prop(&mut s, "RGB, 0..63") {
+                let rgb = self
+                    .palette_rgb()
+                    .map(|v| format!("{} {} {}", v[0], v[1], v[2]))
+                    .unwrap_or_else(|_| "Edit saved color".into());
+                o.button_ex(
+                    super::media::rect_h(rect, m::BUTTON_H),
+                    Btn::new(&rgb),
+                    Action::MaterialPrompt(1),
+                );
+            }
+            let palette = self
+                .palette_target()
+                .ok()
+                .map(|(i, pic, _)| (&self.doc.archive.entries[i], pic));
+            if let Some((entry, _)) = palette {
+                o.info(&mut s, "Palette", &entry.name, "");
+            }
+            let private = palette.is_some_and(|(entry, pic)| {
+                !pic && self.doc.archive.entries.iter().any(|e| {
+                    e.name.ends_with(".PT")
+                        && entry.name == format!("{}.PAL", e.name.split('.').next().unwrap())
+                })
+            });
+            o.stack_notice(
+                &mut s,
+                if private { Tone::Warn } else { Tone::Neutral },
+                if private {
+                    "This private PAL changes the editor preview only."
+                } else {
+                    "Shared palette: a color edit affects every user."
+                },
+            );
+            if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                o.button_ex(
+                    rect,
+                    Btn::new("Load display palette").with_icon(Icon::Folder),
+                    Action::File(FileAction::Palette),
+                );
+            }
         }
-        let private = palette.is_some_and(|(entry, pic)| {
-            !pic && self.doc.archive.entries.iter().any(|e| {
-                e.name.ends_with(".PT")
-                    && entry.name == format!("{}.PAL", e.name.split('.').next().unwrap())
-            })
-        });
-        label_fit(
-            &mut o.canvas,
-            r + 12,
-            212,
-            w - 24,
-            if private {
-                "Private PAL: editor preview only"
-            } else {
-                "Shared palette: affects all users"
-            },
-            if private { c::AMBER } else { c::INK_MUTED },
-        );
+        o.panel_end(&mut s);
+        let mut actions = Vec::new();
         if self.selected_face.is_some() {
-            o.button(
-                [r + 12, 224, w - 24, 26],
-                "Transform selected face UVs",
-                Action::MaterialPrompt(2),
-                false,
-            );
-            o.button(
-                [r + 12, 260, w - 24, 26],
-                "Clone texture across aircraft family",
-                Action::MaterialPrompt(3),
-                false,
-            );
+            actions.push(("Transform face UVs", Action::MaterialPrompt(2)));
+            actions.push(("Clone texture for the family", Action::MaterialPrompt(3)));
         }
         if self.model.is_some() {
-            o.button(
-                [r + 12, 300, w - 24, 26],
-                "Base color / untextured panels",
-                Action::BaseColor(false),
-                false,
-            );
-        }
-        o.button(
-            [r + 12, 344, w - 24, 26],
-            "Load display palette",
-            Action::File(FileAction::Palette),
-            false,
-        );
-        for (i, s) in [
-            "UV edits keep record sizes intact.",
-            "Family cloning includes stored LODs",
-            "and damage-shape texture references.",
-            "Shared shapes still affect other users.",
-            "New aircraft makes private resources.",
-        ]
-        .iter()
-        .enumerate()
-        {
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                396 + i as i32 * 22,
-                w - 24,
-                s,
-                c::INK_FAINT,
-            );
+            actions.push(("Base color of flat panels", Action::BaseColor(false)));
         }
         if self.pic.is_some() {
-            o.button(
-                [r + 12, h - 56, w - 24, 26],
-                "Export PNG",
-                Action::File(FileAction::Png),
-                false,
-            );
+            actions.push(("Export PNG", Action::File(FileAction::Png)));
         }
-    }
-    pub(super) fn decal_inspector(&self, o: &mut Layout) {
-        let (r, w, h) = (self.right(), self.width - self.right(), self.height);
-        let p = self.decal_placement;
-        label_fit(
-            &mut o.canvas,
-            r + 12,
-            107,
-            w - 24,
-            if self.decal_name.is_empty() {
-                "DECAL ARTWORK"
-            } else {
-                &self.decal_name
-            },
-            c::STEEL,
-        );
-        o.button(
-            [r + 12, 118, w - 24, 24],
-            "Import PNG / squadron artwork",
-            Action::File(FileAction::Decal),
-            false,
-        );
-        o.button(
-            [r + 12, 148, w - 24, 24],
-            &format!("Squadron / PNG library ({})", self.decal_paths.len()),
-            Action::DecalLibrary,
-            false,
-        );
-        o.button(
-            [r + 12, 178, w - 24, 24],
-            "Tail number / text",
-            Action::DecalText,
-            false,
-        );
-        o.button(
-            [r + 12, 208, w - 66, 24],
-            decal::NATIONAL_NAMES[self.decal_preset],
-            Action::DecalPreset(false),
-            false,
-        );
-        o.button(
-            [self.width - 46, 208, 34, 24],
-            ">",
-            Action::DecalPreset(true),
-            false,
-        );
-        for (key, y, title) in [
-            (0, 242, format!("X {}", p.center[0])),
-            (1, 242, format!("Y {}", p.center[1])),
-        ] {
-            let bw = (w - 30) / 2;
-            let x = r + 12 + key as i32 * (bw + 6);
-            o.button([x, y, bw, 24], &title, Action::DecalSetting(key), false);
-        }
-        for (key, y, title) in [
-            (2, 272, format!("Width {} px", p.width)),
-            (3, 302, format!("Rotation {} deg", p.degrees)),
-            (4, 332, format!("Opacity {} %", p.opacity)),
-        ] {
-            o.button(
-                [r + 12, y, w - 24, 24],
-                &title,
-                Action::DecalSetting(key),
-                false,
-            );
-        }
-        o.button(
-            [r + 12, 362, w - 24, 24],
-            if p.mirror {
-                "[x] Mirror horizontally"
-            } else {
-                "[ ] Mirror horizontally"
-            },
-            Action::DecalMirror,
-            p.mirror,
-        );
-        o.button(
-            [r + 12, 392, w - 24, 24],
-            &format!("Text ink / palette index {}", self.text_ink()),
-            Action::DecalInk,
-            false,
-        );
-        if let Some(image) = &self.decal_image {
-            let height = (h - 570).clamp(24, 120);
-            let width = w - 24;
-            let mut pixels = Vec::with_capacity((width * height) as usize);
-            let scale = (width as usize * 1024 / image.width)
-                .min(height as usize * 1024 / image.height)
-                .max(1);
-            let iw = (image.width * scale / 1024).max(1) as i32;
-            let ih = (image.height * scale / 1024).max(1) as i32;
-            let ox = (width - iw) / 2;
-            let oy = (height - ih) / 2;
-            for yy in 0..height {
-                for xx in 0..width {
-                    let bg = if (xx / 8 + yy / 8) % 2 == 0 { 48 } else { 32 };
-                    let src = if xx >= ox && yy >= oy && xx < ox + iw && yy < oy + ih {
-                        image.rgba[(yy - oy) as usize * image.height / ih as usize * image.width
-                            + (xx - ox) as usize * image.width / iw as usize]
-                    } else {
-                        [0; 4]
-                    };
-                    let color: [u8; 3] = core::array::from_fn(|i| {
-                        ((src[i] as u32 * src[3] as u32 + bg * (255 - src[3] as u32)) / 255) as u8
-                    });
-                    pixels.push((color[0] as u32) << 16 | (color[1] as u32) << 8 | color[2] as u32);
+        if !actions.is_empty() {
+            if self.pane(
+                o,
+                &mut s,
+                pane::PANEL,
+                "Panels and textures",
+                Icon::Textured,
+            ) {
+                for (title, action) in actions {
+                    if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                        o.button_ex(rect, Btn::new(title), action);
+                    }
                 }
             }
-            o.canvas.commands.push(Draw::Bitmap(
-                r + 12,
-                430,
-                width as usize,
-                height as usize,
-                pixels,
-            ));
+            o.panel_end(&mut s);
         }
-        let label = self
-            .decal_draft
-            .as_ref()
-            .map_or("Click model/atlas to preview".into(), |d| {
-                format!("{} opaque pixels / shared UVs", d.changed)
-            });
-        label_fit(&mut o.canvas, r + 12, h - 116, w - 24, &label, c::AMBER);
-        let half = (w - 30) / 2;
-        o.button(
-            [r + 12, h - 92, half, 24],
-            "Place decal",
+        if self.pane(o, &mut s, pane::MATERIAL_NOTES, "Notes", Icon::Info) {
+            o.stack_notice(
+                &mut s,
+                Tone::Neutral,
+                "UV edits keep record sizes intact. Family cloning covers stored LODs and damage-shape texture references. Shared shapes still affect other users; Export object makes private resources.",
+            );
+        }
+        o.panel_end(&mut s);
+        o.stack_end(s);
+    }
+    pub(super) fn decal_inspector(&self, o: &mut Layout, top: i32) {
+        use theme::{metric as m, space};
+        use widgets::{pane, Btn, Check, Number, NumberTarget};
+        let r = self.right();
+        let foot = 2 * m::BUTTON_H + m::ROW_H + 3 * space::SPACE_2;
+        let mut s = self.inspector_stack(top, foot);
+        let p = self.decal_placement;
+        if self.pane(o, &mut s, pane::ARTWORK, "Artwork", Icon::Image) {
+            o.info(
+                &mut s,
+                "Decal",
+                if self.decal_name.is_empty() {
+                    "None chosen"
+                } else {
+                    &self.decal_name
+                },
+                "",
+            );
+            for (title, icon, action) in [
+                ("Import PNG", Icon::Folder, Action::File(FileAction::Decal)),
+                ("Squadron library", Icon::Lib, Action::DecalLibrary),
+                ("Tail number", Icon::Sliders, Action::DecalText),
+            ] {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    let label = if matches!(action, Action::DecalLibrary) {
+                        format!("{title} ({})", self.decal_paths.len())
+                    } else {
+                        title.into()
+                    };
+                    o.button_ex(rect, Btn::new(&label).with_icon(icon), action);
+                }
+            }
+            if let Some([x, y, w, h]) = o.wide(&mut s, m::BUTTON_H) {
+                o.button_ex(
+                    [x, y, w - h - space::SPACE_1, h],
+                    Btn::new(decal::NATIONAL_NAMES[self.decal_preset]),
+                    Action::DecalPreset(false),
+                );
+                o.button_ex(
+                    [x + w - h, y, h, h],
+                    Btn::icon(Icon::ChevronRight),
+                    Action::DecalPreset(true),
+                );
+            }
+            if let Some(image) = &self.decal_image {
+                if let Some([x, y, width, height]) = o.wide(&mut s, 72) {
+                    let mut pixels = Vec::with_capacity((width * height) as usize);
+                    let scale = (width as usize * 1024 / image.width)
+                        .min(height as usize * 1024 / image.height)
+                        .max(1);
+                    let iw = (image.width * scale / 1024).max(1) as i32;
+                    let ih = (image.height * scale / 1024).max(1) as i32;
+                    let ox = (width - iw) / 2;
+                    let oy = (height - ih) / 2;
+                    for yy in 0..height {
+                        for xx in 0..width {
+                            let bg = if (xx / 8 + yy / 8) % 2 == 0 {
+                                c::CHECKER_LIGHT
+                            } else {
+                                c::CHECKER_DARK
+                            };
+                            let src = if xx >= ox && yy >= oy && xx < ox + iw && yy < oy + ih {
+                                image.rgba[(yy - oy) as usize * image.height / ih as usize
+                                    * image.width
+                                    + (xx - ox) as usize * image.width / iw as usize]
+                            } else {
+                                [0; 4]
+                            };
+                            let under = [bg.r(), bg.g(), bg.b()];
+                            let color: [u8; 3] = core::array::from_fn(|i| {
+                                ((src[i] as u32 * src[3] as u32
+                                    + under[i] as u32 * (255 - src[3] as u32))
+                                    / 255) as u8
+                            });
+                            pixels.push(
+                                (color[0] as u32) << 16 | (color[1] as u32) << 8 | color[2] as u32,
+                            );
+                        }
+                    }
+                    o.canvas.commands.push(Draw::Bitmap(
+                        x,
+                        y,
+                        width as usize,
+                        height as usize,
+                        pixels,
+                    ));
+                }
+            }
+        }
+        o.panel_end(&mut s);
+        if self.pane(o, &mut s, pane::PLACEMENT, "Placement", Icon::Move) {
+            for (key, label, unit) in [
+                (0u8, "Center X", "px"),
+                (1, "Center Y", "px"),
+                (2, "Width", "px"),
+                (3, "Rotation", "\u{b0}"),
+                (4, "Opacity", "%"),
+            ] {
+                if let Some(rect) = o.prop(&mut s, label) {
+                    let t = NumberTarget::Decal(key);
+                    if let Some(spec) = self.number_spec(t) {
+                        o.number(
+                            rect,
+                            &Number {
+                                target: t,
+                                spec,
+                                label: "",
+                                unit,
+                                locked: false,
+                                axis: None,
+                            },
+                        );
+                    }
+                }
+            }
+            if let Some(rect) = o.wide(&mut s, m::ROW_H) {
+                o.checkbox_row(
+                    rect,
+                    None,
+                    "Mirror horizontally",
+                    "",
+                    if p.mirror { Check::On } else { Check::Off },
+                    Action::DecalMirror,
+                );
+            }
+            if let Some(rect) = o.prop(&mut s, "Text ink") {
+                o.button_ex(
+                    super::media::rect_h(rect, m::BUTTON_H),
+                    Btn::new(&format!("Index {}", self.text_ink())).with_icon(Icon::Palette),
+                    Action::DecalInk,
+                );
+            }
+        }
+        o.panel_end(&mut s);
+        o.stack_end(s);
+        // Footer: preview state, Place / Cancel, Apply decal (primary).
+        let (x, w) = (
+            r + 1 + space::SPACE_2,
+            self.width - r - 1 - 2 * space::SPACE_2,
+        );
+        let mut y = self.height - m::STATUSBAR_H - foot;
+        o.canvas.rect(r + 1, y, self.width - r - 1, 1, c::GM_1000);
+        y += space::SPACE_2;
+        let (note, changed) = self.decal_draft.as_ref().map_or(
+            ("Click the model or atlas to preview.".to_string(), false),
+            |d| {
+                (
+                    format!(
+                        "{} pixels change \u{b7} shared UVs",
+                        widgets::format_number(d.changed as i64, 0)
+                    ),
+                    true,
+                )
+            },
+        );
+        o.canvas.styled(
+            x,
+            widgets::baseline(y, m::ROW_H, Style::Label),
+            &fit(&note, w, Style::Label),
+            if changed { c::AMBER } else { c::INK_MUTED },
+            Style::Label,
+        );
+        y += m::ROW_H + space::SPACE_1;
+        let half = (w - space::SPACE_1) / 2;
+        o.button_ex(
+            [x, y, half, m::BUTTON_H],
+            Btn::new("Place decal").on(self.decal_active),
             Action::DecalPlace,
-            self.decal_active,
         );
-        o.button(
-            [r + 18 + half, h - 92, half, 24],
-            "Cancel",
+        o.button_ex(
+            [
+                x + half + space::SPACE_1,
+                y,
+                w - half - space::SPACE_1,
+                m::BUTTON_H,
+            ],
+            Btn::new("Cancel").enabled(self.decal_draft.is_some() || self.decal_active),
             Action::DecalCancel,
-            false,
         );
-        if self.decal_draft.as_ref().is_some_and(|d| d.changed > 0) {
-            o.button(
-                [r + 12, h - 60, w - 24, 28],
-                "Apply decal",
-                Action::DecalApply,
-                true,
-            );
-        } else {
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                h - 40,
-                w - 24,
-                "Preview before Apply / Esc cancels",
-                c::INK_MUTED,
-            );
-        }
+        y += m::BUTTON_H + space::SPACE_2;
+        o.button_ex(
+            [x, y, w, m::BUTTON_H],
+            Btn::new("Apply decal")
+                .primary()
+                .enabled(self.decal_draft.as_ref().is_some_and(|d| d.changed > 0)),
+            Action::DecalApply,
+        );
     }
     pub(super) fn decal_library_layout(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::Btn;
         let (w, h) = ((self.width - 40).min(720), (self.height - 70).min(500));
         let (x, y) = ((self.width - w) / 2, (self.height - h) / 2);
         o.hits.clear();
-        o.canvas.rect(x, y, w, h, c::GM_800);
-        border(&mut o.canvas, x, y, w, h, c::LINE_STRONG);
-        o.canvas
-            .label(x + 14, y + 24, "SQUADRON / IMPORTED PNG LIBRARY", c::INK);
+        let body = self.dialog_frame(o, [x, y, w, h], "Squadron library");
         if self.decal_paths.is_empty() {
-            label_fit(
-                &mut o.canvas,
-                x + 14,
-                y + 64,
-                w - 28,
-                "Import a PNG first; original files remain on disk.",
+            o.canvas.styled(
+                body[0],
+                widgets::baseline(body[1], m::ROW_H, Style::Label),
+                &fit(
+                    "Import a PNG first; the original files stay on disk.",
+                    body[2],
+                    Style::Label,
+                ),
                 c::INK_MUTED,
+                Style::Label,
             );
         }
-        for (i, path) in self
-            .decal_paths
-            .iter()
-            .take(((h - 90) / 24) as usize)
-            .enumerate()
-        {
-            let yy = y + 42 + i as i32 * 24;
-            o.button(
-                [x + 14, yy, w - 70, 22],
-                path.rsplit(['/', '\\']).next().unwrap_or(path),
-                Action::DecalSaved(i),
-                false,
+        let rows = ((body[3] - m::BUTTON_H - space::SPACE_4) / (m::ROW_H + 2)).max(0) as usize;
+        for (i, path) in self.decal_paths.iter().take(rows).enumerate() {
+            let yy = body[1] + i as i32 * (m::ROW_H + 2);
+            let close = m::ROW_H;
+            let rect = [body[0], yy, body[2] - close - space::SPACE_1, m::ROW_H];
+            let fill = if o.over(rect) { c::GM_700 } else { c::GM_800 };
+            o.canvas.rect(rect[0], yy, rect[2], m::ROW_H, fill);
+            o.canvas
+                .icon(rect[0] + 4, yy + 2, Icon::Image, c::INK_MUTED, fill);
+            o.canvas.styled(
+                rect[0] + 4 + m::ICON + space::SPACE_2,
+                widgets::baseline(yy, m::ROW_H, Style::Value),
+                &fit(
+                    path.rsplit(['/', '\\']).next().unwrap_or(path),
+                    rect[2] - 32,
+                    Style::Value,
+                ),
+                c::INK,
+                Style::Value,
             );
-            o.button([x + w - 46, yy, 32, 22], "x", Action::DecalForget(i), false);
+            o.hit(rect, Action::DecalSaved(i));
+            o.button_ex(
+                [body[0] + body[2] - close, yy, close, close],
+                Btn::icon(Icon::Close).ghost(),
+                Action::DecalForget(i),
+            );
         }
-        o.button([x + 14, y + h - 40, 90, 26], "Close", Action::Cancel, false);
+        let close = Btn::new("Close");
+        let cw = close.width();
+        o.button_ex(
+            [
+                x + w - space::SPACE_4 - cw,
+                y + h - space::SPACE_4 - m::BUTTON_H,
+                cw,
+                m::BUTTON_H,
+            ],
+            close,
+            Action::Cancel,
+        );
     }
 }
 

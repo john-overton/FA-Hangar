@@ -1139,6 +1139,13 @@ impl Stack {
         self.y += h + space::SPACE_1;
         self.visible(rect[1], h).then_some(rect)
     }
+    /// Reserve `h` px with no gap after it (swatch grids); `None` unless
+    /// entirely visible.
+    pub fn take(&mut self, h: i32) -> Option<[i32; 4]> {
+        let rect = [self.inner.0, self.y, self.inner.1, h];
+        self.y += h;
+        self.visible(rect[1], h).then_some(rect)
+    }
     /// Extra vertical space.
     pub fn gap(&mut self, h: i32) {
         self.y += h;

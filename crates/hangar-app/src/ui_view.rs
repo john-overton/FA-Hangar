@@ -97,7 +97,6 @@ pub(super) enum Action {
     DecalText,
     DecalInk,
     DecalPreset(bool),
-    DecalSetting(u8),
     DecalMirror,
     DecalPlace,
     DecalCancel,
@@ -136,6 +135,8 @@ pub(super) struct Layout {
     pub(super) scrub: Option<(widgets::NumberTarget, i64)>,
     /// Scroll range of the right-hand editor's panel stack, in px.
     pub(super) inspector_max: i32,
+    /// The media inspector's model preview: the wheel zooms it.
+    pub(super) zoom_rect: Option<[i32; 4]>,
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
 }
@@ -156,6 +157,8 @@ const GROUPS: [(&str, &str, Icon); 10] = [
 pub(super) const GROUP_ORDER: [usize; 10] = [0, 1, 2, 9, 3, 4, 5, 6, 7, 8];
 /// Outliner footer (Open LIB, Export object) height.
 pub(super) const OUTLINER_FOOTER: i32 = theme::metric::EDITOR_HEADER_H;
+/// Dialog header height.
+pub(super) const DIALOG_HEAD: i32 = 36;
 /// Browse table column header height.
 const TABLE_HEAD_H: i32 = theme::metric::EDITOR_HEADER_H;
 pub(super) fn category_of(name: &str) -> usize {
@@ -735,7 +738,6 @@ impl App {
                     });
                 self.result(result);
             }
-            Action::DecalSetting(key) => self.decal_setting_prompt(key),
             Action::DecalMirror => {
                 let mut p = self.decal_placement;
                 p.mirror = !p.mirror;
@@ -1181,6 +1183,7 @@ impl App {
             size: [self.width, self.height],
             scrub: self.scrub.map(|s| (s.target, s.value)),
             inspector_max: 0,
+            zoom_rect: None,
             canvas: Canvas {
                 commands: Vec::new(),
             },
@@ -2420,6 +2423,29 @@ impl App {
         }
     }
 
+    /// Dialog surface (no shadow): `gm-800` with a `line-strong` keyline, a
+    /// 36px header with the title in `title` style. Returns the body rect.
+    pub(super) fn dialog_frame(&self, o: &mut Layout, rect: [i32; 4], title: &str) -> [i32; 4] {
+        use theme::space;
+        use widgets::{baseline, notched};
+        let [x, y, w, h] = rect;
+        let d = &mut o.canvas;
+        notched(d, rect, Some(c::GM_800), Some(c::LINE_STRONG));
+        d.rect(x + 1, y + DIALOG_HEAD - 1, w - 2, 1, c::GM_1000);
+        d.styled(
+            x + space::SPACE_4,
+            baseline(y, DIALOG_HEAD, Style::Title),
+            &fit(title, w - 2 * space::SPACE_4, Style::Title),
+            c::INK,
+            Style::Title,
+        );
+        [
+            x + space::SPACE_4,
+            y + DIALOG_HEAD + space::SPACE_3,
+            w - 2 * space::SPACE_4,
+            h - DIALOG_HEAD - space::SPACE_3 - space::SPACE_4,
+        ]
+    }
     fn prompt_layout(&self, o: &mut Layout) {
         let p = self.prompt.as_ref().unwrap();
         let w = (self.width - 48).min(710);
@@ -2564,6 +2590,7 @@ impl App {
         self.smoke_material_tools();
         self.smoke_advanced_tools();
         self.smoke_render_and_brush();
+        self.smoke_paint_tools();
         self.smoke_originals();
         self.smoke_object_tools();
         self.demo();
