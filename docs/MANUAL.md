@@ -42,6 +42,9 @@ the game. No game data ships.
 - [Hide, move and paint runtime markings](#hide-move-and-paint-runtime-markings)
 - [Ship, ground and animation tools](#ship-ground-and-animation-tools)
 - [Edit shapes](#edit-shapes)
+  - [Vertex handles and X-ray](#vertex-handles-and-x-ray)
+  - [Transform gizmo](#transform-gizmo)
+  - [Magnetic snap](#magnetic-snap)
 - [Moving parts](#moving-parts)
 - [Controls](#controls)
 - [Limits and why](#limits-and-why)
@@ -55,6 +58,7 @@ the game. No game data ships.
   - [Retail LIB names](#retail-lib-names)
   - [Archive and resource sizes](#archive-and-resource-sizes)
   - [Shape geometry](#shape-geometry)
+  - [Transform gizmo and snapping](#transform-gizmo-and-snapping)
   - [Moving part settings](#moving-part-settings)
   - [Damage family](#damage-family)
   - [Stored originals](#stored-originals)
@@ -1291,13 +1295,14 @@ rest of the shape stays editable. Every operation below is one undo step.
 | Action | Control |
 | --- | --- |
 | Vertex select / face select | **1** / **3**, the header's vertex and face buttons, or **Select** menu |
-| Select one | Click a vertex marker, or click a face in face select |
+| Select one | Click a vertex handle, or click a face in face select |
 | Add or remove from the selection | Shift+click |
 | Select everything / nothing | **A** |
 | Box select | Drag on empty space, or **B** then drag anywhere; Shift extends, Ctrl removes |
 | Select the part under the pointer | **L** |
 | Select all faces of the selected faces' parts | **Select > Select linked part** |
 | Invert | **Select > Invert** |
+| Pick and box vertices behind faces | **Alt+Z** (X-ray), the header's X-ray button, or the shading menu |
 
 Faces are picked from what the viewport draws: in **Solid** and **Textured**
 shading the face under the pointer, in **Wireframe** the nearest face whose
@@ -1349,6 +1354,109 @@ offset.
   is drawn: Hangar appends them before the shape's end marker and routes that
   face through them. They take free vertex slots below 640, the largest slot
   count of any retail shape.
+
+### Vertex handles and X-ray
+
+In vertex select every corner of a drawn face has a square handle with a
+dark keyline, so it reads on light and dark surfaces:
+
+- unselected handles are ink, 7 px; where another handle sits within 6 px
+  they draw at 5 px so dense meshes stay readable;
+- selected handles are amber with an amber-bright ring, 9 px, and the
+  active vertex (the one clicked last) 11 px;
+- the handle under the pointer is outlined before you click.
+
+A click picks the handle nearest the pointer within 9 px; when handles
+overlap, the vertex nearer the viewer wins. Only corners of faces drawn in
+the current pose get handles, and copies of a vertex at the same point and
+screen position (the same corner stored in several frames) share one.
+
+In **Solid** and **Textured** shading, vertices behind faces are small dim
+dots: they are not picked, boxed or used by **L**. **X-ray** (**Alt+Z**, the
+header button beside the shading control, or the shading menu) makes them
+pickable and boxable, as in Blender. In **Wireframe** every vertex counts.
+
+### Transform gizmo
+
+With vertices or faces selected (faces move their corners), a gizmo sits at
+the selection's median. Pick its mode with the viewport tool strip
+(**Select** hides it; **Move**, **Rotate**, **Scale**), the header control
+where the header has room, or right-click in the viewport. **Move** is the
+default. **G**, **R** and **S** still start the typed transforms.
+
+| Mode | Handles | Drag |
+| --- | --- | --- |
+| Move | X, Y and Z arrows in the axis colours; a square for each plane, coloured by the axis it holds fixed; a white circle at the centre | An arrow moves along its axis, a square in its plane, the circle in the plane of the screen |
+| Rotate | A ring around each axis | Along a ring: the selection turns about that axis through the pivot by the angle the pointer sweeps around it, shown as a filled sweep and a readout |
+| Scale | An axis line with a square end for each axis; a circle at the centre | Away from the centre grows, towards it shrinks: the percentage is the pointer's distance from the pivot over its distance at the press (at least 30 px) |
+
+| While dragging | Effect |
+| --- | --- |
+| **Shift** | Fine: the pointer moves the selection a tenth as far |
+| **Ctrl** | Steps: moves in whole multiples of 10 source units, turns in 15° steps, scales in 10% steps |
+| **Alt** | Move without [magnetic snap](#magnetic-snap) while held |
+| A digit or minus | Switches to the typed transform on the dragged axis, as in Blender; Enter applies |
+| **Esc**, **Ctrl+Z** or right-click | Cancels; nothing changes |
+
+The hovered handle turns brighter and thicker. While you drag, a dim
+outline shows where the moved faces were, a readout by the pointer and in
+the status bar gives the change (**Move X 12 · Y 0 · Z −3 (source units)**,
+**Rotate Z 15°**, **Scale 120%**), and rotate and scale draw a dashed line
+from the pivot to the pointer. Releasing the button applies the change as
+one undo step through the same writers as **G**, **R** and **S**.
+
+- The arrows keep their length on screen and follow the view. An axis
+  pointing at you hides its arrow, a plane seen edge-on its square, and a
+  ring seen edge-on dims and cannot be dragged: orbit a little.
+- With **Pivot: Individual** in face select, rotate and scale turn each
+  connected group of faces about its own centre; the gizmo stays at the
+  median.
+- The gizmo also works in perspective; plain vertex drags need an
+  orthographic view.
+- The gizmo dims when the selection cannot be edited: the shape belongs to
+  another LIB, a selected vertex is in a part the preview pose rotates, or
+  the region writer refuses a selected vertex. Hovering or pressing it
+  names the reason. See [Transform gizmo and
+  snapping](#transform-gizmo-and-snapping).
+
+The right-click menu (idle, in the Edit Mesh viewport) holds **Move**,
+**Rotate**, **Scale**, **Snap to vertices**, **Pivot: Median**, **Pivot:
+Individual** and **Cancel**. During a drag right-click cancels instead.
+
+### Magnetic snap
+
+With **Snap to vertices** on (the magnet button in the header, the shading
+menu or the right-click menu; on by default), moves snap a moving vertex
+onto a nearby vertex: gizmo arrows, squares and the centre, and plain
+vertex drags. Rotate and scale do not snap.
+
+The rule is judged in 3D, not by what looks close on screen:
+
+1. The snapping vertex is the moving vertex nearest the pointer.
+2. The move is held to a constraint through its start: the line along the
+   dragged axis (an arrow, or a drag with X, Y or Z locked), the plane of a
+   square, or for the centre circle and plain drags the plane facing you.
+3. A vertex is a candidate only when it lies within the reach of that line
+   or plane. The reach is 8 px at the current zoom, converted to source
+   units. A vertex that only looks near because it lies far behind or in
+   front is never a target.
+4. Of the candidates, the one nearest the dragged position, measured within
+   the line or plane, wins if it is within the reach.
+5. The snapping vertex takes the target's coordinates along the free axes:
+   one for an arrow, two for a square, all three for the plane facing you.
+   For an arrow the target must already lie near the line; if it is not
+   exactly on it, the status says how many units off it is and that the two
+   do not coincide.
+
+A ring marks the target and a dashed guide joins it to where the vertex
+would have been; the status bar says **Snapped to vertex at (x, y, z)**.
+**Ctrl** steps apply first, so a snap can override a step. Hold **Alt** to
+move freely while it is held.
+
+Targets are corners of faces drawn in the current pose, inside the view,
+that are not moving and are not copies of a moving vertex (another stored
+vertex at a moving vertex's start); in perspective, vertices behind the
+camera are skipped.
 
 ### Refusals and limits
 
@@ -1490,13 +1598,20 @@ folds the other way in the viewport. Whether the game agrees is listed in
 | Delete / flip / duplicate / extrude / make face | X or Delete / Alt+N / Shift+D / E / F |
 | Preview a moving part's state | Parts: Pose preview buttons and fields (never saved) |
 | Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |
+| Transform gizmo mode | Edit Mesh tool strip (Select, Move, Rotate, Scale), header control, or right-click in the viewport |
+| Drag the gizmo | Arrow, square or centre (move), ring (rotate), axis square or centre (scale); release applies one undo step |
+| Fine / steps / no snap while dragging | Hold Shift (a tenth as far) / Ctrl (10 units, 15°, 10%) / Alt |
+| Exact value during a gizmo drag | Type a number: continues as G / R / S on that axis |
+| Snap to vertices (magnet) | Header magnet button, shading menu, or right-click menu |
+| X-ray: pick and box hidden vertices | Alt+Z, header X-ray button, or shading menu |
+| Edit Mesh viewport menu | Right-click in the viewport when no drag is in progress |
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
 | Erase paint / restore a texture | Paint panel: Brush / Eraser control, Restore texture |
 | Replace a color | Paint panel: Replace, then Alt+click the color (or Pick); Replace color… for a whole texture or panels |
 | Select panels (Model viewport, Paint model preview) | Click; Shift+click adds or removes (also with the brush on); Esc or empty space clears |
 | Remap stretched panels | Select them, orbit until they face you, Remap selected panels from view… |
-| Cancel transform or dialog | Esc or right mouse button |
+| Cancel transform, gizmo or vertex drag, or dialog | Esc or right mouse button |
 | Close with unsaved edits | Click Discard changes, or Cancel/Esc to return |
 
 G/R/S start with no axis lock; X, Y or Z locks that axis and pressing it again
@@ -1553,6 +1668,8 @@ number.
 | "Face at {offset}: a part stub resumes drawing at this face, so it cannot be moved" | [Shape geometry](#shape-geometry) |
 | "A selected vertex is in a rotated part; reset its pose or edit it in local coordinates" | [Shape geometry](#shape-geometry) |
 | "Per-vertex shaded faces need F6 vertex records; choose a flat or textured style" | [Shape geometry](#shape-geometry) |
+| "Gizmo unavailable: {why}" | [Transform gizmo and snapping](#transform-gizmo-and-snapping) |
+| "Transform exceeds signed 16-bit coordinates" | [Transform gizmo and snapping](#transform-gizmo-and-snapping) |
 | "CODE has no virtual-address room for this continuation; relocation support is required" | [Shape geometry](#shape-geometry) |
 | "Relocation table has no room for the moved import tail" | [Shape geometry](#shape-geometry) |
 | "Panel continuation exceeds the 16-bit SH jump reach" | [Shape geometry](#shape-geometry) |
@@ -1696,6 +1813,23 @@ panel](#fixing-a-stretched-panel) for panels whose texture smears.
 The model view is a static-pose projection, not the game's full drawing
 interpreter. Resource code is never executed. OBJ exports drop materials and
 animation and cannot be imported back as a lossless SH edit.
+
+### Transform gizmo and snapping
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Rotation is in whole degrees, and every result is rounded to whole source units | Hangar has no floating point (the Windows 98 build carries no float runtime). Angles come from an integer angle search over the same Bhaskara sine the transforms use, which is within about 0.2% of the true sine; each rotated coordinate is then truncated to an integer, so repeated small turns accumulate rounding. | Rotate once by the full angle, or type it (**R**, axis, degrees). |
+| The gizmo is dimmed and refuses to drag when the shape is in another LIB, a selected vertex is in a part the preview pose rotates, or the region writer refuses a selected vertex | The release writes through the same proved writers as **G**/**R**/**S**: model-space changes map to stored coordinates only through unrotated part frames, and each vertex must be one the writer can prove ([Shape geometry](#shape-geometry)). Checking first means a drag never previews a change that could not be saved. | Reset the pose in **Parts**, or select vertices drawn alone. |
+| A move, rotation or scale that would take a vertex outside -32768..32767 shows no preview and the release refuses with "Transform exceeds signed 16-bit coordinates" | SH vertices are stored as signed 16-bit words. | Drag back inside the range. |
+| Scale runs from 1% to 10,000% and cannot mirror | The shared transform accepts 1 to 10,000 percent, as typed **S** does; a negative factor would mirror the faces and reverse their winding. | |
+| An axis pointing at you, a square seen edge-on and an edge-on ring cannot be dragged | Their screen projection is too short to turn pointer motion into a reliable world distance. | Orbit the view a little. |
+| Snapping targets only corners of faces drawn in the current pose | The snap reads the model the viewport shows; parts hidden in this pose, damage shapes and other LODs are not in it. | Set the pose in **Parts** first. |
+| A target must lie within the reach (8 px at the current zoom, in source units) of the drag's line or plane | Snapping by screen distance alone would pull a vertex onto one far behind or in front of it that only looks close. | Orbit until the target lies in the drag plane, or drag an arrow towards it. |
+| An arrow snap is exact only when the target lies exactly on the arrow's line | Only the arrow's axis is free, so the other two coordinates keep their start values; the status says how far off the target is. | Use a square or the centre to land on all coordinates. |
+| On Linux, Alt+drag may move the window instead | Many X11 window managers take Alt+drag for themselves before Hangar sees it. | Turn **Snap to vertices** off, or change the window manager's modifier. On Windows a bare Alt never opens the system menu. |
+| Hidden vertices in **Solid** and **Textured** are judged from the shaded raster (at most 512 px wide) | A vertex counts as shown when the raster around it is empty, is drawn by a face with a corner at that point, or is no more than 2 source units deeper; vertices near silhouettes or on very thin parts can be judged either way. | **X-ray** (Alt+Z), or **Wireframe**. |
+| A click selects one stored vertex even when copies of it share the point | The copies are separate stored vertices (in different frames or buffers), and Hangar edits only what was selected. | Box select takes every copy. |
+| Plain vertex drags need an orthographic view | They place the vertex under the pointer, which needs a flat projection. | Press 5, or use the gizmo, which works in perspective. |
 
 ### Moving part settings
 

@@ -38,7 +38,8 @@ the game. No game data ships.
   a Copy/Share review per resource.
 - View SH static poses and place hardpoints. Edit Mesh selects vertices or
   faces (click, box, part) and moves, scales, deletes, flips, duplicates,
-  extrudes and adds geometry on retail aircraft, region by region.
+  extrudes and adds geometry on retail aircraft, region by region, with a
+  Blender-style move/rotate/scale gizmo and magnetic vertex snapping.
 - List moving parts (gear, flaps, rudder, hook, brakes, bays, afterburner,
   swing wings, canards), preview their states, and change their gate values,
   gear swing range and direction, rotation axis and pivot.

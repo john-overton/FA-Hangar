@@ -1133,3 +1133,48 @@ is in the boxed `EditState`). No Win32 API was added; the PE audit reports
 1,774,592 bytes (32-bit) and 2,018,304 bytes (64-bit) with the same 60
 reviewed imports. No hidden, reassigned or paintable marking has been
 loaded in the original game.
+
+## Unreleased transform gizmo, magnetic snap and X-ray
+
+2026-10-07. Linux only; the gizmo has not been used on Windows or in the
+original game yet ([WINDOWS-TEST.md](WINDOWS-TEST.md)). Renders ran on
+copies in `/tmp/claude-1000/gizmo/` of the user's `TOPGUNFX.LIB` (F5EV.SH)
+and of `FA_2.LIB` (F18.SH); the files in Downloads were not written and
+nothing from them is committed.
+
+- Native renders (`--native-snapshot … gizmo-*`/`handles-*`/`edit-vertices`)
+  of each gizmo mode, idle and mid-drag, at 1280x800 and 800x600, on F18.SH
+  and F5EV.SH: arrows, squares and rings follow the view, the rotate sweep
+  and readouts show, region-writer previews move the selected F5EV and F18
+  faces. Vertex select before (2f90f3f, 3 px steel dots for 419 F18
+  vertices) and after (keylined handles, crowded ones smaller, hidden ones
+  as dim dots in Solid) was compared; X-ray brings the hidden ones back.
+  The synthetic snap render shows the target ring and the status.
+- Core tests: `atan2_deg` inverts `sin_cos` for every degree and length,
+  drag conversion and Cramer's solve, rotation about a pivot, and the snap
+  rule (a near-on-screen, far-in-depth candidate is rejected; a near
+  in-plane one, an on-axis one and a plane one are accepted; off-line axis
+  snaps report the distance).
+- Smoke test at 800x600 and 1280x800 through rendered hit regions: the X
+  arrow changes only X and undo restores the exact bytes; a typed value
+  mid-drag becomes exact entry; the XY square keeps Z; the centre stays in
+  the view plane; Esc and right-click cancel mid-drag; Shift moves a tenth
+  as far; Ctrl steps by 10; a drag past 16-bit range previews nothing and
+  refuses; the Z ring with Ctrl turns by exactly 15° in the cursor's
+  direction; the X scale handle with Ctrl scales in 10% steps; the Y arrow
+  snaps exactly onto a vertex, Alt bypasses it, and a plain vertex drag
+  snaps in the view plane but not onto a vertex 32 units behind; the
+  right-click menu switches modes, toggles snapping and cancels; tool strip,
+  header (1280) and shading menu (800) controls; hover outline; the nearer
+  of two overlapping vertices; the nearest of two adjacent handles; X-ray
+  making a hidden vertex pickable and boxable; a region-writer (PARTS.SH)
+  move and undo; and the dimmed, refusing gizmo on folded gear legs. Hit
+  geometry is checked in each state.
+
+After rebasing onto the runtime markings work, F5EV renders show the steel
+marking outlines under the handles and gizmo. Formatting, strict Clippy
+(also for both Windows targets), 200 core tests and the smoke test pass.
+`App` is 2,744 bytes (+8: the boxed gizmo state). No Win32 API was added
+(Alt+Z reuses the WM_SYSKEYDOWN/WM_SYSCHAR handling of Alt+N); the PE audit
+reports 1,854,464 bytes (32-bit) and 2,097,664 bytes (64-bit) with the same
+60 reviewed imports.

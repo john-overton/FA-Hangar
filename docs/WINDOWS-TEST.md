@@ -563,6 +563,27 @@ palette. FA must also load the retail `FA_1.LIB`, which holds the roundels.
    changed and `SU27_B.SH` as having no slot 0. Fly the Su-27 as the player
    and get it damaged: no left tail art on the intact or damaged shapes.
 
+## Transform gizmo, magnetic snap and X-ray (unreleased)
+
+Use a copy of a LIB with an editable aircraft shape (or the synthetic demo).
+
+1. Edit Mesh (Tab), vertex select, Solid shading. Hover a vertex: its
+   square handle gains an outline. Click two handles a few pixels apart:
+   each click selects the one under the pointer.
+2. Select a panel's corners. Drag the red arrow: only X changes, and the
+   status reads **Move X … · Y 0 · Z 0 (source units)**. Ctrl+Z restores it.
+   Drag a square and the white centre circle; drag with Shift held (fine)
+   and with Ctrl held (steps of 10).
+3. Hold **Alt** while dragging a vertex towards another: no snap, and no
+   window menu opens when Alt is released. Without Alt, release within a
+   few pixels of another vertex in the drag plane: **Snapped to vertex at
+   (x, y, z)** and the two coincide.
+4. Right-click in the viewport: the menu opens; choose **Rotate**, drag a
+   ring with Ctrl: the angle steps by 15°. Right-click during a drag cancels.
+5. Press **Alt+Z**: X-ray turns on (header button lit), hidden vertices
+   become pickable; Alt+Z again turns it off and no window menu opens.
+6. Repeat at 800x600: the X-ray and magnet toggles are in the shading menu.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

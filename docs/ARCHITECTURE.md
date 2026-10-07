@@ -775,6 +775,34 @@ bytes, calls one `shape_geometry` function, and replaces the entry once:
 one undo step. Duplicate and extrude preview by running the core function on
 each keystroke and apply the final offset in one call.
 
+## Transform gizmo and magnetic snap
+
+The Edit Mesh gizmo (`ui_gizmo.rs`) is integer from end to end. Screen
+directions are not derived from a matrix: the viewport projection
+(`hp_project`) is evaluated at the pivot and at the pivot plus a world step
+`k` along each axis and along the camera's right and up vectors
+(`camera_inverse`), so the gizmo matches whatever the viewport draws,
+perspective included (there `k` is short so the local scale holds). An
+arrow drag converts the pointer offset `m` to world units as
+`k (m·d)/(d·d)` for the axis's screen step `d`; plane and free moves solve
+the 2×2 system against two screen steps by Cramer's rule
+(`gizmo::along`, `gizmo::solve2`). Shift accumulates the pointer in tenths
+of a pixel. Rotation takes the pointer's angle about the pivot from
+`gizmo::atan2_deg`, a quadrant reduction and a binary search of the same
+Bhaskara `sin_cos` the transforms use, so `atan2_deg(sin d, cos d) = d`
+exactly; the screen turn is accumulated across wrap-around and its sign
+follows the axis's towards-the-viewer component. Scale is a ratio of pixel
+distances. Every result becomes a `Transform` for `edit_transform`, the same
+path as typed G/R/S, and the release commits through `commit_points`
+(full writer for writable static shapes, `write_model_points` and its
+verification otherwise). Snapping (`gizmo::snap_search`) is judged in
+source units: a candidate must lie within the reach (8 px converted at the
+snapping vertex) of the drag's line or plane through the start, and the
+nearest within that line or plane wins, so screen proximity alone never
+qualifies a target. Vertex occlusion reuses the shaded raster's face and
+depth buffers (`render_model` now keeps its depth buffer), cached by a hash
+of the view and the shown points.
+
 ## Texture originals boundary
 
 `hangar-core/src/originals.rs` owns stored originals. The companion of `X.PIC`

@@ -27,6 +27,33 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   picks the image (roundels by nation, tail and nose art from the player's
   pilot record, read from FA.EXE and not yet confirmed in the game).
 
+- **Transform gizmo in Edit Mesh.** With vertices or faces selected, drag
+  X/Y/Z arrows, plane squares or the centre circle to move, rings to rotate
+  (a sweep and the angle show; Ctrl turns in 15° steps) and axis squares or
+  the centre to scale (Ctrl in 10% steps). Shift is fine, Ctrl steps moves by
+  10 source units, Esc or right-click cancels, and typing a number continues
+  as the exact **G**/**R**/**S** entry on that axis. A dim outline of the
+  original faces and a readout follow the drag; the release is one undo step
+  through the same verified writers. Pick the mode in the viewport tool
+  strip, the header (where it fits) or a new right-click menu (**Move**,
+  **Rotate**, **Scale**, **Snap to vertices**, **Pivot**, **Cancel**). The
+  gizmo dims and says why when the selection is in a posed part or the region
+  writer refuses a vertex. See
+  [Transform gizmo](MANUAL.md#transform-gizmo).
+- **Magnetic snap.** Moves, including plain vertex drags, snap the moving
+  vertex nearest the pointer onto a vertex within 8 px, judged in 3D within
+  the drag's line or plane, so a vertex that only looks close on screen is
+  never a target. A ring and guide mark the target and the status names it.
+  Hold Alt to move freely; the magnet button in the header turns it off. See
+  [Magnetic snap](MANUAL.md#magnetic-snap).
+- **Vertex handles and X-ray.** Vertex select draws keylined 7 px handles
+  (selected amber, the active vertex larger, crowded ones smaller), outlines
+  the one under the pointer, picks the nearest within 9 px (the nearer in
+  depth on overlap), and draws one handle per stored point and position, for
+  corners of drawn faces only. In Solid and Textured shading vertices behind
+  faces are dim and cannot be picked or boxed until **X-ray** (Alt+Z, or the
+  header button) is on.
+
 - **Neg-G cut-out** (Model inspector, Propulsion panel) shows the PT field
   `negGLimit`, which is now also in Flight's Propulsion field group. It
   is the time in 1/256 s of continuous negative G before FA cuts the throttle
