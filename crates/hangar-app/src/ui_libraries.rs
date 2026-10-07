@@ -624,7 +624,7 @@ impl App {
 impl App {
     #[inline(never)]
     pub(super) fn smoke_libraries(&mut self) {
-        let mut app = App::new();
+        let mut app = library_test_app();
         app.demo();
         app.path = "SOURCE.LIB".into();
         let source_id = app.library_id;
