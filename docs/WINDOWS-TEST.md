@@ -478,6 +478,18 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    the dialog names the 14-character LIB name; Cancel writes nothing, Save
    anyway saves and the status says to move it out. Remove it afterwards.
 
+## Negative-G engine cut-out (unreleased)
+
+1. Open a copy of a custom LIB with an aircraft PT and select it in Model.
+   The Propulsion panel shows **Neg-G cut-out** with `1/256 s`. In Flight,
+   the Propulsion group lists `plane.negGLimit` and the throttle rates show
+   `%/s`.
+2. Set **Neg-G cut-out** to 1280 (5 s), save, and fly that aircraft in FA at
+   military power. Push over into steady negative G: after about 5 s the
+   throttle falls to 0 and the engine spools down. Ease to 0 G or above: the
+   throttle returns to the lever setting with no restart. Set it back to 0
+   and repeat: the engine keeps running however long the push lasts.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

@@ -895,3 +895,19 @@ and the smoke test pass. `App` is 2,688 bytes. No Win32 API was added; the
 PE audit reports 1,592,832 bytes (32-bit) and 1,807,360 bytes (64-bit) with
 the same 60 reviewed imports. The repaired LIB has not been loaded in the
 original game yet; steps are in WINDOWS-TEST.md.
+
+## Unreleased negative-G cut-out field
+
+2026-10-07. Static evidence only. The FA.EXE routines named in ARCHITECTURE.md
+(0x451A60, 0x451E80, 0x452140) were read in disassembly and none was
+executed. The cut-out time and the effect of a nonzero `negGLimit` have not
+been flown in the original game. The census of retail values used FA_2.LIB.
+The user's TOPGUNFX.LIB and TopGun.LIB F5EV.PT both store 0, the same as
+retail, so neither has a cut-out.
+
+A core test checks that `negGLimit` and the throttle rates group with
+Propulsion and carry their units. The smoke test, at 1280x800 and 800x600,
+finds the **Neg-G cut-out** number field in the Model inspector and the
+`1/256 s` unit drawn beside it. Formatting, strict Clippy, 166 core tests,
+the smoke test and the x86_64 Windows release build with its PE audit (60
+reviewed imports) pass.

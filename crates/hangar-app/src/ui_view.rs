@@ -1420,6 +1420,7 @@ impl App {
             ("Envelope", "Envelope max", "plane.envMax"),
             ("Propulsion", "Engines", "plane.engines"),
             ("Propulsion", "Thrust", "plane.thrust"),
+            ("Propulsion", "Neg-G cut-out", "plane.negGLimit"),
             ("Propulsion", "Fuel use", "plane.fuelConsumption"),
             ("Propulsion", "AB fuel use", "plane.aftFuelConsumption"),
             ("Propulsion", "Internal fuel", "plane.internalFuel"),
@@ -2225,7 +2226,11 @@ impl App {
                     target,
                     spec,
                     label: "",
-                    unit: if f.scaled { "scaled" } else { "" },
+                    unit: if f.scaled {
+                        "scaled"
+                    } else {
+                        hangar_core::definition::unit(&f.label)
+                    },
                     locked: false,
                     axis: None,
                 },
@@ -3391,8 +3396,23 @@ impl App {
                 .iter()
                 .position(|f| f.label == "object.weight")
                 .unwrap();
+            let neg_g = fields
+                .iter()
+                .position(|f| f.label == "plane.negGLimit")
+                .unwrap();
             let speed_field =
                 |a: Action| matches!(a, Action::Number(NumberTarget::Field(i)) if i == speed);
+            // Reviewed engine fields show their stored unit beside the value.
+            assert!(find(
+                self,
+                &|a| matches!(a, Action::Number(NumberTarget::Field(i)) if i == neg_g)
+            )
+            .is_some());
+            assert!(self
+                .draw()
+                .commands
+                .iter()
+                .any(|d| matches!(d, Draw::Text(_, _, s, _, _) if s == "1/256 s")));
             // Collapse and expand Envelope from its header.
             let header = find(self, &|a| matches!(a, Action::Panel(pane::ENVELOPE))).unwrap();
             assert_eq!(header[3], theme::metric::PANEL_HEADER_H);

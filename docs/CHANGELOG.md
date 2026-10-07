@@ -7,6 +7,13 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Neg-G cut-out** (Model inspector, Propulsion panel) shows the PT field
+  `negGLimit`, which is now also in Flight's Propulsion field group. It
+  is the time in 1/256 s of continuous negative G before FA cuts the throttle
+  to 0; 0 means never. Graft now carries it with Propulsion instead of
+  Handling. `throttleAcc` and `throttleDacc` show their unit, %/s. The
+  manual's [Negative-G engine cut-out](MANUAL.md#negative-g-engine-cut-out)
+  explains how to set it and its limits.
 - **Fix: FA crashed drawing Hangar's generated panel textures** (for example
   the external view of a painted F-5). Generated panel sheets were raw PICs
   with an embedded palette and no row table, which FA's texture mapper reads

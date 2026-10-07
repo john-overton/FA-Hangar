@@ -104,6 +104,7 @@ pub fn aspect(label: &str) -> Option<Aspect> {
         "plane.engines"
             | "plane.thrust"
             | "plane.aftThrust"
+            | "plane.negGLimit"
             | "plane.throttleAcc"
             | "plane.throttleDacc"
             | "plane.fuelConsumption"
@@ -194,7 +195,6 @@ pub fn aspect(label: &str) -> Option<Aspect> {
                 | "plane.gpullAOA"
                 | "plane.lowAOASpeed"
                 | "plane.lowAOAPitch"
-                | "plane.negGLimit"
                 | "plane.coefDrag"
                 | "plane.flapsLift"
                 | "plane.flapsDrag"
@@ -205,6 +205,15 @@ pub fn aspect(label: &str) -> Option<Aspect> {
         return Some(Aspect::Handling);
     }
     None
+}
+/// Stored unit of a field whose FA.EXE use is reviewed (ARCHITECTURE.md,
+/// "Engine fields"). Display only: values stay in these source units.
+pub fn unit(label: &str) -> &'static str {
+    match label {
+        "plane.negGLimit" => "1/256 s",
+        "plane.throttleAcc" | "plane.throttleDacc" => "%/s",
+        _ => "",
+    }
 }
 fn integer(field: &Field) -> Option<i64> {
     if let Some(h) = field.value.strip_prefix('$') {
@@ -442,6 +451,14 @@ mod tests {
         );
         assert_eq!(graft.apply(&target, "PT").unwrap(), donor_bytes);
         assert!(graft.apply(&output, "PT").is_err());
+    }
+    #[test]
+    fn engine_fields_group_with_propulsion_and_carry_reviewed_units() {
+        assert_eq!(aspect("plane.negGLimit"), Some(Aspect::Propulsion));
+        assert_eq!(aspect("plane.throttleDacc"), Some(Aspect::Propulsion));
+        assert_eq!(unit("plane.negGLimit"), "1/256 s");
+        assert_eq!(unit("plane.throttleAcc"), "%/s");
+        assert_eq!(unit("plane.thrust"), "");
     }
     #[test]
     fn incompatible_records_and_scaled_fields_are_conflicts_not_index_matches() {
