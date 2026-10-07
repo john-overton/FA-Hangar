@@ -5,7 +5,13 @@ the root [`Cargo.toml`](../Cargo.toml). What was verified for each version is
 recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
-## Unreleased
+## 0.9.0
+
+Design-system UI pass, region-scoped SH editing on retail aircraft, a
+moving-parts catalog with pose preview, and stored texture originals with an
+eraser and Restore texture. Nothing in this release has been verified in the
+original game yet; see [WINDOWS-TEST.md](WINDOWS-TEST.md).
+
 
 - **Edit Mesh** works on retail aircraft, region by region. Vertex and face
   select modes (1 / 3 and header buttons), click, Shift+click, A, box select

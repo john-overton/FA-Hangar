@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://github.com/john-overton/T.O.R.E-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/T.O.R.E-Hangar/windows.yml?branch=main&label=windows%20build" alt="Windows build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only"></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.8.2-orange" alt="Version 0.8.2"></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.0-orange" alt="Version 0.9.0"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.91.1-b7410e?logo=rust" alt="Rust 1.91.1"></a>
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/platforms-Windows%2098%2FME%20%C2%B7%20Win64%20%C2%B7%20Linux%20X11-555" alt="Platforms: Windows 98/ME, Win64, Linux X11"></a>
   <a href="docs/ARCHITECTURE.md"><img src="https://img.shields.io/badge/core-no__std-6c757d" alt="no_std core"></a>
@@ -19,8 +19,9 @@ Blender-inspired workspace.
 
 **Early working editor, not a complete SH authoring tool.** LIB and textual
 BRF editing work. Aircraft geometry is edited per region where Hangar can
-prove the change safe, and moving parts change only through settings retail
-shapes already use. No game data ships.
+prove the change safe, and moving parts change only through a catalog of
+same-size settings, with forms not seen in retail labelled until tested in
+the game. No game data ships.
 
 ## Highlights
 
@@ -57,7 +58,7 @@ Windows 98. Source and notices are included in the repository; packages carry
 the license and notices alongside the executable.
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
-build targets modern Windows. Each is a portable executable of about 1 MiB,
+build targets modern Windows. Each is a portable executable of about 1.2 MiB,
 including the built-in `--smoke-test` self-check so a release build can be
 checked on the target machine. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.

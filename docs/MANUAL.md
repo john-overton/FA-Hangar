@@ -6,8 +6,9 @@ decisions see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 **Early working editor, not a complete SH authoring tool.** LIB and textual
 BRF editing work. Aircraft geometry is edited per region, wherever Hangar can
-prove the change is safe, and moving parts change only through settings the
-retail shapes already use. No game data ships.
+prove the change is safe, and moving parts change only through a catalog of
+same-size settings, with forms not seen in retail labelled until tested in
+the game. No game data ships.
 
 ## Contents
 
@@ -697,7 +698,7 @@ one undo step.
 | Gate value | buttons | the values the retail census shows for that variable |
 | Gate test | Equal / Not equal | je or jne after the compare |
 | Swing range (gear) / Shift | Select | sar 1, 2 or 3 where the stub's bytes allow; swing-wing terms 1 to 7 |
-| Direction (gear) | Select | Plain or Negated (NEG), where the stub's bytes allow |
+| Direction (gear) | Select | NEG or No NEG (opposite fold directions), where the stub's bytes allow |
 | Rotation axis | Select | yaw (r0), pitch (r1), roll (r2) |
 | Pivot | X, Y, Z number fields | the part's C4 translation, in source units |
 

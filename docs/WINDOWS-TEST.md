@@ -320,7 +320,7 @@ In-game checks:
    its gate value to 0. Save. In the game the hook mesh should now show with
    the hook up and hide when it is lowered. Report if it never shows.
 3. **Non-retail direction flip.** Select **Gear left** on `F18.SH` and set
-   **Direction** to **Plain** (badge **Not seen in retail**). Save. In the
+   **Direction** to **No NEG** (badge **Not seen in retail**). Save. In the
    game, lower and raise the gear: the left main leg should fold the opposite
    way to the right leg, as the preview shows, and the game must not crash.
    Also try **Swing range** sar 2 (45°) on a variant. Report the leg's

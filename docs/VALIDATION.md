@@ -282,7 +282,7 @@ Formatting, strict Clippy, shared UI smoke, both Windows cross-builds and PE
 audits pass. The binaries are 672,256 bytes (32-bit) and 786,944 bytes (64-bit),
 with the same 59 reviewed imports and no runtime DLL additions.
 
-## Unreleased bug-fix sweep
+## 0.9.0 bug-fix sweep
 
 A read-only probe over the user's retail FA_2.LIB (1,275 SH entries, 1,249
 decodable by Hangar's reader) checked the face-normal grammar before changing
@@ -315,7 +315,7 @@ cross-builds with PE audits pass: 689,664 bytes (32-bit) and 805,376 bytes
 interaction and original-game checks remain pending.
 
 
-## Unreleased SH inventory and part census
+## 0.9.0 SH inventory and part census
 
 A read-only `--shape-inventory` run over the user's retail LIBs: 1,274 of the
 1,275 SH entries in FA_2.LIB and all 7 in swpatch.lib decode with no opaque
@@ -335,7 +335,7 @@ pivots are per-aircraft. Posed A-10 and F/A-18 gear retract in plausible
 directions in the preview. This is preview plausibility, not original-game
 verification.
 
-## Unreleased geometry editing and part settings
+## 0.9.0 geometry editing and part settings
 
 108 core tests pass. 17 of them are synthetic geometry fixtures covering
 frames and slot proofs. They also cover refusals for an inner pointer, an
@@ -377,7 +377,7 @@ Manual `--geometry-check` against the user's retail FA_2.LIB, 2026-10-07:
 
 None of these edited shapes has been loaded in the original game yet.
 
-## Unreleased texture originals
+## 0.9.0 texture originals
 
 75 core tests pass, including synthetic `.ORG` coverage: one backup on the
 first edit and none on the second, undo removing both, a removed original
@@ -403,7 +403,7 @@ release builds pass; the PE audit reports 714,240 bytes (32-bit) and 836,608
 bytes (64-bit) with the same 59 reviewed imports. Loading a LIB that contains
 `.ORG` entries in the original game has not been tested yet.
 
-## Unreleased Edit Mesh, Parts and same-size gear encodings
+## 0.9.0 Edit Mesh, Parts and same-size gear encodings
 
 111 core tests pass. New ones walk every reachable state of each census
 gear slot (D1, D1+NEG, C1 2/3, C1 2/3+NEG): exactly the states that fit are
