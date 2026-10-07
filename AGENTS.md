@@ -71,7 +71,8 @@ committing.
 - **Keep native stack frames small.** Large buffers (palettes, images) go on
   the heap (`Box`), as existing code does. The CRT-free x86_64 build has no
   `__chkstk`, so any frame over 4 KiB fails to link: never put an `App` on
-  the stack (smoke helpers use boxed constructors). After growing `App`,
+  the stack (smoke helpers use boxed constructors). Stable sorts (`sort`,
+  `sort_by`) can also pull in a large stack buffer; prefer `sort_unstable*`. After growing `App`,
   `Model` or other large structs, run
   `cargo build --release --locked --target x86_64-pc-windows-msvc`.
 - **No game data in the repo.** `.gitignore` excludes LIB/SH/PT/EXE files;
