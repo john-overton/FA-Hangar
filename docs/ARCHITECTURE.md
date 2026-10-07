@@ -870,6 +870,11 @@ drawn faces, each moved face at its new offset with the expected texture,
 same corners and same part, every other face identical. A no-op (Keep onto
 the texture faces already use) returns the input bytes.
 
+Automatic hosts for new geometry (`pick_host`) prefer faces outside
+assignments. An operation that detours an assigned copy itself (duplicate or
+extrude of that face, delete) leaves its continuation unrecognised; the copy
+then keeps drawing from its texture, but Use shape texture refuses it.
+
 The app's Clone texture for selected faces runs Keep onto a renamed copy of
 the faces' PIC (stored bytes and flag shared, `.ORG` copied by
 `originals::cloned`) in one transaction. Painting follows the faces' texture

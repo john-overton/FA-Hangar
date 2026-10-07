@@ -687,7 +687,7 @@ and UVs follow the panel instead of 64 × 64.
 Formatting, strict Clippy, all tests and the smoke test pass. New state
 lives in the boxed Edit Mesh state, so `App` keeps its size; sets in the new
 code are filled by insertion, since collecting one pulled in the stable
-sort's 4 KiB stack buffer. The PE audit reports 1,461,248 bytes (32-bit) and
-1,662,464 bytes (64-bit) with the same 60 reviewed imports. Per-face
+sort's 4 KiB stack buffer. The PE audit reports 1,456,640 bytes (32-bit) and
+1,664,512 bytes (64-bit) with the same 60 reviewed imports. Per-face
 textures and the new sheet sizes have not been loaded in the original game
 yet; steps are in WINDOWS-TEST.md.

@@ -1360,10 +1360,18 @@ fn pick_host(g: &Geometry, corners: &[(usize, usize)], frame: Frame) -> Result<u
     for (b, i) in corners {
         wanted.insert(g.buffers[*b].slot + i);
     }
-    let mut candidates: Vec<(usize, usize)> = (0..g.faces.len())
+    // Faces drawn from a Hangar texture assignment come last: detouring one
+    // again would leave its continuation no longer recognised, so Use shape
+    // texture could not restore it.
+    let mut assigned = BTreeSet::new();
+    for a in crate::shape_texture::assignments(g) {
+        assigned.extend(a.copies);
+    }
+    let mut candidates: Vec<(bool, usize, usize)> = (0..g.faces.len())
         .filter(|f| g.faces[*f].frame == frame && g.face_refusal(*f).is_none())
         .map(|f| {
             (
+                !assigned.contains(&(g.faces[f].offset - cs)),
                 g.faces[f]
                     .slots
                     .iter()
@@ -1375,7 +1383,7 @@ fn pick_host(g: &Geometry, corners: &[(usize, usize)], frame: Frame) -> Result<u
         .collect();
     candidates.sort_unstable_by(|a, b| b.cmp(a));
     let mut last = String::from("no face of this frame can host it");
-    for (_, f) in candidates.into_iter().take(512) {
+    for (_, _, f) in candidates.into_iter().take(512) {
         let h = g.faces[f].offset - cs;
         match corners
             .iter()

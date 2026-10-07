@@ -109,7 +109,7 @@ fn build(o: Opt) -> (Vec<u8>, Asm) {
     a.label("end")
         .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
     let mut copy = Asm::default();
-    for name in ["fa", "fb", "fc", "fd", "fw", "late", "gearblock"] {
+    for name in ["body", "fa", "fb", "fc", "fd", "fw", "late", "gearblock"] {
         copy.mark(name, a.at(name));
     }
     if o.flat_after {
@@ -639,4 +639,26 @@ fn generated_panels_after_native_code_restore_the_proved_state() {
             assert_eq!((&a.texture, &a.uv), (&b.texture, &b.uv));
         }
     }
+}
+#[test]
+fn later_mesh_edits_prefer_hosts_outside_assignments() {
+    let (src, l) = fixture();
+    let out = keep(&src, &[face(&l, "fa")], "NEW.PIC");
+    let v = |i: usize| CS + l.at("body") + 6 + 6 * i;
+    let added = crate::shape_geometry::add_face(
+        &out.shape,
+        &[v(0), v(1), v(4)],
+        &crate::shape_geometry::FaceStyle::flat(9),
+    )
+    .unwrap();
+    let g = Geometry::parse(&added.shape).unwrap();
+    let found = assignments(&g);
+    assert_eq!(found.len(), 1, "the assignment is still recognised");
+    let back =
+        restore_texture_assignment(&added.shape, &[g.inventory.code_start + found[0].copies[0]])
+            .unwrap();
+    assert_eq!(
+        model_face(&back.shape, &Pose::new(), face(&l, "fa")).texture,
+        "BASE.PIC"
+    );
 }
