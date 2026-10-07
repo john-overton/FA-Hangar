@@ -33,6 +33,12 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   shape's import addresses (for example a panel texture added or removed), so
   a state can no longer apply to the wrong guard. The state input list
   scrolls with the wheel instead of hiding rows beyond the panel.
+- The viewport Select tool is a real tool that leaves paint mode (it was
+  wired to Frame). The shading toggle reads Textured and is highlighted when
+  textured shading is on. Controls under an open menu or dialog no longer
+  show hover, and clicks on menu padding no longer reach controls beneath.
+- Singular counts read "1 reference", "1 direct user", "1 aircraft user".
+  SVG snapshots preserve repeated spaces.
 
 ## 0.8.2
 

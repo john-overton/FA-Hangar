@@ -68,6 +68,8 @@ pub(super) enum Action {
     PanelTexture,
     RepairPanels,
     MeshMode,
+    SelectTool,
+    MenuPad,
     MeshVertex(usize),
     MeshAll,
     MeshMove,
@@ -322,6 +324,10 @@ pub(super) fn border(d: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Rgb)
     d.line(x, y, x, y + h - 1, color);
     d.line(x + w - 1, y, x + w - 1, y + h - 1, color);
 }
+/// "1 reference", "2 references".
+pub(super) fn count(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
 pub(super) fn text_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
     d.text(x, y, &short(s, (w.max(0) / 7) as usize), color);
 }
@@ -425,7 +431,7 @@ impl Layout {
 }
 impl App {
     pub(super) fn act(&mut self, a: Action) {
-        if !matches!(a, Action::Menu(_)) {
+        if !matches!(a, Action::Menu(_) | Action::MenuPad) {
             self.menu = None;
         }
         if !matches!(a, Action::Filter) {
@@ -530,6 +536,15 @@ impl App {
                 self.selected_face = None;
             }
             Action::MeshVertex(i) => self.mesh_select(i),
+            // Clicks on menu padding are consumed so they never reach controls beneath.
+            Action::MenuPad => {}
+            Action::SelectTool => {
+                self.finish_stroke();
+                self.model_paint = false;
+                self.paint_enabled = false;
+                self.pick_color = false;
+                self.status = "Select tool / click a face to select it".into();
+            }
             Action::MeshAll => self.mesh_toggle_all(),
             Action::MeshMove => self.mesh_transform_prompt('g'),
             Action::BaseColor(face) => self.base_color_prompt(face),
@@ -1273,8 +1288,10 @@ impl App {
         self.layout().canvas
     }
     pub(super) fn layout(&self) -> Layout {
+        // Underlying controls do not show hover while a menu or dialog covers them.
+        let covered = self.menu.is_some() || self.prompt.is_some();
         let mut out = Layout {
-            mouse: self.mouse,
+            mouse: if covered { [i32::MIN; 2] } else { self.mouse },
             canvas: Canvas {
                 commands: Vec::new(),
             },
@@ -1456,6 +1473,7 @@ impl App {
         if let Some(menu) = self.menu {
             self.menu_layout(&mut out, menu);
         }
+        out.mouse = self.mouse;
         if self
             .prompt
             .as_ref()
@@ -1700,11 +1718,7 @@ impl App {
         if width > 590 {
             o.button(
                 [r - 254, 29, 94, 22],
-                if self.textured {
-                    "Wireframe"
-                } else {
-                    "Textured"
-                },
+                "Textured",
                 Action::Textured,
                 self.textured,
             );
@@ -1745,7 +1759,7 @@ impl App {
             && self.model_entry == Some(self.selected);
         let x = l + 8;
         for (n, (i, a, enabled)) in [
-            (Icon::Select, Action::View(0), true),
+            (Icon::Select, Action::SelectTool, true),
             (Icon::Move, Action::Transform('g'), writable),
             (Icon::Rotate, Action::Transform('r'), writable),
             (Icon::Scale, Action::Transform('s'), writable),
@@ -2172,13 +2186,20 @@ impl App {
         d.label(
             r + 20,
             272,
-            &format!("{links} references / {users} direct users"),
+            &format!(
+                "{} / {}",
+                count(links, "reference", "references"),
+                count(users, "direct user", "direct users")
+            ),
             c::INK_MUTED,
         );
         d.label(
             r + 20,
             298,
-            &format!("{} aircraft users in this LIB", self.aircraft_users.len()),
+            &format!(
+                "{} in this LIB",
+                count(self.aircraft_users.len(), "aircraft user", "aircraft users")
+            ),
             c::STEEL,
         );
         label_fit(
@@ -2499,6 +2520,7 @@ impl App {
             items.len() as i32 * 26 + 8,
             c::LINE_STRONG,
         );
+        o.hit([x, 26, 222, items.len() as i32 * 26 + 8], Action::MenuPad);
         for (i, (label, a)) in items.into_iter().enumerate() {
             let y = 30 + i as i32 * 26;
             let hover = self.mouse[0] >= x
@@ -2696,6 +2718,7 @@ impl App {
         self.file_prompt(FileAction::Open);
         click(self, |a| matches!(a, Action::Cancel));
         assert!(self.prompt.is_none());
+        self.smoke_toolbar_and_menus();
         self.width = 800;
         self.height = 600;
         for mode in [
@@ -2716,5 +2739,72 @@ impl App {
                 );
             }
         }
+    }
+}
+impl App {
+    /// Select tool, shading toggle, menu padding and hover under overlays.
+    fn smoke_toolbar_and_menus(&mut self) {
+        let find = |app: &App, predicate: &dyn Fn(Action) -> bool| {
+            app.layout()
+                .hits
+                .into_iter()
+                .rev()
+                .find(|h| predicate(h.action))
+                .map(|h| h.rect)
+        };
+        self.width = 1280;
+        self.height = 800;
+        self.select_entry(0);
+        self.mode = Mode::Model;
+        self.model_paint = true;
+        let tool = find(self, &|a| matches!(a, Action::SelectTool)).expect("Select tool");
+        self.click(tool[0] + 4, tool[1] + 4, 1, true);
+        assert!(!self.model_paint, "Select tool leaves paint mode");
+        let (zoom, pan) = (self.zoom, self.pan);
+        for textured in [false, true] {
+            self.textured = textured;
+            let labels: Vec<_> = self
+                .draw()
+                .commands
+                .into_iter()
+                .filter_map(|d| match d {
+                    Draw::Label(_, _, s, color) if s == "Textured" || s == "Wireframe" => {
+                        Some((s, color))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let color = if textured { c::AMBER.0 } else { c::INK.0 };
+            assert_eq!(
+                labels,
+                vec![("Textured".to_string(), color)],
+                "Shading state"
+            );
+        }
+        let button = find(self, &|a| matches!(a, Action::Hardpoints)).unwrap();
+        self.mouse = [button[0] + 4, button[1] + 4];
+        let hovered = |app: &App| {
+            app.draw().commands.iter().any(|d| {
+                matches!(d, Draw::Rect(x, y, w, h, color)
+                    if [*x, *y, *w, *h] == button && *color == c::GM_600.0)
+            })
+        };
+        assert!(hovered(self));
+        self.act(Action::Menu(0));
+        assert!(!hovered(self), "No hover under an open menu");
+        // Padding inside the drawn menu consumes the click and keeps the menu open.
+        let menu = find(self, &|a| matches!(a, Action::MenuPad)).unwrap();
+        self.click(menu[0] + 1, menu[1] + 1, 1, true);
+        assert_eq!(self.menu, Some(0));
+        self.click(menu[0] + menu[2] - 2, menu[1] + menu[3] - 2, 1, true);
+        assert_eq!(self.menu, Some(0));
+        assert!(self.zoom == zoom && self.pan == pan && self.mode == Mode::Model);
+        self.key(Key::Escape, false, false);
+        assert!(self.menu.is_none());
+        assert_eq!(count(1, "reference", "references"), "1 reference");
+        assert_eq!(
+            count(2, "aircraft user", "aircraft users"),
+            "2 aircraft users"
+        );
     }
 }

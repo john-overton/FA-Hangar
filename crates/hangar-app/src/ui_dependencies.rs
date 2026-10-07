@@ -169,7 +169,10 @@ impl App {
                 self.aircraft_users.len()
             )
         } else {
-            format!("Current LIB / {} aircraft users", self.aircraft_users.len())
+            format!(
+                "Current LIB / {}",
+                super::view::count(self.aircraft_users.len(), "aircraft user", "aircraft users")
+            )
         };
         label_fit(&mut o.canvas, x + 12, y + 16, w - 24, &scope, c::INK_FAINT);
         let rows = self.reference_rows();
