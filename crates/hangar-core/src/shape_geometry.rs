@@ -576,7 +576,7 @@ impl Geometry {
                 .clone()
                 .unwrap_or_else(|| Err("its control flow loops".into()));
         }
-        if depth > 32 {
+        if depth > 128 {
             return Err("its control flow is too deep to prove".into());
         }
         self.memo.borrow_mut().insert((slot, x), None);
@@ -649,9 +649,14 @@ impl Geometry {
             }
         }
         for source in sources {
-            let w = self
-                .resolve(slot, source, depth + 1)
-                .map_err(|e| format!("CODE+{source:X} enters before CODE+{x:X} and {e}"))?;
+            let w = self.resolve(slot, source, depth + 1).map_err(|e| {
+                // Name only the outermost entry; the innermost reason follows.
+                if depth == 0 {
+                    format!("CODE+{source:X} enters before CODE+{x:X} and {e}")
+                } else {
+                    e
+                }
+            })?;
             match found {
                 None => found = Some(w),
                 Some(f) if f == w => {}

@@ -587,3 +587,327 @@ pub fn inventory(path: &str, entry: Option<&str>) -> Result<String> {
     let _ = writeln!(out, "Shapes per variable binding: {vars:?}");
     Ok(out)
 }
+/// Manual real-data check of region geometry edits on in-memory copies of
+/// retail shapes. Each edit is re-parsed (whole-CODE inventory coverage,
+/// geometry analysis, model reader) and written create-new to `out_dir`.
+pub fn geometry_check(out_dir: &str, lib: &str, names: &[String]) -> Result<String> {
+    use hangar_core::{
+        model::Model,
+        shape_geometry::{self as geo, Base, FaceStyle, Frame, Geometry},
+    };
+    let archive = Archive::parse(crate::platform::read(lib)?)?;
+    let mut out = String::new();
+    let mut failed = 0;
+    if names.is_empty() {
+        // Analysis only, over every SH: writability and slot proofs.
+        let (mut count, mut errors, mut verts, mut writable, mut faces, mut editable) =
+            (0, 0, 0, 0, 0, 0);
+        let mut parts = (0, 0);
+        let mut reasons = BTreeMap::<String, usize>::new();
+        for e in archive.entries.iter().filter(|e| e.name.ends_with(".SH")) {
+            let (name, bytes) = (&e.name, e.read()?);
+            count += 1;
+            let g = match Geometry::parse(&bytes) {
+                Ok(g) => g,
+                Err(e) => {
+                    errors += 1;
+                    let _ = writeln!(out, "{name}: {e}");
+                    continue;
+                }
+            };
+            let report = g.vertex_report();
+            verts += report.len();
+            writable += report.iter().filter(|v| v.refusal.is_none()).count();
+            faces += g.faces.len();
+            // Reasons keyed without offsets, so like refusals group together.
+            let key = |r: &str| -> String {
+                r.split(' ')
+                    .map(|w| {
+                        if w.contains(|c: char| c.is_ascii_digit()) {
+                            "#"
+                        } else {
+                            w
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            };
+            for r in report.iter().filter_map(|v| v.refusal.as_deref()) {
+                *reasons.entry(format!("vertex: {}", key(r))).or_default() += 1;
+            }
+            for f in 0..g.faces.len() {
+                match g.face_refusal(f) {
+                    None => editable += 1,
+                    Some(r) => *reasons.entry(format!("face: {}", key(&r))).or_default() += 1,
+                }
+            }
+            if let Ok(list) = hangar_core::shape_parts::parts(&bytes) {
+                parts.0 += list.len();
+                parts.1 += list.iter().filter(|p| p.locked.is_some()).count();
+                for p in list.iter().filter(|p| p.locked.is_some()) {
+                    let r = p.locked.as_deref().unwrap_or("");
+                    *reasons.entry(format!("part: {}", key(r))).or_default() += 1;
+                }
+            }
+        }
+        let _ = writeln!(
+            out,
+            "{count} SH, {errors} not analysable; vertices {writable}/{verts} writable; faces {editable}/{faces} editable; parts {} ({} locked)",
+            parts.0, parts.1
+        );
+        for (r, n) in &reasons {
+            let _ = writeln!(out, "  {n:6} {r}");
+        }
+        return Ok(out);
+    }
+    for name in names {
+        let at = archive
+            .find(name)
+            .ok_or_else(|| format!("{name} not found"))?;
+        let bytes = archive.entries[at].read()?;
+        let g = Geometry::parse(&bytes)?;
+        let inv = &g.inventory;
+        let report = g.vertex_report();
+        let writable = report.iter().filter(|v| v.refusal.is_none()).count();
+        let editable = (0..g.faces.len())
+            .filter(|f| g.face_refusal(*f).is_none())
+            .count();
+        let frames: BTreeSet<_> = g.buffers.iter().map(|b| b.frame).collect();
+        let _ = writeln!(
+            out,
+            "{name}: CODE {} bytes, {} records, opaque {}, contiguous {}; {} faces ({editable} editable), {} vertices ({writable} writable), {} frames",
+            inv.code_len,
+            inv.records.len(),
+            inv.opaque_bytes(),
+            inv.contiguous(),
+            g.faces.len(),
+            report.len(),
+            frames.len()
+        );
+        let mut reasons = BTreeMap::<String, usize>::new();
+        for v in &report {
+            if let Some(r) = &v.refusal {
+                *reasons.entry(r.clone()).or_default() += 1;
+            }
+        }
+        for (r, n) in reasons.iter().take(4) {
+            let _ = writeln!(out, "  refused vertices {n}: {r}");
+        }
+        let model = Model::parse(&bytes).ok();
+        let face = (0..g.faces.len())
+            .filter(|f| {
+                let r = &g.faces[*f];
+                r.frame == Frame::Root
+                    && r.normal.is_some()
+                    && r.content & 0x80 == 0
+                    && g.face_refusal(*f).is_none()
+                    && model
+                        .as_ref()
+                        .is_none_or(|m| m.faces.iter().any(|x| x.offset == r.offset))
+            })
+            .nth(3)
+            .ok_or("No editable root face")?;
+        let f = g.faces[face].clone();
+        let corners: Vec<usize> = f
+            .slots
+            .iter()
+            .map(|s| {
+                let b = g.writer(face, *s)?;
+                Ok(g.buffers[b].vertex(*s - g.buffers[b].slot))
+            })
+            .collect::<Result<_>>()?;
+        let n = f.normal.unwrap_or([0, 0, 1]);
+        let axis = (0..3).max_by_key(|k| n[*k].abs()).unwrap_or(2);
+        let mut push: [i32; 3] = [0; 3];
+        push[axis] = 2 * n[axis].signum();
+        let part_vertex = report
+            .iter()
+            .find(|v| matches!(v.frame, Frame::Part(_)) && v.refusal.is_none())
+            .or_else(|| report.iter().find(|v| v.refusal.is_none()))
+            .ok_or("No writable vertex")?;
+        let mut moved = part_vertex.local;
+        moved[2] += 1;
+        let mut reversed = corners.clone();
+        reversed.reverse();
+        let mut style = FaceStyle::like(&f);
+        style.uv.reverse();
+        let edits: Vec<(&str, Result<Vec<u8>>)> = vec![
+            ("delete", geo::delete_faces(&bytes, &[f.offset])),
+            ("flip", geo::flip_faces(&bytes, &[f.offset])),
+            (
+                "add",
+                geo::add_face(&bytes, &reversed, &style).map(|a| a.shape),
+            ),
+            (
+                "duplicate",
+                geo::duplicate_faces(&bytes, &[f.offset], push).map(|a| a.shape),
+            ),
+            (
+                "extrude",
+                geo::extrude_faces(&bytes, &[f.offset], push, Base::Flip).map(|a| a.shape),
+            ),
+            (
+                "move",
+                geo::write_vertices(&bytes, &[(part_vertex.offset, moved)]),
+            ),
+            ("scale", geo::scale_faces(&bytes, &[f.offset], 110)),
+        ];
+        for (op, result) in edits {
+            let line = match result
+                .and_then(|shape| check_shape(&shape, inv, model.as_ref(), out_dir, name, op))
+            {
+                Ok(s) => format!("PASS {s}"),
+                Err(e) => {
+                    failed += 1;
+                    format!("FAIL {e}")
+                }
+            };
+            let _ = writeln!(out, "  {op:9} face {:X}: {line}", f.offset);
+        }
+        failed += part_check(&mut out, &bytes, name, out_dir)?;
+    }
+    let _ = writeln!(out, "{failed} failed");
+    Ok(out)
+}
+/// Re-parse an edited shape: whole-CODE coverage unchanged, every drawn
+/// face slot provable, and the model reader still accepting it.
+fn check_shape(
+    shape: &[u8],
+    before: &Inventory,
+    model: Option<&hangar_core::model::Model>,
+    out_dir: &str,
+    name: &str,
+    op: &str,
+) -> Result<String> {
+    use hangar_core::shape_geometry::{Frame, Geometry};
+    let after = Geometry::parse(shape)?;
+    let ai = &after.inventory;
+    if !ai.contiguous() || ai.opaque_bytes() != before.opaque_bytes() {
+        return Err("inventory coverage changed".into());
+    }
+    if ai.bindings != before.bindings {
+        return Err("part bindings changed".into());
+    }
+    let unresolved = (0..after.faces.len())
+        .filter(|j| after.faces[*j].frame != Frame::Unreached)
+        .flat_map(|j| after.faces[j].slots.iter().map(move |s| (j, *s)))
+        .filter(|(j, s)| after.writer(*j, *s).is_err())
+        .count();
+    let faces = match (hangar_core::model::Model::parse(shape), model) {
+        (Ok(m), Some(b)) => format!("model faces {} -> {}", b.faces.len(), m.faces.len()),
+        (Err(e), Some(_)) => return Err(format!("model reader fails: {e}")),
+        (_, None) => "model reader n/a".into(),
+    };
+    let stem = name.trim_end_matches(".SH");
+    crate::platform::write_new(&format!("{out_dir}/{stem}-{op}.SH"), shape)?;
+    Ok(format!(
+        "{} bytes, inventory 100% ({} records), {} stubs, unresolved slots {unresolved}, {faces}",
+        shape.len(),
+        ai.records.len(),
+        ai.stubs.len()
+    ))
+}
+/// Part names and controls, then one in-place edit per editable control kind,
+/// each re-parsed and written create-new to `out_dir`.
+fn part_check(out: &mut String, bytes: &[u8], name: &str, out_dir: &str) -> Result<usize> {
+    use hangar_core::shape_parts::{self as parts, Allowed, Axis, Setting};
+    let list = parts::parts(bytes)?;
+    let locked = list.iter().filter(|p| p.locked.is_some()).count();
+    let _ = writeln!(out, "  parts {} ({locked} locked)", list.len());
+    for p in &list {
+        let controls: Vec<String> = p
+            .controls
+            .iter()
+            .map(|c| {
+                let state = match &c.allowed {
+                    Allowed::Fixed(_) => "fixed",
+                    _ => "edit",
+                };
+                format!("{} {state}", c.label)
+            })
+            .collect();
+        let _ = writeln!(
+            out,
+            "    {:24} stub {:X} -> {:X} pivot {:?}: {}",
+            p.name,
+            p.id.stub,
+            p.id.target,
+            p.pivot,
+            if let Some(l) = &p.locked {
+                l.clone()
+            } else {
+                controls.join(", ")
+            }
+        );
+    }
+    let mut failed = 0;
+    let mut tried = BTreeSet::new();
+    let inv = Inventory::parse(bytes)?;
+    let model = hangar_core::model::Model::parse(bytes).ok();
+    for p in &list {
+        for c in &p.controls {
+            let kind = c.label.clone();
+            if tried.contains(&(p.xform, kind.clone())) {
+                continue;
+            }
+            let next = match (&c.allowed, &c.setting) {
+                (Allowed::Values(v), Setting::Compare { index, value }) => {
+                    v.iter().find(|x| *x != value).map(|x| Setting::Compare {
+                        index: *index,
+                        value: *x,
+                    })
+                }
+                (Allowed::Values(v), Setting::Shift { index, amount }) => v
+                    .iter()
+                    .find(|x| **x != *amount as i32)
+                    .map(|x| Setting::Shift {
+                        index: *index,
+                        amount: *x as u8,
+                    }),
+                (Allowed::Either, Setting::Branch { index, equal }) => Some(Setting::Branch {
+                    index: *index,
+                    equal: !equal,
+                }),
+                (Allowed::Axes(_), Setting::Axis { index, axis }) => Some(Setting::Axis {
+                    index: *index,
+                    axis: if *axis == Axis::Roll {
+                        Axis::Pitch
+                    } else {
+                        Axis::Roll
+                    },
+                }),
+                (Allowed::Range(..), Setting::Pivot(v)) => {
+                    Some(Setting::Pivot([v[0] + 1, v[1], v[2]]))
+                }
+                _ => None,
+            };
+            let Some(next) = next else { continue };
+            tried.insert((p.xform, kind));
+            let result = parts::apply_part_setting(bytes, p.id, &next).and_then(|shape| {
+                let after = Inventory::parse(&shape)?;
+                if !after.contiguous() || after.opaque_bytes() != inv.opaque_bytes() {
+                    return Err("inventory coverage changed".into());
+                }
+                if model.is_some() {
+                    hangar_core::model::Model::parse(&shape)?;
+                }
+                let changed = bytes.iter().zip(&shape).filter(|(a, b)| a != b).count();
+                let stem = name.trim_end_matches(".SH");
+                let label = format!("{}-{}", p.name, c.label).replace([' ', '(', ')'], "_");
+                crate::platform::write_new(&format!("{out_dir}/{stem}-part-{label}.SH"), &shape)?;
+                Ok(format!(
+                    "{changed} bytes changed, inventory 100%, binding reports {next:?}"
+                ))
+            });
+            let line = match result {
+                Ok(s) => format!("PASS {s}"),
+                Err(e) => {
+                    failed += 1;
+                    format!("FAIL {e}")
+                }
+            };
+            let _ = writeln!(out, "  setting {} / {}: {line}", p.name, c.label);
+        }
+    }
+    Ok(failed)
+}
