@@ -42,7 +42,8 @@ the game. No game data ships.
 - List moving parts (gear, flaps, rudder, hook, brakes, bays, afterburner,
   swing wings, canards), preview their states, and change their gate values,
   gear swing range and direction, rotation axis and pivot.
-- Paint PIC textures on the atlas or directly on the model, erase back to or
+- Paint PIC textures on the atlas or directly on the model, replace a color
+  with a brush or across a texture or panel, erase back to or
   restore the original artwork, edit palettes and UVs, and bake PNG,
   tail-number and national decals. Give selected panels their own PIC
   (cloned, or any PIC with kept, scaled or projected UVs) while the rest of

@@ -691,3 +691,65 @@ sort's 4 KiB stack buffer. The PE audit reports 1,456,640 bytes (32-bit) and
 1,664,512 bytes (64-bit) with the same 60 reviewed imports. Per-face
 textures and the new sheet sizes have not been loaded in the original game
 yet; steps are in WINDOWS-TEST.md.
+
+## Unreleased color replacement
+
+`--replace-check FA_2.LIB F18.SH NEW_DIR` on a copy of the user's retail
+`FA_2.LIB` (2026-10-07; the original file's SHA-256 was unchanged before and
+after, and no game data is in the repository). `_F18.PIC` is a raw 256 × 644
+PIC drawn by 178 of the 287 faces of `F18.SH`; colors come from
+`PALETTE.PAL`.
+
+- **Whole texture.** Replace color from index 255 (the fuselage gray, the
+  most used index) to 160 at tolerance 0: 126,217 pixels, the same number
+  the dialog counted and exactly the pixels of that index; every changed
+  byte is one of those raster bytes, header and transparency unchanged.
+  Status: "Replaced 126,217 pixels of index 255 with 160 in _F18.PIC;
+  original kept as _F18.ORG. One undo step." `_F18.ORG` reads byte for byte
+  as the saved `_F18.PIC` and keeps its flag 4 and 14,476 stored bytes.
+  Undo restored the exact bytes and removed `_F18.ORG`; redo matched the
+  replaced LIB byte for byte; **Restore texture** returned the saved entry's
+  storage with no changes left, and its undo matched again.
+- **Tail panels.** In Edit Mesh, the six highest side-facing textured faces
+  of the rear 30% (the twin fins) with **Selected panels** and tolerance 4
+  (three indices match index 255): 2,164 pixels of a 2,966-pixel footprint
+  changed, as counted; the other 124,323 matching pixels outside the
+  footprint stayed. `_F18.ORG` was byte-identical, undo and redo exact, and
+  the written LIB reopened with `_F18.ORG` intact.
+- **3D brush and eraser.** A 15 px Replace stroke at a fin face's UV centre
+  changed 26 pixels of index 152, only that index; the eraser over the same
+  dab returned the saved bytes and dropped the session's `_F18.ORG`.
+- **Renders.** `before.png`, `whole.png` and `fin.png` of `_F18.PIC` and
+  `--snapshot ... F18.SH paint-side 1280x800` of the original, `WHOLE.LIB`
+  and `FIN.LIB` show the whole gray skin replaced in the first and only the
+  fins in the second. They stayed in `/tmp/claude-1000/replace/` (not
+  committed). The existing `--paint-check` and `--restore-check` still pass
+  on the same copy.
+
+Core tests cover exact and tolerance matching (tolerance 0 excludes an index
+with the same color; the 6-bit inverse is exact for every step), the brush
+changing only matching pixels in its circle, whole-image and footprint
+regions for `replace_all` and the brush, footprints of a triangle, a
+degenerate face, clipping and refused input, span-coded PICs (holes that
+read as index 0 untouched, span tables unchanged), glyph strips (index 255
+kept transparent and refused as a target), the no-op identity, and bounds and
+truncation. The smoke test drives, through rendered controls: Replace in the
+Paint tool control and the Model brush row (one segmented control with Brush,
+Eraser and Pick, inside the inspector at 800x600 and 1280x800), a stroke
+without a source, Alt+click on the atlas and on the model, Pick in Replace,
+strokes over mixed pixels changing only matching ones, tolerance through the
+NumberField widening the match, `DEMO.ORG` kept and undone, the eraser and
+Restore texture after a replace, Esc discarding a stroke, Panel lock clipping
+a 3D stroke to the face's footprint, a flat panel refused for another color
+and converted for its own, and Replace color in Whole texture, Selected
+panels and Faces' textures scopes with the count shown, the typed tolerance
+returning to the dialog, Pick from image (also in Edit Mesh, keeping the
+selection) and Esc, Cancel, apply and undo to the exact archive bytes, and
+the dialog's controls inside the window and apart at both sizes.
+
+Formatting, strict Clippy, all tests and the smoke test pass. The tool and
+dialog state is one boxed struct, so `App` grew by its pointer to 2,680
+bytes. Alt is read with `GetKeyState`, already imported; the PE audit
+reports 1,501,696 bytes (32-bit) and 1,716,224 bytes (64-bit) with the same
+60 reviewed imports. Replace has not been tried in the original game or on
+Windows 98 yet; steps are in WINDOWS-TEST.md.

@@ -7,6 +7,22 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Replace a color.** The Paint tool control adds **Replace** beside Brush
+  and Eraser, and so does the Model inspector's 3D brush row. Alt+click (or
+  Pick) the color to replace; strokes then paint the current color over
+  matching pixels only. **Tolerance** (0 to 64 palette steps) widens the
+  match to similar colors, and Panel lock keeps a stroke inside the panel's
+  UV footprint. **Replace color…** (Paint panel, **Mesh** menu and **Face
+  textures** panel) replaces a color in the whole texture, inside the
+  selected panels' UV footprints, or in every texture the selected faces
+  draw from, with From and To pickers and a live pixel count. Each stroke or
+  apply is one undo step, keeps `X.ORG` on a first edit, and changes raster
+  bytes only; the eraser and Restore texture bring replaced pixels back.
+- **`--replace-check`** runs Replace color and the 3D Replace brush on a
+  shape's main PIC and checks the bytes, stored original, undo and Restore
+  texture; snapshot workspaces `replace`, `replace-model` and
+  `replace-dialog`.
+
 - **Per-panel textures.** Selected faces can draw from their own PIC while
   the rest of the aircraft keeps its atlas. **Clone texture for selected
   faces** (Edit Mesh **Mesh** menu and inspector, and the inspector for a

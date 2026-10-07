@@ -28,6 +28,7 @@ the game. No game data ships.
 - [Flight envelope table](#flight-envelope-table)
 - [Paint a livery](#paint-a-livery)
   - [Per-panel textures](#per-panel-textures)
+  - [Replace a color](#replace-a-color)
   - [Erase and restore textures](#erase-and-restore-textures)
 - [Hardpoints, materials and decals](#hardpoints-materials-and-decals)
 - [Ship, ground and animation tools](#ship-ground-and-animation-tools)
@@ -258,7 +259,14 @@ checks that undo restores the exact bytes and saves the result create-new;
 `--face-texture-check FA_2.LIB NEW.LIB F18.SH F16.SH A10.SH` clones the PIC
 for four tail faces of each shape through **Clone texture for selected
 faces**, paints the copy, checks that nothing else changed, runs **Use shape
-texture** and its undo, and saves the painted result create-new. `--snapshot
+texture** and its undo, and saves the painted result create-new.
+`--replace-check FA_2.LIB F18.SH NEW_DIR` runs **Replace color…** on the
+shape's main PIC for the whole texture and for its tail panels, then a 3D
+Replace stroke and the eraser, checking that only matching raster bytes
+change, that `X.ORG` matches the saved texture, undo, redo and Restore
+texture; it writes before/after PNGs and two LIBs create-new to `NEW_DIR`.
+The `replace`, `replace-model` and `replace-dialog` snapshot workspaces show
+the tool and the dialog. `--snapshot
 OUT.svg NEW.LIB F18.SH paint-side 1280x800` renders a textured side view;
 the `assign-texture` workspace shows the Assign texture dialog.
 
@@ -666,10 +674,64 @@ texture state cannot be proved are refused with the reason. Damage shapes
 by position and bytes in retail data, so Hangar does not offer to apply an
 assignment to them; assign their faces separately.
 
+### Replace a color
+
+A PIC stores a palette index per pixel. **Replace** changes the pixels of one
+index, or of similar colors, to the paint color and leaves every other pixel
+alone.
+
+**Replace brush.** The Paint tool control reads **Brush**, **Eraser**,
+**Replace**, **Pick**; the Model inspector's 3D brush row has **Brush**,
+**Eraser**, **Replace**. Choose **Replace**, then hold **Alt** and click the
+color to replace on the atlas or on the model, or click **Pick** and then the
+color. The Paint panel shows **Replace** [A] with [B]: A is the source index,
+B the paint color chosen in the palette. Strokes use the brush size as usual
+but change only opaque pixels whose index matches A; transparent pixels and
+span holes are never touched. Release commits the stroke as one undo step;
+Esc discards it.
+
+**Tolerance** (0 to 64 steps) widens the match to indices whose color lies
+within that distance of A: the straight-line RGB distance in 6-bit palette
+steps, the units a PAL stores (one step is about 4 on a 0–255 scale). At 0
+only index A matches, even when another index holds the same color. The
+palette is the PIC's own, or the base palette, as for painting.
+
+On the model, **Lock strokes to the panel** keeps a Replace stroke on the
+locked panel and inside that panel's UV footprint. Faces with their own PIC
+(see [Per-panel textures](#per-panel-textures)) replace in that PIC only. A
+flat panel converts to a generated sheet only when its color matches A,
+otherwise the status reads, for example, "Panel color 12 is not index 34;
+nothing to replace".
+
+**Replace color…** sits in the Paint panel, and in the **Mesh** menu and the
+**Face textures** panel when faces are selected. It opens a dialog with:
+
+- **From** and **To** swatches. Click one, then a palette cell, or click
+  **Pick from image** and then the texture or the model (Esc returns to the
+  dialog). From is the Replace source and To the paint color, shared with
+  the brush.
+- **Tolerance**, as for the brush.
+- **Scope**: **Whole texture** (the selected PIC, or the picked panel's),
+  **Selected panels** (only pixels inside the UV footprint of the selected
+  or picked faces, in each PIC they draw from) or **Faces' textures** (every
+  PIC the selected faces draw from, whole; offered when there is more than
+  one). Edit Mesh opens on Selected panels.
+- A live count, for example "2,164 pixels will change in _F18.PIC."
+
+**Replace pixels** applies every affected PIC as one undo step. The status
+says what changed, for example "Replaced 1,204 pixels of index 34 with 112 in
+_F18.PIC; original kept as _F18.ORG. One undo step."
+
+As with the brush, the first replace of an existing PIC keeps `X.ORG`, panel
+sheets generated in this session keep none, and the **Eraser** and
+**Restore texture** bring replaced pixels back. Shared UVs and shared PICs
+mean other panels change too. A UV footprint covers the pixels whose centres
+lie inside or on the face's UV polygon.
+
 ### Erase and restore textures
 
-The first time a stroke, decal, PIC palette edit or **Replace entry** changes
-an existing `X.PIC`, Hangar keeps the entry as it was as `X.ORG` in the same
+The first time a stroke (Brush or Replace), decal, **Replace color…**, PIC
+palette edit or **Replace entry** changes an existing `X.PIC`, Hangar keeps the entry as it was as `X.ORG` in the same
 LIB, in the same undo step. The name keeps any prefix (`_F18.ORG`, `~F18H.ORG`,
 `$AIM9.ORG`); the stored bytes and compression flag are copied exactly. Later
 edits never touch it, so `X.ORG` stays the artwork from before the first edit.
@@ -1016,6 +1078,7 @@ folds the other way in the viewport. Whether the game agrees is listed in
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
 | Erase paint / restore a texture | Paint panel: Brush / Eraser control, Restore texture |
+| Replace a color | Paint panel: Replace, then Alt+click the color (or Pick); Replace color… for a whole texture or panels |
 | Cancel transform or dialog | Esc or right mouse button |
 | Close with unsaved edits | Click Discard changes, or Cancel/Esc to return |
 

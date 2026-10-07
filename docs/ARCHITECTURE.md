@@ -809,6 +809,28 @@ Package checks parse changed `.ORG` payloads as PIC, warn on originals without
 their PIC and note raster-layout mismatches. FA is expected to ignore entries it
 never looks up by name; original-game acceptance is listed in WINDOWS-TEST.md.
 
+## Color replacement
+
+`Pic::replace` (the brush circle), `Pic::replace_all` and
+`Pic::replace_count` act on palette indices. A pixel changes only when it has
+a source offset (span holes have none), its index is in the `IndexSet` and it
+lies inside the optional region mask; its raster byte is the only byte
+written, so header, palette, row and span tables, glyph data and transparency
+stay intact (index 255 of a glyph strip is transparent: never matched, never
+written). `matching` builds the set with integers only: tolerance T takes
+every index whose color, converted back to the 6-bit values a PAL stores (the
+exact inverse of the 8-bit expansion), lies within `dr² + dg² + db² ≤ T²` of
+the source; T = 0 is the source index alone. Colors are the PIC's palette over
+the active base palette, as for painting. `footprint` rasterises face UVs
+(V flipped as the renderer samples it) with a bounded even-odd test of pixel
+centres, boundary included so thin faces cover their edge pixels; at most
+4,096 polygons of 64 corners within ±65,536. No match, or a source equal to
+the target, changes no byte. The app reuses the brush's commit path:
+`exact_entry` reuses saved or original storage on an exact return,
+`with_originals` keeps `X.ORG` on a first edit (session panel sheets
+excepted), and a dialog apply puts every changed PIC into one
+`Document::transaction`.
+
 ## Texture state proof and per-face texture assignment
 
 SH faces carry no texture name. An E2 record selects a texture (E0 selects an

@@ -415,6 +415,27 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    missing. Record whether a generated sheet narrower than 256
    pixels displays (every retail shape texture is 256 wide).
 
+## Replace a color (unreleased)
+
+Use a copy of a LIB holding the aircraft (save under a new custom name).
+
+1. Select `_F18.PIC`. In Paint choose **Replace**, hold **Alt** and click a
+   fuselage gray on the atlas: the **Replace** row shows that index and the
+   paint color. On Windows 98/ME check that Alt+click picks rather than
+   painting and does not open the window menu.
+2. Pick a bright palette color and stroke across a panel line: only the
+   gray pixels change, the line stays. Raise **Tolerance** and stroke again:
+   neighbouring grays change too. Ctrl+Z undoes each stroke.
+3. Select `F18.SH`, Tab, 3, click the tail fin faces and choose **Mesh >
+   Replace color…**. The dialog opens on **Selected panels** with a pixel
+   count; **Replace pixels**, then check in Textured view that only the fins
+   changed and `_F18.ORG` appears under Original textures.
+4. **Eraser** over part of the fin and **Restore texture** bring the gray
+   back; Ctrl+Z and Ctrl+Shift+Z step through both.
+5. Save, install the LIB and view the F/A-18 in Fighters Anthology: the
+   replaced color shows only where it was applied, and the `.ORG` entry does
+   not disturb loading.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window
