@@ -248,6 +248,23 @@ separately. No retail data is included in the test package.
 6. Press 5 for perspective in Edit mode and press a vertex: it selects and
    the status asks for an orthographic view instead of the station message.
 
+## Texture originals, eraser and restore (unreleased)
+
+1. Copy a custom LIB with an aircraft texture (never edit retail files). Paint
+   one stroke on its PIC. Confirm `X.ORG` appears under Original textures and
+   the Paint inspector shows "Original kept: X.ORG" with its size. Paint again;
+   the `.ORG` must not change. Undo both strokes; the `.ORG` must disappear.
+2. Paint, then choose **Eraser** and erase the stroke on the atlas and on the 3D
+   model. The texture must return to its saved look; each stroke is one undo.
+3. Paint again and click **Restore texture**. The status must read "Restored
+   X.PIC from X.ORG" and the `.ORG` must disappear. Undo brings both back.
+4. Package the LIB with the `.ORG` entries, reopen it and confirm they are
+   listed and still restore. Select an `.ORG`: it previews read-only.
+5. Load that LIB, containing `.ORG` entries, in the original game. Confirm the
+   aircraft list, menus, loadout screens and a flight with the painted aircraft
+   are unaffected compared with the same LIB after **Package > Remove stored
+   originals**. Report any difference with the LIB name and entry count.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

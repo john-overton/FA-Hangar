@@ -20,6 +20,7 @@ its spatial and control records can be rewritten safely. No game data ships.
 - [Work across LIBs](#work-across-libs)
 - [Flight envelope table](#flight-envelope-table)
 - [Paint a livery](#paint-a-livery)
+  - [Erase and restore textures](#erase-and-restore-textures)
 - [Hardpoints, materials and decals](#hardpoints-materials-and-decals)
 - [Ship, ground and animation tools](#ship-ground-and-animation-tools)
 - [Controls](#controls)
@@ -27,6 +28,7 @@ its spatial and control records can be rewritten safely. No game data ships.
   - [Source values](#source-values)
   - [References and package checks](#references-and-package-checks)
   - [Models and loader](#models-and-loader)
+  - [Textures](#textures)
 
 ## Getting started
 
@@ -335,8 +337,9 @@ retain their material and UVs. This is planar panel mapping, not full UV unwrap.
    visible faces and PICs; enable it to constrain a stroke. UV interpolation
    restarts at panel boundaries so distant atlas islands are not joined by
    paint streaks. Release commits all touched PICs and generated mappings as
-   one undo step; Esc cancels the whole stroke. A stroke can touch up to 64
-   texture entries.
+   one undo step; Esc cancels the whole stroke and keeps the brush active. A
+   stroke can touch up to 64 texture entries; the status reports how many flat
+   panels it converted to new textures.
 6. Use **Export PNG** for an external image, or **Package LIB** to save the
    edited PIC in game format. Reopen the new LIB, inspect and test it in FA.
 
@@ -356,6 +359,46 @@ available. Span holes are preserved; this brush does not create new opaque
 pixels outside existing spans. PNG decal import and bounded per-face UV
 transforms are also available. Arbitrary audio-format conversion and
 topology-aware UV unwrapping remain outside this version.
+
+### Erase and restore textures
+
+The first time a stroke, decal, PIC palette edit or **Replace entry** changes
+an existing `X.PIC`, Hangar keeps the entry as it was as `X.ORG` in the same
+LIB, in the same undo step. The name keeps any prefix (`_F18.ORG`, `~F18H.ORG`,
+`$AIM9.ORG`); the stored bytes and compression flag are copied exactly. Later
+edits never touch it, so `X.ORG` stays the artwork from before the first edit.
+Undoing that first edit removes both.
+
+- **Eraser** sits beside **Brush** in Paint, and in the Model inspector for 3D
+  painting. It paints the original back under the same brush circle, one undo
+  step per stroke, and changes raster bytes only. Erasing every painted pixel
+  returns the texture to its exact saved bytes.
+- **Restore texture** replaces `X.PIC` with `X.ORG` byte for byte and removes
+  `X.ORG`, as one undo step. The status reads, for example, "Restored _F18.PIC
+  from _F18.ORG". If the original came from the opened file, the texture shows
+  as unchanged again.
+- The Paint inspector shows the stored original, for example "Original kept:
+  _F18.ORG / 14,476 B".
+- Generated panel sheets keep no `.ORG`. Their original is the panel's solid
+  face color, which the eraser and Restore texture paint back.
+- Without an `X.ORG`, the eraser and Restore texture use the entry as it was at
+  the last open or save, for this session only. Otherwise the status reads "No
+  stored original for X.PIC".
+- `.ORG` entries appear under **Original textures** in the outliner, collapsed
+  by default. Selecting one previews it read-only, with **Open X.PIC** and
+  **Restore texture**. Painting, decals and palette edits apply to the PIC.
+- Rename, Delete, Ctrl+D, copy and move between LIBs, **Clone texture for this
+  shape**, family texture clones and **Export object** carry the stored
+  original with its PIC. CLI `replace` also keeps it.
+- **Package > Remove stored originals** removes every `.ORG` as one undo step
+  for a distribution build. Later edits keep new originals, so remove them just
+  before packaging.
+
+This is not retroactive: textures painted with earlier versions have no stored
+original. An existing `X.ORG` that is not a PIC is never used, overwritten or
+removed, and that texture gets no stored original. FA looks resources up by
+name and should ignore `.ORG` entries; this is still to be confirmed in the
+original game (see [WINDOWS-TEST.md](WINDOWS-TEST.md)).
 
 ## Hardpoints, materials and decals
 
@@ -483,6 +526,7 @@ resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 | Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
+| Erase paint / restore a texture | Paint inspector: Eraser, Restore texture |
 | Cancel transform or dialog | Esc or right mouse button |
 | Close with unsaved edits | Click Discard changes, or Cancel/Esc to return |
 
@@ -533,3 +577,11 @@ The loader never executes code from a resource. Unsupported records produce
 an explicit diagnostic. The current model reader is a static-pose projection,
 not the original game's full drawing interpreter. OBJ exports discard
 materials and animation and cannot be imported back as a lossless SH edit.
+
+### Textures
+
+Hangar has no DCL compressor. A painted, decal-baked, palette-edited or
+replaced PIC is written uncompressed (flag 0), so it is larger than a
+compressed retail texture. Untouched entries, stored originals (`.ORG`),
+texture clones within a LIB and an exact Restore texture keep their stored
+bytes and compression flag. **Export object** writes its copies uncompressed.

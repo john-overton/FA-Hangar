@@ -501,3 +501,39 @@ address keys for existing callers, and `state_names`,
 `--stub-census OUTPUT LIB...` groups address-masked stub signatures by
 variable, lists binding parameters per variable, and records which animated
 shapes lack each animation import and how much `.reloc` space remains.
+
+## Texture originals boundary
+
+`hangar-core/src/originals.rs` owns stored originals. The companion of `X.PIC`
+is `X.ORG`, keeping the full stem and any `_`, `~`, `$` prefix, so every
+companion is a valid 8.3 LIB name. A companion is created only by
+`with_originals`, inside the same `Document::transaction` as the edit that
+replaces an existing, decodable PIC, and only when no entry named `X.ORG`
+exists. The backup is the pre-edit `Entry` renamed: it shares storage and keeps
+the compression flag, so nothing is decoded or re-encoded to keep it, and undo
+of the first edit removes both entries. A `.ORG` counts as a stored original
+only when its payload parses as a PIC; any other `X.ORG` is never adopted,
+overwritten, restored from or removed.
+
+Restore is one transaction: `X.PIC` takes the original's exact stored bytes and
+flag and `X.ORG` is removed. When the original shares the saved entry's payload,
+the saved `Entry` itself is used, so `same_storage` reports the texture as
+unchanged. The eraser uses `Pic::paint_from`, the same bounded circle as the
+brush, writing original indices only through the per-pixel source offsets. It
+requires `Pic::same_layout` (dimensions and offset map), so headers, palettes,
+span tables and glyph data stay untouched. A stroke that ends byte-identical to
+the saved entry or the stored original reuses that entry's storage.
+
+Generated panel sheets are recognized by Hangar's raw square sheet header, a
+name made of an SH stem (first six characters) and two hex digits, and the SH
+face records that name them. Their original is the face's color byte in the
+SH, so they keep no `.ORG`. The session's saved entries are only a fallback.
+
+Dependencies treat `ORG` as a leaf. Rename, delete, transfer and move keep the
+pair together: a companion follows its PIC's keep/take choice and stays in the
+source when its PIC does. Object export copies valid originals under the new
+texture names, reserved against the source catalog, and reports a taken name
+rather than overwriting it; texture clones copy the companion when present.
+Package checks parse changed `.ORG` payloads as PIC, warn on originals without
+their PIC and note raster-layout mismatches. FA is expected to ignore entries it
+never looks up by name; original-game acceptance is listed in WINDOWS-TEST.md.

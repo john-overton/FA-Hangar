@@ -7,6 +7,22 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- The first paint, decal, PIC palette edit or Replace entry on an existing
+  `X.PIC` keeps its previous entry as `X.ORG` in the same LIB and undo step,
+  with exact bytes and compression flag. Not retroactive. See
+  [Erase and restore textures](MANUAL.md#erase-and-restore-textures).
+- **Eraser** beside **Brush** (atlas and 3D model) paints the original back;
+  **Restore texture** returns `X.PIC` to `X.ORG` byte for byte as one undo step.
+  Generated panel sheets return to their face color.
+- `.ORG` entries are listed under **Original textures**, preview read-only and
+  follow their PIC through rename, delete, copy/move, texture clones and object
+  export. **Package > Remove stored originals** drops them for distribution.
+- Package checks parse `.ORG` as PIC, warn about originals without a PIC and
+  note layout mismatches.
+- Fixes: brush errors stay visible; faces whose texture is not loaded no longer
+  retry panel generation; Pick color ignores transparent pixels; the atlas UV
+  outline follows a draft panel; Esc keeps the paint tool active; the status
+  counts flat panels converted by a stroke.
 - SH geometry writes now update the stored normal and centre only of faces
   whose vertices moved; every other face keeps its bytes. Recomputed normals
   use the winding found in retail shapes (previously they were written

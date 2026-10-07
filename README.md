@@ -32,8 +32,9 @@ its spatial and control records can be rewritten safely. No game data ships.
   privately named LIB.
 - View SH static poses, transform the supported static subset, edit vertices,
   place hardpoints and preview state-switched parts.
-- Paint PIC textures on the atlas or directly on the model, edit palettes and
-  UVs, and bake PNG, tail-number and national decals.
+- Paint PIC textures on the atlas or directly on the model, erase back to or
+  restore the original artwork, edit palettes and UVs, and bake PNG,
+  tail-number and national decals.
 - Preview PCM audio and PIC images; export WAV, PNG and geometry-only OBJ.
 - Lossless by default: unedited archives round-trip byte-for-byte, retail LIB
   names are protected and custom saves keep numbered backups.
@@ -52,7 +53,7 @@ the license and notices alongside the executable.
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently
-under 800 KiB. Copy it to a writable location and run it. No installer or runtime
+under 850 KiB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
