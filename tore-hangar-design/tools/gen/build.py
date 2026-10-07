@@ -26,67 +26,8 @@ def doc(marker, title, body, style="", bodycls="th-root", pad=True):
 """
 
 # ---------------- tokens ----------------
-C = [
- ("gm-1000", "#0f1113", "Keylines: the 1px dark edge around buttons, panels, and editor seams. Never a fill for content."),
- ("gm-950", "#15181b", "Viewport background, field and NumberField fill, menubar, status bar, vertical tab strip."),
- ("gm-900", "#1b1f23", "App window background behind editors; zebra rows in the outliner; timeline ruler."),
- ("gm-800", "#23282d", "Editor and panel surface (outliner, properties, timeline). The default ground for text."),
- ("gm-700", "#2c3238", "Raised controls: buttons, selects, keycaps; row hover."),
- ("gm-600", "#383f46", "Button hover; type badge fill; separators inside menus."),
- ("gm-500", "#48515a", "Non-selected inner mesh edges in the viewport; timeline spans. Decorative only, never text."),
- ("line-strong", "#727b84", "Border on fields, NumberFields, checkboxes, and graft slots. 3:1 on gm-800 and gm-700."),
- ("ink", "#e4e8eb", "Primary text and values on every gm surface (10:1 or better) and on amber-deep."),
- ("ink-muted", "#aab3bb", "Property labels, secondary text, idle icons, viewport overlay text. 5:1 or better on gm-600 through gm-1000."),
- ("ink-faint", "#808a93", "Disabled text and placeholders only. 4.2:1 on gm-800; never for live labels."),
- ("amber", "#e9a23b", "Selection and the active state: selected outline in the viewport, active tab icon, changed values, primary button fill, dirty dot. 6:1 on gm-800."),
- ("amber-bright", "#f6c066", "The ACTIVE item inside a selection (active outliner row text, object origin); primary button hover."),
- ("amber-deep", "#3a2f1c", "Solid selection fill behind selected rows, toggled buttons, and hot menu items. Takes ink, amber, or amber-bright text."),
- ("on-amber", "#1b1307", "Text and checkmarks on amber and amber-bright fills."),
- ("steel", "#66aedb", "Time and reference: timeline playhead, hardpoint markers, graft ghost geometry, links. 6:1 on gm-800."),
- ("steel-deep", "#1d3140", "Slider fill inside a NumberField that has a bounded range."),
- ("focus", "#66aedb", "Keyboard focus ring: 1px solid, 1px offset. 6:1 on gm-800, 7:1 on gm-950."),
- ("ok", "#7ccc8a", "Validated / packaged / round-trip clean. Always paired with a check icon or word."),
- ("danger", "#ec6a58", "Errors, destructive actions, failed validation. 4.8:1 on gm-800; always paired with a warning icon or word."),
- ("axis-x", "#e2595e", "X axis: gizmo, grid axis line, X labels in vector fields. 4.9:1 on gm-950."),
- ("axis-y", "#86c24a", "Y axis: gizmo, grid axis line, Y labels in vector fields. 8:1 on gm-950."),
- ("axis-z", "#4f8fe3", "Z axis: gizmo, Z labels in vector fields. 5.4:1 on gm-950."),
-]
-tokens = {
- "name": "TORE Hangar", "version": 1,
- "color": {"themes": [{"id": "gunmetal", "name": "Gunmetal"}],
-           "tokens": [{"name": n, "value": v, "usage": u} for n, v, u in C]},
- "type": {
-   "fonts": [],
-   "families": {
-     "ui": "\"Barlow Semi Condensed\", Tahoma, \"MS Sans Serif\", sans-serif",
-     "mono": "\"JetBrains Mono\", \"Lucida Console\", \"Courier New\", monospace",
-     "display": "\"Barlow Condensed\", \"Barlow Semi Condensed\", Tahoma, sans-serif"},
-   "groups": [
-     {"name": "Interface", "family": "ui", "styles": [
-       {"name": "title", "fontSize": "14px", "lineHeight": "18px", "fontWeight": 600, "usage": "Dialog titles, the graft target name, workspace tab when active.", "sample": "Graft aspects into F14.PT"},
-       {"name": "body", "fontSize": "13px", "lineHeight": "18px", "fontWeight": 400, "usage": "Notices and longer help text.", "sample": "Shape F14.SH is referenced by 3 aircraft entries."},
-       {"name": "label", "fontSize": "12px", "lineHeight": "16px", "fontWeight": 500, "usage": "Default UI text: buttons, property labels, tree rows, menus.", "sample": "Stall speed"},
-       {"name": "section", "fontSize": "11px", "lineHeight": "14px", "fontWeight": 600, "letterSpacing": "0.06em", "usage": "Uppercase sub-headings inside a panel body and graft slot roles.", "sample": "PROPULSION"},
-       {"name": "hint", "fontSize": "11px", "lineHeight": "14px", "fontWeight": 400, "usage": "Status bar, timeline labels.", "sample": "G Move · R Rotate · S Scale"}]},
-     {"name": "Data", "family": "mono", "styles": [
-       {"name": "value", "fontSize": "12px", "lineHeight": "16px", "fontWeight": 400, "usage": "Every editable number, filename, and hex offset.", "sample": "20,900 lbf"},
-       {"name": "value-sm", "fontSize": "11px", "lineHeight": "15px", "fontWeight": 400, "usage": "Viewport overlays, counts, diff summaries.", "sample": "412 verts · 286 faces"},
-       {"name": "badge", "fontSize": "10px", "lineHeight": "14px", "fontWeight": 500, "usage": "Lib entry type badges and keycaps.", "sample": "PT SH PIC JT"}]},
-     {"name": "Display", "family": "display", "styles": [
-       {"name": "display", "fontSize": "64px", "lineHeight": "60px", "fontWeight": 600, "usage": "Splash and about box only.", "sample": "TORE Hangar"}]}]},
- "spacing": {"tokens": [
-   {"name": "space-1", "value": "4px", "usage": "Icon to label gap; gap between stacked panels."},
-   {"name": "space-2", "value": "8px", "usage": "Panel body inset; label to control gap in a property row."},
-   {"name": "space-3", "value": "12px", "usage": "Menu item side padding."},
-   {"name": "space-4", "value": "16px", "usage": "Status bar group gap; dialog padding."},
-   {"name": "space-6", "value": "24px", "usage": "Gap between dialog sections."}]},
- "radius": {"tokens": [
-   {"name": "radius-xs", "value": "2px", "usage": "Badges, keycaps, timeline playhead cap."},
-   {"name": "radius-sm", "value": "3px", "usage": "Buttons, fields, panels, rows. The default."},
-   {"name": "radius-md", "value": "4px", "usage": "Floating viewport tool strip."}]},
- "shadow": {"note": "No soft shadows anywhere: the target renderer has no alpha. Depth comes from fill steps and keylines.", "tokens": [
-   {"name": "lip", "value": "inset 0 1px 0 #3d444b", "usage": "1px top highlight on raised controls (buttons, selects). Drawn as a single line, not a blur."}]},
-}
+# tokens/tokens.json is the source of truth; theme.py turns it into theme.rs and tokens.css.
+tokens = json.load(open(os.path.join(os.path.dirname(__file__), "..", "..", "tokens", "tokens.json")))
 w(P("tokens.json"), json.dumps(tokens, indent=2) + "\n")
 w(P("components", "bundle.css"), open(os.path.join(os.path.dirname(__file__), "bundle.css")).read())
 

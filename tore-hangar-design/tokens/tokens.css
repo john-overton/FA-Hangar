@@ -1,4 +1,4 @@
-/* Generated from tokens.json. Gunmetal theme. */
+/* Generated from tokens.json by tools/gen/theme.py. Gunmetal theme. */
 :root {
   --gm-1000: #0f1113;
   --gm-950: #15181b;
@@ -23,6 +23,8 @@
   --axis-x: #e2595e;
   --axis-y: #86c24a;
   --axis-z: #4f8fe3;
+  --checker-light: #30363c;
+  --checker-dark: #20262c;
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -32,6 +34,37 @@
   --radius-sm: 3px;
   --radius-md: 4px;
   --lip: inset 0 1px 0 #3d444b;
+  --menubar-h: 26px;
+  --menubar-item-h: 20px;
+  --wstab-h: 22px;
+  --editor-header-h: 28px;
+  --statusbar-h: 22px;
+  --button-h: 22px;
+  --icon-button: 22px;
+  --toolstrip-button: 26px;
+  --field-h: 20px;
+  --row-h: 20px;
+  --menu-item-h: 22px;
+  --menu-min-w: 160px;
+  --panel-header-h: 24px;
+  --vtab-strip-w: 30px;
+  --vtab-size: 24px;
+  --icon: 16px;
+  --icon-sm: 12px;
+  --checkbox: 14px;
+  --badge-h: 14px;
+  --keycap-h: 16px;
+  --dirty-dot: 6px;
+  --num-arrow-w: 14px;
+  --tree-indent: 14px;
+  --prop-label-pct: 40;
+  --gizmo: 84px;
+  --grid-major: 5;
+  --outliner-w: 280px;
+  --properties-w: 322px;
+  --dock-h: 186px;
+  --min-window-w: 800px;
+  --min-window-h: 600px;
   --font-ui: "Barlow Semi Condensed", Tahoma, "MS Sans Serif", sans-serif;
   --font-mono: "JetBrains Mono", "Lucida Console", "Courier New", monospace;
   --font-display: "Barlow Condensed", "Barlow Semi Condensed", Tahoma, sans-serif;

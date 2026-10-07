@@ -256,7 +256,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
             app.height as u32,
             0,
             0,
-            0x1b1f23,
+            crate::ui::theme::color::GM_900.0 as c_ulong,
         );
         let title = CString::new(format!("TORE Hangar {}", env!("CARGO_PKG_VERSION"))).unwrap();
         XStoreName(d, w, title.as_ptr());

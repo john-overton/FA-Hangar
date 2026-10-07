@@ -666,9 +666,9 @@ impl App {
                         pixels.push(if p.mask[i] {
                             rgb(colors[p.pixels[i] as usize])
                         } else if (px / 8 + py / 8).is_multiple_of(2) {
-                            0x30363c
+                            c::CHECKER_LIGHT.0
                         } else {
-                            0x20262c
+                            c::CHECKER_DARK.0
                         });
                     }
                 }
