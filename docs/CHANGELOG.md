@@ -7,6 +7,26 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Runtime markings** (Model inspector, Edit Mesh and Paint): a new panel
+  lists the markings the game fills in at run time, such as national
+  roundels and tail art, one row per slot (`E0` record). Clear **Shown**
+  to hide a marking, choose another **Slot** (0 to 4), **Select faces** to
+  move them with G, R and S in Edit Mesh, or **Make paintable** to draw
+  them from a new PIC of your own, which **Restore runtime marking**
+  reverses. **Apply to damage family** repeats an action on the `_A` to
+  `_D` shapes with the same slot. While the panel is open the viewport
+  outlines markings in steel, and hidden ones dashed. Hidden and paintable
+  markings are recognised after save and reopen, and showing or restoring
+  them gives back the shape's original bytes (146 of the 150 FA_2.LIB
+  shapes with markings). Package counts them. `--decal-census` lists which
+  aircraft use which slots and `--markings-check` exercises every action on
+  real LIBs. The manual's
+  [Hide, move and paint runtime markings](MANUAL.md#hide-move-and-paint-runtime-markings)
+  and [Runtime markings](MANUAL.md#runtime-markings) limits explain who
+  decides what: the shape decides whether, where and which slot; the game
+  picks the image (roundels by nation, tail and nose art from the player's
+  pilot record, read from FA.EXE and not yet confirmed in the game).
+
 - **Neg-G cut-out** (Model inspector, Propulsion panel) shows the PT field
   `negGLimit`, which is now also in Flight's Propulsion field group. It
   is the time in 1/256 s of continuous negative G before FA cuts the throttle

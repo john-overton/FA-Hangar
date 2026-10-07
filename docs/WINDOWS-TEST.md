@@ -533,6 +533,36 @@ game palette loaded.
    fin shows the bake and the dot, nothing else changes, and the game does
    not crash.
 
+## Runtime markings (unreleased)
+
+Use a copy of `FA_2.LIB` (or a custom LIB holding `F5EV.SH`) and the game
+palette. FA must also load the retail `FA_1.LIB`, which holds the roundels.
+
+1. Select `F5EV.SH` in Model. The **Runtime markings** panel lists Wing
+   marking left (slot 3) and Wing marking right (slot 4), one face each.
+   Press **7**: the left-wing roundel is outlined in steel; orbit underneath
+   for the right one.
+2. Clear **Shown** on both rows: the outlines turn dim and dashed. Save as a
+   custom LIB, put it in the game folder and fly the F-5 (any nation): both
+   roundels are gone, nothing else changes, and the game does not crash.
+3. Reopen the LIB in Hangar: both rows read hidden. Check **Shown** on both
+   and save: the entry matches the retail `F5EV.SH` byte for byte (compare
+   with `extract`).
+4. Set slot 4's **Slot** to 2 (nose art) and fly: the roundel under the
+   right wing shows the player's nose art for the player's aircraft and
+   nothing (`BLANK.PIC`) for other F-5s. Set it back to 4.
+5. **Make paintable** on slot 4, paint the panel of `F5EVM4.PIC`, save and
+   fly as two different nations: the painted image shows under the right
+   wing for both, and the left wing keeps each nation's roundel. Note
+   whether the unpainted panel colour (index 0, black, on the F-5) or index
+   255 shows through.
+6. **Restore runtime marking**, save and fly: the nation's roundel is back;
+   `F5EVM4.PIC` and `F5EVM4.ORG` are gone from the LIB.
+7. On `SU27.SH`, check **Apply to damage family** and clear **Shown** on
+   Tail art left (slot 0): the status names `SU27_A.SH` and `SU27_C.SH` as
+   changed and `SU27_B.SH` as having no slot 0. Fly the Su-27 as the player
+   and get it damaged: no left tail art on the intact or damaged shapes.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

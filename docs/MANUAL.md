@@ -39,6 +39,7 @@ the game. No game data ships.
   - [Replace a color](#replace-a-color)
   - [Erase and restore textures](#erase-and-restore-textures)
 - [Hardpoints, materials and decals](#hardpoints-materials-and-decals)
+- [Hide, move and paint runtime markings](#hide-move-and-paint-runtime-markings)
 - [Ship, ground and animation tools](#ship-ground-and-animation-tools)
 - [Edit shapes](#edit-shapes)
 - [Moving parts](#moving-parts)
@@ -214,6 +215,9 @@ sizes and weights.
   checked region by region. In vertex select, a press on a vertex becomes a
   drag after the pointer moves 4 pixels, keeps its offset from the cursor and
   moves the whole selection.
+- Hide, move, reassign or replace with your own texture the markings the
+  game fills in at run time, such as national roundels
+  ([Runtime markings](#hide-move-and-paint-runtime-markings)).
 - List an aircraft's [moving parts](#moving-parts) by role, preview gear,
   flaps, hook, brakes, bays and afterburner in any state, and change the
   settings their native code already has (gate values, swing range,
@@ -387,6 +391,10 @@ through **Clone texture for selected faces** and undoes it, remaps them,
 requires square texels spanning both directions, and paints one texel (in
 memory) before and after to report how many screen pixels it reaches.
 `--palette PALETTE.PAL|LIB` supplies the game palette for a LIB without one.
+`--decal-census FA_2.LIB` and `--markings-check FA_2.LIB [F5EV.SH NEW_DIR]`
+cover runtime markings ([Hide, move and paint runtime
+markings](#hide-move-and-paint-runtime-markings)); the `markings` and
+`markings-hidden` snapshot workspaces show the panel.
 `--proof-census FA_2.LIB NEW_OUT.txt [OLD.txt]` lists the texture and vertex
 proofs of every face each shape's neutral model draws, and compares them
 with an earlier list.
@@ -802,8 +810,9 @@ retain their material and UVs. This is planar panel mapping, not full UV unwrap.
 
 The brush radius is in texture pixels. Shared/mirrored UVs and shared PIC names
 mean other panels or models can change too. The preview is an unlit,
-orthographic static pose with named textures; runtime-selected decals,
-unvisited LODs/animations and game lighting are not reproduced. A "panel" here
+orthographic static pose with named textures; runtime markings (outlined
+while the [Runtime markings](#hide-move-and-paint-runtime-markings) panel is
+open), unvisited LODs/animations and game lighting are not reproduced. A "panel" here
 is one decoded polygon, not a semantic group of aircraft parts. Surface recolor
 acts on matching untextured face color indices in the decoded pose; it does not
 rewrite Gouraud vertex colors or textured materials.
@@ -1160,6 +1169,74 @@ system. Mirrored/shared UVs can put the same marking on other panels; the
 preview shows those effects. PNG parsing follows the
 [PNG format specification](https://www.w3.org/TR/png-3/).
 
+## Hide, move and paint runtime markings
+
+Some faces of a shape draw no texture of their own. An `E0` record before
+them selects a runtime texture slot, and the game fills the slot with an
+image while it runs: national roundels, tail art and nose art. The retail
+F-5 (`F5EV.SH`) has two, a roundel on top of the left wing (slot 3) and one
+under the right wing (slot 4). Hangar cannot show the game's image, so these
+faces stay blank in the preview.
+
+Who decides what:
+
+| What | Decided by | In Hangar |
+| --- | --- | --- |
+| Whether a marking is drawn | The shape (its face records) | Editable: **Shown** |
+| Where it is drawn | The shape (the face's vertices) | Editable: **Select faces**, then G, R, S in Edit Mesh |
+| Which slot it draws from | The shape (the `E0` record's slot word) | Editable: the **Slot** Select, 0 to 4 |
+| What image fills the slot | The game, at run time (roundels by the aircraft's nation, tail and nose art from the player's pilot record) | Not editable. **Make paintable** replaces the slot with a texture of your own instead |
+
+In the retail FA_2.LIB, 150 shapes select runtime slots, 146 of them used by
+an aircraft. 128 have wing markings (slots 3 and 4), 50 tail art (slots 0
+and 1) and 47 nose art (slot 2); each slot draws one face. Few damage shapes
+(`_A` to `_D`) have markings: 17, mostly tail art.
+
+The **Runtime markings** panel appears in the Model inspector, in Edit Mesh
+and in the Paint workspace whenever the shown shape selects a runtime slot.
+While it is open, the viewport outlines each drawn marking in steel and each
+hidden one with a dim dashed line. One row per slot shows:
+
+- the slot's name, such as "Wing marking right (slot 4)", and its faces:
+  drawn, hidden, or drawn from a paintable texture;
+- **Shown**: clear it to hide the slot's faces, check it to show them again;
+- **Slot**: choose another slot (0 to 4) for the same faces;
+- **Select faces**: selects them as panels, or in Edit Mesh (Tab) as faces,
+  so G, R and S move, rotate and scale them;
+- **Make paintable** / **Restore runtime marking**.
+
+To replace a marking with your own artwork:
+
+1. Click **Make paintable** on its row. Hangar creates `<SHAPE>M<slot>.PIC`
+   (for example `F5EVM4.PIC`) in the FA texture layout, maps the faces onto
+   it flat from their own plane at the aircraft's texel density, and fills
+   the panel with the faces' stored colour index.
+2. Open the PIC in the Paint workspace, or paint on the model, as for any
+   texture ([Paint a livery](#paint-a-livery)).
+3. To go back, click **Restore runtime marking**. The faces draw from the
+   slot again, and the PIC (with its stored original) is removed when no
+   other shape uses it.
+
+Check **Apply to damage family** to repeat each action on the `_A` to `_D`
+shapes that select the same slot, in the same undo step. The status line
+names the family shapes without that slot; they are left as they are. Make
+paintable gives the whole family one PIC.
+
+Each action is one undo step. Hangar recognises hidden faces and paintable
+markings from the shape's bytes, so they survive save and reopen: **Shown**
+and **Restore runtime marking** work the same afterwards. When the hide or
+paint records are the last thing added to the shape, showing or restoring
+returns the shape's exact original bytes.
+**Package** lists how many markings are hidden or paintable in the LIB's
+changed shapes.
+
+`--decal-census FA_2.LIB` prints which shapes use which slots, with face
+counts and the aircraft that use them. `--markings-check FA_2.LIB [F5EV.SH
+NEW_DIR]` runs every marking action on every shape that has one and
+compares the reversed result byte for byte; with a shape and a new
+directory it also hides, shows, paints and restores that shape's markings
+through the panel, saving, reopening and rendering PNGs along the way.
+
 ## Ship, ground and animation tools
 
 NT definitions now expose the reviewed Object + NPC fields and linked stations.
@@ -1484,6 +1561,12 @@ number.
 | "A face centre exceeds its byte width; the record would have to grow" | [Shape geometry](#shape-geometry) |
 | "Face at {offset} is nearly edge-on to the view; turn the view to face the panel" | [Textures Hangar creates](#textures-hangar-creates) |
 | "Face at {offset} draws runtime markings (no named texture); it cannot be remapped" | [Runtime markings](#runtime-markings) |
+| "Face at {offset} draws slot {n} on some paths and another texture on others ({why}); hiding it would hide both" | [Runtime markings](#runtime-markings) |
+| "Face at {offset} draws a named texture, not a runtime marking" | [Runtime markings](#runtime-markings) |
+| "Slot {n} is outside 0 to 4, the slots the game is known to fill" | [Runtime markings](#runtime-markings) |
+| "Slot {n} already has its own E0 record at CODE+{offset}; reassigning would merge the two" | [Runtime markings](#runtime-markings) |
+| "Slot {n} is hidden; show it first" | [Runtime markings](#runtime-markings) |
+| "Hiding faces needs the native end marker and import tail" | [Runtime markings](#runtime-markings) |
 | "The stub's code is outside the reviewed subset at CODE+{offset} ({why}); it is never edited" | [Moving part settings](#moving-part-settings) |
 | "NEG with shift {n} needs 7 bytes and this law slot has 6; set shift 1 first" | [Moving part settings](#moving-part-settings) |
 | **Not seen in retail** (badge) | [Moving part settings](#moving-part-settings) |
@@ -1630,6 +1713,7 @@ animation and cannot be imported back as a lossless SH edit.
 | Limit | Why | Instead |
 | --- | --- | --- |
 | Per-face operations (Clone texture for selected faces, Assign texture, Remap) do not carry over to `_A` to `_D` | In FA_2.LIB no face of the F-18, F-16, A-10, F-22, F-14, MiG-29 or Su-27 main shape has a record with the same bytes at the same offset in any damage shape, so faces cannot be matched safely. | Repeat the operation on each damage shape, or use **Clone texture for whole shape** / the family texture clone in Materials, which follows stored texture references. |
+| Runtime markings carry over by slot number only | **Apply to damage family** finds the same slot in each damage shape, never the same face; a damage shape without that slot is skipped and named. Only 17 FA_2.LIB damage shapes have markings. | Check the status line for skipped shapes. |
 
 ### Stored originals
 
@@ -1684,22 +1768,32 @@ without treating every existing payload as newly edited.
 
 ### Runtime markings
 
-Some faces draw no named texture: the game fills them with markings at run
-time. Hangar shows them blank in the preview and refuses to remap them.
+How to use the tools: [Hide, move and paint runtime
+markings](#hide-move-and-paint-runtime-markings).
 
-- The shape decides whether a face carries a marking, where it sits, and
-  which slot it uses: an `E0` record selects a runtime texture slot for the
-  faces that follow, until an `E2` restores the skin. The community SH guide
-  (cited in the T.O.R.E Fighters format notes, `objects-and-shapes.md`) names
-  slots 0/1 left/right tail art, 2 nose art and 3/4 left/right wing markings;
-  aircraft need not place them where the names suggest. Retail F5EV.SH, for
-  example, draws one face under slot 4 and one under slot 3 (its roundels).
-- The game picks the image for each slot at run time. That this follows the
-  aircraft's nation or unit is **not yet verified**; where FA.EXE loads slot
-  images has not been traced.
+| What | Decided by | In Hangar |
+| --- | --- | --- |
+| Whether, where, which slot | The shape | Editable |
+| What image | The game, at run time | Not editable yet |
 
-Tools for runtime markings are planned. Until then, bake markings into a
-texture with [Decals](#hardpoints-materials-and-decals).
+What the game does with a slot was read from FA.EXE's disassembly (the
+addresses are in [ARCHITECTURE.md](ARCHITECTURE.md#runtime-markings-e0-slots));
+none of it has been watched in the game yet.
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Hangar cannot show or change the image the game puts in a slot | The game chooses it while it runs. Verified in FA.EXE: slots 3 and 4 both take the roundel of the drawn aircraft's nation (`ROUND01` to `ROUND60` in FA_1.LIB, the same image for both, not mirrored); slots 0, 1 and 2 take the tail and nose art named in the player's pilot record (`LEFTnn`, `RIGHTnn`, `NOSEnn`), wingmen share the player's tail art, and every other aircraft gets `BLANK.PIC`. Not yet confirmed in the game. | **Make paintable** gives the faces a texture you paint. Editing the slot images themselves is not offered yet. |
+| **Make paintable** fixes the art for every nation | The faces then draw from one PIC whatever the aircraft's nation or pilot. | Keep the runtime marking where nations differ. |
+| Hiding hides the marking for every nation | Hiding removes the faces from the shape, not the image. | Show it again, or reassign the slot. |
+| Slots 0 to 4 only | FA.EXE fills only slots 0 to 4 with markings. Slots 5 to 9 read a table that is never set (a crash is inferred), and 10 and up select terrain textures. | |
+| A slot cannot be reassigned to a slot the shape already uses | The two rows would merge, and Hangar could no longer tell their faces apart to undo it later. | Reassign the other slot first, or use Undo. |
+| Each action changes one shape, or its damage family with **Apply to damage family** | Family shapes are matched by slot number; their faces are separate records. Shapes without the slot are skipped and named. | Repeat on other aircraft that share the art. |
+| A face drawn under a slot on one path and another texture on another is refused | Hiding or repainting it would also change the other texture's face. No retail FA_2.LIB shape has one. | |
+| Hide and Make paintable need CODE virtual-address room | The hidden faces' original records, and the paintable faces' copies, go into records added before the shape's end marker. In FA_2.LIB, `APA.SH` and `IL76.SH` have no room; `A4.SH` has room to hide one slot at a time but not to make one paintable. | Reassign the slot, or move the faces out of view. |
+| Show and Restore give back the exact original bytes only when the hidden or paintable records are the last ones added | Hangar then moves the end marker back. Otherwise the freed bytes stay as padding that is never drawn; every face record is still exact. Over FA_2.LIB, hide, show, reassign, make paintable and restore return the exact retail bytes for 146 of the 150 shapes with markings; `SU27V.SH`'s CODE section carries 512 spare bytes that the layout writer does not keep, and the other three lack room (above). | Undo before saving is always exact. |
+| A paintable sheet starts filled with the faces' stored colour index | The runtime image is not available to Hangar, so it cannot be baked. On the F-5 that colour is index 0, black. Whether index 255 is see-through on these faces, as the game's `BLANK.PIC` suggests, is **unverified**. | Paint the whole sheet. |
+| The panel outlines markings instead of drawing them | Hangar has no slot image to draw. | |
+| Not yet tested in the game | Hidden markings, reassigned slots and paintable markings pass Hangar's checks; none has been loaded in FA. | See [WINDOWS-TEST.md](WINDOWS-TEST.md). |
 
 ### Verification status
 
@@ -1714,6 +1808,7 @@ current 64-bit Windows, for both executables). See
 | Windows file paths | ASCII only: Hangar uses the ANSI Win32 API with no Unicode layer, so it runs on Windows 98. |
 | Hangar output in the original game | Not yet confirmed. Three user reports from the game drove fixes: generated panels that vanished (A10_V2.LIB), the TopGun.LIB texture crash and the `.LIB.bak` startup crash. The fixes have not been retested in FA. |
 | Edited shapes, part settings and **Not seen in retail** forms, `.ORG` entries, repaired textures, new sheet sizes, Replace, rename and duplicate | Pass Hangar's checks; not yet loaded in FA. |
+| Hidden, reassigned and paintable runtime markings | Pass Hangar's checks and round-trip byte for byte on 146 of 150 FA_2.LIB shapes; not yet loaded in FA. Where the game takes slot images from was read from FA.EXE, not watched in the game. |
 
 Acceptance steps for each are in [WINDOWS-TEST.md](WINDOWS-TEST.md). Record
 game results separately from a successful save: a valid LIB is not proof the

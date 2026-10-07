@@ -49,6 +49,8 @@ the game. No game data ships.
   (cloned, or any PIC with kept, scaled or projected UVs) while the rest of
   the aircraft keeps its atlas, or remap stretched panels from the view onto
   a new texture with square texels, baked from their current look.
+- Hide, move or reassign the markings the game fills in at run time (national
+  roundels, tail and nose art), or make them a texture of your own.
 - Preview PCM audio and PIC images; export WAV, PNG and geometry-only OBJ.
 - Lossless by default: unedited archives round-trip byte-for-byte, retail LIB
   names are protected and custom saves keep numbered backups.

@@ -841,15 +841,16 @@ excepted), and a dialog apply puts every changed PIC into one
 
 ## Texture state proof and per-face texture assignment
 
-SH faces carry no texture name. An E2 record selects a texture (E0 selects an
-untextured state) and every later textured FC draws with it, so one E2 near
-the start of a retail aircraft serves the whole atlas. `Geometry::material`
-proves which selector holds at a face with the same dataflow analysis as
-slot liveness (next section): every E2/E0 record that may be the last one
-before the face, on any path, must have the same bytes. `Model` clears its
-selector after an F0 stub because native code runs there; the proof sees
-through the stub's resumes. Over the neutral F-18, F-16 and A-10 models it
-proves every drawn face (FA_2.LIB, 2026-10-07).
+SH faces carry no texture name. An E2 record selects a texture (E0 selects a
+runtime texture slot; see [Runtime markings](#runtime-markings-e0-slots))
+and every later textured FC draws with it, so one E2 near the start of a
+retail aircraft serves the whole atlas. `Geometry::material` proves which
+selector holds at a face with the same dataflow analysis as slot liveness
+(next section): every E2/E0 record that may be the last one before the face,
+on any path, must have the same bytes. `Model` clears its selector after an
+F0 stub because native code runs there; the proof sees through the stub's
+resumes. Over the neutral F-18, F-16 and A-10 models it proves every drawn
+face (FA_2.LIB, 2026-10-07).
 
 ## Dataflow proofs over SH control flow
 
@@ -1036,6 +1037,126 @@ App side, the panel selection outside Edit Mesh is `EditState::mesh_faces`
 (face file offsets), the same list Edit Mesh's face select uses, pruned on
 refresh to the offsets the shown model draws; `selected_face` stays the
 active panel for Panel lock and the Paint panel.
+
+## Runtime markings (E0 slots)
+
+### What FA.EXE does with E0
+
+Read from the retail `FA.EXE` (image base 0x400000) with its symbol file
+`FA.SMS`, which names 3,829 addresses (u32 count, then name-offset/address
+pairs, then a string pool; loaded at 0x46A370, looked up by a binary search at
+0x46A4E0). Static reading only; nothing was run.
+
+- **Interpreter.** Shapes import `do_start_interp` from "main.dll"; FA.EXE
+  does not export it, `_LoadDLL@16` (0x41EB60) binds each import by name
+  through the symbol table (0x41F067). `do_start_interp` (0x4D4240) is
+  `pop esi; mov ax,[esi]; lea esi,[esi+2]; movzx ebx,al; jmp
+  [ebx*2+0x5183A0]`: threaded code over `vector_table` (0x5183A0), one dword
+  per even opcode, each handler ending in the same fetch and jump.
+  `_GRAddBrentObj@40` enters it at 0x4D0B71. Handlers: 00 0x4D17F0 (`ret`),
+  E0 0x4D4988, E2 0x4D49C0, F0 0x4D4254 (`push esi; ret`), FC 0x4D43DC.
+- **E0** (0x4D4988): reads the u16, `call @BrushFromIndex@4` (0x4AB860, ecx
+  = slot), stores the handle at 0x51D12C and its bitmap (`_MMAccessE`,
+  `[handle+8]`) at 0x51D130, then dispatches the next record. No flags, no
+  skipped records. **E2** (0x4D49C0) copies the 14-byte name, resets
+  `_SetupBitmapAccess@12`, loads the PIC with `_RMAccessHandle@8(name,
+  0x10C)` and writes the same two globals. So an E2 after an E0 replaces the
+  state completely, and an E0 left in place has no effect once an E2
+  follows. Only drawing handlers (the DC/DE textured polygons, E6 and the
+  smap/rmap records) read 0x51D130.
+- **`@BrushFromIndex@4`.** Slots 0 to 4 build a PIC name; only when
+  `_curScreen` (0x520A50) is 0x10 are any set, otherwise every slot is
+  blank. For the player's own aircraft (`_playerId` 0x520A1C equals the
+  drawn object), slot 0 is the pilot record's left tail art (`_campaignPilot`
+  0x4F8BB8 + 0x7B), slot 1 its right tail art (+0x88), slot 2 its nose art
+  (+0x6E). A wingman in the player's flight (0x45F030, through `_WNGPart`)
+  gets the player's tail art and no nose art. Slots 3 and 4 both take
+  `roundelArt + 13 × nation`, the nation being the drawn object's byte +9
+  masked to 7 bits: the same image for both, not mirrored. A null or empty
+  name becomes `blank`; ".PIC" (0x4EC320) is appended and the PIC is loaded
+  with flags 0x810C, where 0x8000 makes a missing PIC fatal
+  ("RMFindAndLoad: can't load %s"). Slots 5 to 9 return entries of
+  `_bitmap_table` (0x515F08) that hold 0xFFFFFFFE and are never written (a
+  crash is inferred); slots 10 and up index the terrain texture dictionary
+  `_tdic`. Nothing bounds the slot.
+- **Where the names come from.** `_MakePicList@16` (0x4679C0), called once at
+  startup (0x40391C to 0x403971), scans `%s%02d.PIC` (0x4F71DC) from 1 to 499,
+  stops at the first missing number, skips any PIC of the wrong size and,
+  for `LEFT`, any number without a matching `RIGHTnn`: `ROUND` 128 × 128 into
+  `roundelArt` (0x520DF0), `LEFT` 128 × 128 into `_tailArt` (0x520A4C),
+  `NOSE` 64 × 64 into `_noseArt` (0x520AD4). The retail FA_1.LIB holds
+  `ROUND01` to `ROUND60` (nation n uses `ROUND(n + 1)`; 60 nations named from
+  0x4FB2B8), `LEFT01` to `LEFT25`, `RIGHT01` to `RIGHT25`, `NOSE01` to
+  `NOSE24` and `BLANK.PIC` (256 × 128). The pilot screen picks tail and nose
+  art into the pilot record; with no campaign file the art is chosen at
+  random.
+
+Open: which LIB wins when two hold `ROUND01.PIC` (so whether a custom LIB
+can override slot art without touching FA_1.LIB), whether index 255 is
+transparent on these faces, and what `_curScreen` 0x10 is exactly. None of
+the above has been watched in the game.
+
+### Editing
+
+`shape_markings::markings` lists each slot a shape selects: its E0 records
+(compared by slot word), the textured faces `Geometry::material` proves are
+drawn under an E0 of that slot, faces Hangar hid, faces drawn from a Hangar
+texture assignment whose restore selector is that E0 (made paintable), and
+contested faces whose reaching set holds that E0 among other selectors
+(`Geometry::material_writers`). Faces are never attributed by position.
+
+- **Hide** turns each face into a same-size stub (`48` to the block for the
+  first face of a run, to its own end for the others, `1E` fill and a
+  closing `48`) and stores the original records after a `48` back to the
+  end of the run: `48 back; originals`. The block is recognised only
+  structurally: a `48` followed by FC records whose lengths add up to a run
+  of sites that each hold exactly the stub bytes, the first jumping to the
+  block. A texture continuation's `48 back` is followed by originals too,
+  but its first site jumps to its E2, so the two never match each other. A
+  hidden face's slot comes from the texture state proved at its site's stub
+  (`Geometry::state_at`), so reassigning the E0 carries hidden faces along.
+- **Layout.** Hide blocks that end the appended records (each followed only
+  by `1E` up to the next block or the end marker) are rewritten together on
+  every hide or show, from the first one's start, through
+  `shape_edit::replace_continuation`: the end marker and import tail move
+  back or forward and their relocations follow (`repack` now takes a signed
+  shift). Showing everything therefore removes exactly what the hides
+  added, in any order. Blocks in the middle are `1E`-filled and their bytes
+  reused by later runs of the same edit. **Restore** of a paintable marking
+  compacts the same way when the dissolved continuation ended the records.
+- **Show** writes each stored record back to its site byte for byte and
+  rebuilds the rest of its block.
+- **Reassign** writes the slot word of every E0 record of the slot (the
+  continuation restore copies included) in place, 0 to 4 only, and refuses a
+  slot the shape already selects.
+- **Make paintable** keeps the E0. The slot's faces go through
+  `assign_texture_uvs` onto a new PIC (`picture::retail_texture`, the panel
+  in a sub-rectangle at the left, planar UVs from the faces' plane at the
+  shape's texel density, filled with the faces' commonest colour index);
+  that continuation's restore selector is the E0 itself, so the slot stays
+  recorded in the bytes and **Restore** is Use shape texture. Replacing the
+  E0 with a no-op `48 00 00 00` was considered and rejected: after save and
+  reopen nothing would record the slot number, and FA.EXE shows the E0 has
+  no effect once the continuation's E2 follows.
+- **Damage family** applies the same operation by slot number in each `_A`
+  to `_D` shape of the active LIB in one transaction; Make paintable sizes
+  the family's shared PIC from the main shape.
+
+Every result is re-parsed: CODE coverage and opaque bytes, stubs and
+bindings unchanged, the expected hide blocks recognised, every other face
+record identical at its CODE offset, and in the neutral pose and each pose
+that draws a changed face, the drawn faces equal apart from the hidden or
+shown ones. Refused: faces `face_refusal` rejects, faces a part stub resumes
+at, faces not proved to draw a slot (contested faces name both states),
+untextured faces, foreign pointers into a block, and the layout limits
+(virtual-address room, ±32 KiB reach, native end marker).
+
+Over FA_2.LIB (`--markings-check`), every operation on the 150 shapes with
+markings re-parses; 146 return the retail bytes exactly after their reverse.
+`APA.SH` and `IL76.SH` (and `A4.SH` for paintable or all-slot hides) have no
+CODE virtual-address room; `SU27V.SH`'s CODE section has 512 bytes of raw
+slack that `repack` does not keep, so the sections after CODE move up 512
+bytes in the file while CODE itself comes back exact.
 
 ## FA loader limits and the SH texture layout
 

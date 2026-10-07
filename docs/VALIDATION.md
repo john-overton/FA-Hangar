@@ -1049,3 +1049,87 @@ and the smoke test pass on top of the palette-resolver changes. `App` is
 `EditState`). No Win32 API was added; the PE audit reports 1,677,312 bytes
 (32-bit) and 1,907,712 bytes (64-bit) with the same 60 reviewed imports. The
 remapped F-5 has not been flown in the original game.
+
+## Unreleased runtime markings
+
+Read-only probes (2026-10-07) on copies of the user's retail `FA_2.LIB` and
+`TOPGUNFX.LIB`, and static reading of the retail `FA.EXE` with its `FA.SMS`
+symbol file; no original was modified and no game data is in the
+repository.
+
+- **FA.EXE.** The E0 handler (0x4D4988, the `vector_table` entry for 0xE0 at
+  0x5183A0), `do_start_interp` (0x4D4240), `@BrushFromIndex@4` (0x4AB860),
+  `_MakePicList@16` (0x4679C0), `roundelArt`/`_tailArt`/`_noseArt`
+  (0x520DF0/0x520A4C/0x520AD4) and the `%s%02d.PIC` format (0x4F71DC) were
+  checked against the symbol file and the bytes. Findings are in
+  [ARCHITECTURE.md](ARCHITECTURE.md#runtime-markings-e0-slots): slots 3 and
+  4 take the drawn aircraft's nation's `ROUNDnn`, slots 0 to 2 the player's
+  pilot-record tail and nose art (others get `BLANK.PIC`), an E2 after an E0
+  replaces the state completely, and slots 5 and up are not markings. The
+  retail FA_1.LIB holds 60 `ROUND`, 25 `LEFT`, 25 `RIGHT`, 24 `NOSE` PICs and
+  `BLANK.PIC`. Nothing was run, in FA or otherwise.
+- **Census** (`--decal-census`): FA_2.LIB has 1,275 SH, all analysed; 150
+  select runtime slots, 146 of them used by a PT.
+
+  | Slot | Shapes | E0 records | Faces | Contested |
+  | --- | --- | --- | --- | --- |
+  | 0 Tail art left | 50 | 50 | 50 | 0 |
+  | 1 Tail art right | 50 | 50 | 50 | 0 |
+  | 2 Nose art | 47 | 48 | 48 | 0 |
+  | 3 Wing marking left | 128 | 129 | 129 | 0 |
+  | 4 Wing marking right | 128 | 128 | 128 | 0 |
+
+  Every E0 record draws exactly one face; `E2C.SH` has two slot-3 records
+  and `F8.SH` two slot-2 records. No shape selects a slot above 4 and no
+  face is drawn under a slot on one path and another texture on another.
+  Damage shapes rarely have markings: 17 do (`AV8`, `F29`, `SEAH`, `SU27`,
+  `SU27C` and `Y141` families), mostly tail art; the F-18, F-16, F-14, F-22
+  and F-5 damage shapes have none. `TOPGUNFX.LIB`: `F14.SH` (slots 0 to 4)
+  and `F5EV.SH` (slots 3 and 4).
+- **Every operation on every shape** (`--markings-check FA_2.LIB`, 1,199
+  operations: hide/show per slot, reassign to a free slot and back, make
+  paintable and restore per slot, hide every slot then show every slot in
+  reverse): 146 of 150 shapes return their retail bytes exactly. `APA.SH`
+  and `IL76.SH` refuse hide and make paintable, and `A4.SH` refuses make
+  paintable and hiding all three slots, with "CODE has no virtual-address
+  room for this continuation"; `SU27V.SH` comes back with CODE exact but
+  its later sections 512 bytes earlier in the file (its CODE section had
+  512 bytes of raw slack). `TOPGUNFX.LIB`: both shapes, 18 operations,
+  exact. The pass takes 45 s for FA_2.LIB (x86_64 release, Linux).
+- **F-5** (`--markings-check FA_2.LIB F5EV.SH NEW_DIR`, and the same on the
+  `TOPGUNFX.LIB` copy): slot 3 is E0 at CODE+2D81 drawing the face at 3185
+  (top of the left wing), slot 4 E0 at CODE+28A8 drawing 2CAC (under the
+  right wing). Through the panel's hit regions: hide both (two undo
+  steps), render from above and below, save as a new LIB and reopen (both
+  hidden faces recognised from the bytes), show both: `F5EV.SH` is
+  byte-identical to the retail entry. Make paintable on slot 4: `F5EVM4.PIC`,
+  256 × 16 with a 16 × 16 panel (18 × 18 in the TopGun copy), retail
+  texture layout; a blue, white and red roundel painted with the brush
+  shows under the right wing in the render; save and reopen keep the face
+  on the PIC. Restore runtime marking returns the retail `F5EV.SH` bytes and
+  removes `F5EVM4.PIC` and `F5EVM4.ORG`. The renders were checked by eye:
+  steel outlines on the drawn markings, dim dashed outlines once hidden,
+  the painted roundel in place.
+
+Core tests use a synthetic kit with wing and nose markings and a looped
+shape: detection, hide and show (byte-identical, also out of order and
+from the bytes alone), refusals for skin, untextured and missing faces,
+reassign bounds and merge refusal (and reversal to the same bytes), make
+paintable and restore (retail PIC layout, other faces unchanged, same
+bytes back), a damage shape sharing the main shape's sheet size, a
+marking proved through a loop, a face drawn under a slot and a skin on
+different passes (refused by hide, hide slot and make paintable), and
+truncated input. The smoke test drives the panel through its hit regions:
+Shown off and on, the steel and dashed outlines, the Package line, Apply to
+damage family (one undo step for two shapes, a member without the slot
+named), Select faces into Edit Mesh and a G move, the slot Select and its
+merge refusal, Make paintable and Restore runtime marking, the Paint
+workspace, undo to the exact bytes, and hit geometry at 800x600 and
+1280x800.
+
+Formatting, strict Clippy (also for both Windows targets), 196 core tests
+and the smoke test pass. `App` is 2,736 bytes (unchanged; the panel's state
+is in the boxed `EditState`). No Win32 API was added; the PE audit reports
+1,774,592 bytes (32-bit) and 2,018,304 bytes (64-bit) with the same 60
+reviewed imports. No hidden, reassigned or paintable marking has been
+loaded in the original game.
