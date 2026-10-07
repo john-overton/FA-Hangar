@@ -4,7 +4,7 @@ use crate::{
     archive::{validate_name, Archive, Entry, ARCHIVE_LIMIT},
     authoring::validate_id,
     brf::Brf,
-    dependencies::{references, Location, Reference},
+    dependencies::{references, Evidence, Location, Reference},
     invalid, Result,
 };
 use alloc::{
@@ -16,14 +16,123 @@ use alloc::{
 #[derive(Debug)]
 pub struct Package {
     pub archive: Archive,
+    /// Copied resources only; kept unresolved names are never mapped.
     pub mapping: Vec<(String, String)>,
     pub donor: String,
     pub id: String,
     pub notes: Vec<String>,
+    /// References absent from the document and every searched catalog.
+    pub unresolved: Vec<Unresolved>,
+}
+/// How the export treats one name that no searched LIB provides.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolution {
+    /// The stored name stays byte-for-byte, as in the source LIB.
+    Keep,
+    /// The copied resource is retargeted to this PIC, which joins the package.
+    Substitute(String),
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unresolved {
+    /// Source name of the referencing resource.
+    pub resource: String,
+    pub target: String,
+    pub evidence: Evidence,
+    pub resolution: Resolution,
+}
+impl Unresolved {
+    /// False when the name sits in an SH texture record no traversal reaches.
+    pub fn drawn(&self) -> Option<bool> {
+        match self.evidence {
+            Evidence::Texture(reached) => reached,
+            _ => None,
+        }
+    }
+    /// Only texture names can be retargeted to another PIC.
+    pub fn texture(&self) -> bool {
+        ext(&self.target) == "PIC"
+    }
+}
+/// Explicit treatment of unresolved names. The default refuses the export.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Policy {
+    /// Keep every unresolved name without a substitute as in the source.
+    pub keep_unresolved: bool,
+    /// (referencing resource, or "" for any, unresolved name) -> PIC to use.
+    pub substitutes: BTreeMap<(String, String), String>,
+}
+impl Policy {
+    fn choice(&self, resource: &str, target: &str) -> Option<Resolution> {
+        self.substitutes
+            .get(&(resource.into(), target.into()))
+            .or_else(|| self.substitutes.get(&(String::new(), target.into())))
+            .map(|n| Resolution::Substitute(n.to_ascii_uppercase()))
+            .or_else(|| self.keep_unresolved.then_some(Resolution::Keep))
+    }
 }
 struct Node {
     bytes: Vec<u8>,
     refs: Vec<Reference>,
+}
+/// Names absent from the document and every searched catalog, and their policy.
+#[derive(Default)]
+struct Ledger {
+    found: Vec<Unresolved>,
+    refused: Vec<Unresolved>,
+    resolutions: BTreeMap<(String, String), Resolution>,
+}
+impl Ledger {
+    /// Records one unresolved reference; returns a substitute PIC to copy.
+    fn note(
+        &mut self,
+        policy: &Policy,
+        catalog: &BTreeSet<String>,
+        resource: &str,
+        target: &str,
+        evidence: Evidence,
+    ) -> Result<Option<String>> {
+        let key = (resource.to_string(), target.to_string());
+        if self.resolutions.contains_key(&key)
+            || self
+                .refused
+                .iter()
+                .any(|u| u.resource == resource && u.target == target)
+        {
+            return Ok(None);
+        }
+        if self.found.len() + self.refused.len() >= 4096 {
+            return Err(invalid("Export has more than 4096 unresolved references"));
+        }
+        let mut entry = Unresolved {
+            resource: key.0.clone(),
+            target: key.1.clone(),
+            evidence,
+            resolution: Resolution::Keep,
+        };
+        let Some(resolution) = policy.choice(resource, target) else {
+            self.refused.push(entry);
+            return Ok(None);
+        };
+        let mut copy = None;
+        if let Resolution::Substitute(new) = &resolution {
+            validate_name(new)?;
+            if ext(target) != "PIC" || ext(new) != "PIC" {
+                return Err(format!(
+                    "{target} in {resource} is not a texture; only PIC references can be substituted"
+                ));
+            }
+            if !catalog.contains(new) {
+                return Err(format!(
+                    "Substitute {new} is not in this LIB or any searched source LIB"
+                ));
+            }
+            copy = Some(new.clone());
+        }
+        entry.resolution = resolution.clone();
+        self.resolutions.insert(key, resolution);
+        self.found.push(entry);
+        Ok(copy)
+    }
 }
 fn unquote(s: &str) -> &str {
     s.strip_prefix('"')
@@ -126,7 +235,13 @@ fn generated(old: &str, id: &str, limit: usize, used: &BTreeSet<String>) -> Resu
 
 /// Sources are in priority order: current document first. All source filenames
 /// are reserved so the generated library cannot override any scanned resource.
-pub fn build(sources: &[&Archive], donor: &str, id: &str, title: &str) -> Result<Package> {
+pub fn build(
+    sources: &[&Archive],
+    donor: &str,
+    id: &str,
+    title: &str,
+    policy: &Policy,
+) -> Result<Package> {
     let mut catalog = BTreeSet::new();
     let mut providers = BTreeMap::new();
     for (si, archive) in sources.iter().enumerate() {
@@ -135,18 +250,40 @@ pub fn build(sources: &[&Archive], donor: &str, id: &str, title: &str) -> Result
             providers.entry(e.name.clone()).or_insert((si, ei));
         }
     }
-    build_with(&catalog, donor, id, title, |name| {
+    build_with(&catalog, donor, id, title, policy, |name| {
         let (si, ei) = providers
             .get(name)
             .ok_or_else(|| format!("Missing referenced resource {name}"))?;
         sources[*si].entries[*ei].read()
     })
 }
+fn refusal(found: &[Unresolved]) -> String {
+    let mut names = Vec::new();
+    for u in found.iter().take(8) {
+        names.push(format!("{} in {}", u.target, u.resource));
+    }
+    if found.len() > 8 {
+        names.push(format!("{} more", found.len() - 8));
+    }
+    let one = found.len() == 1;
+    format!(
+        "Unresolved in source: {}. No searched LIB provides {}. Add the LIB that does, {}keep {} as in the source",
+        names.join(", "),
+        if one { "this name" } else { "these names" },
+        if found.iter().any(|u| u.texture()) {
+            "substitute a packaged texture, or "
+        } else {
+            "or "
+        },
+        if one { "it" } else { "them" },
+    )
+}
 pub fn build_with(
     catalog: &BTreeSet<String>,
     donor: &str,
     id: &str,
     title: &str,
+    policy: &Policy,
     mut read: impl FnMut(&str) -> Result<Vec<u8>>,
 ) -> Result<Package> {
     let id = validate_id(id)?;
@@ -194,23 +331,29 @@ pub fn build_with(
             "Main and shadow share a file; this aircraft family needs separate authoring",
         ));
     }
+    let mut ledger = Ledger::default();
+    // Stored root names absent everywhere are classified with the donor's references.
     let mut roots = vec![donor.clone()];
-    if let Some(name) = &main {
-        roots.push(name.clone());
-    }
-    if let Some(name) = &shadow {
-        roots.push(name.clone());
+    for name in main.iter().chain(&shadow) {
+        if catalog.contains(name) {
+            roots.push(name.clone());
+        }
     }
     if let Some(family) = &family {
         for suffix in ["A", "B", "C", "D"] {
-            roots.push(format!("{family}_{suffix}.SH"));
+            let name = format!("{family}_{suffix}.SH");
+            if catalog.contains(&name) {
+                roots.push(name);
+            } else {
+                ledger.note(policy, catalog, &donor, &name, Evidence::Convention)?;
+            }
         }
     }
     let hud = optional_reference("object.hudName")?.or_else(|| {
         let n = format!("{}.HUD", stem(&donor));
         (ext(&donor) == "PT" && catalog.contains(&n)).then_some(n)
     });
-    if let Some(h) = &hud {
+    if let Some(h) = hud.as_ref().filter(|h| catalog.contains(*h)) {
         roots.push(h.clone());
     }
     let private_palette = format!("{}.PAL", stem(&donor));
@@ -226,7 +369,7 @@ pub fn build_with(
     if let Some(name) = &palette {
         roots.push(name.clone());
     }
-    let mut unresolved = BTreeSet::new();
+    let mut diagnostics = BTreeSet::new();
     let mut graph = BTreeMap::<String, Node>::new();
     let mut pending = roots;
     let mut bytes_total = 0usize;
@@ -248,22 +391,20 @@ pub fn build_with(
             return Err(invalid("Object graph exceeds 128 MiB"));
         }
         let refs = if !dependencies_known(&name, &bytes) {
-            unresolved.insert(format!(
+            diagnostics.insert(format!(
                 "{name}: opaque bytes copied unchanged; dependency discovery unavailable."
             ));
             Vec::new()
         } else {
-            references(&name, &bytes, catalog, &mut unresolved)
+            references(&name, &bytes, catalog, &mut diagnostics)
                 .map_err(|e| format!("{name}: {e}"))?
         };
         for r in &refs {
-            if !catalog.contains(&r.target) {
-                return Err(format!(
-                    "{name} references missing {}. Add its source LIB and retry",
-                    r.target
-                ));
+            if catalog.contains(&r.target) {
+                pending.push(r.target.clone());
+            } else if let Some(new) = ledger.note(policy, catalog, &name, &r.target, r.evidence)? {
+                pending.push(new);
             }
-            pending.push(r.target.clone());
         }
         // FA's ordnance menu derives the icon from the store's definition stem.
         if matches!(ext(&name), "JT" | "SEE" | "ECM" | "GAS") {
@@ -274,26 +415,64 @@ pub fn build_with(
         }
         graph.insert(name, Node { bytes, refs });
     }
+    if !ledger.refused.is_empty() {
+        return Err(refusal(&ledger.refused));
+    }
+    let Ledger {
+        found, resolutions, ..
+    } = ledger;
+    for ((resource, old), new) in &policy.substitutes {
+        if !found.iter().any(|u| {
+            &u.target == old
+                && (resource.is_empty() || &u.resource == resource)
+                && u.resolution == Resolution::Substitute(new.to_ascii_uppercase())
+        }) {
+            return Err(format!(
+                "{old} is not an unresolved reference of this export; nothing to substitute"
+            ));
+        }
+    }
+    // The copied name a reference is rewritten to; None keeps the stored bytes.
+    let effective = |resource: &str, r: &Reference| -> Option<String> {
+        if catalog.contains(&r.target) {
+            return Some(r.target.clone());
+        }
+        match resolutions.get(&(resource.to_string(), r.target.clone())) {
+            Some(Resolution::Substitute(new)) => Some(new.clone()),
+            _ => None,
+        }
+    };
     let mut budget = BTreeMap::<String, usize>::new();
     for name in graph.keys() {
         budget.insert(name.clone(), 8);
     }
-    for node in graph.values() {
+    for (name, node) in &graph {
         for r in &node.refs {
             if let Location::Literal { len, stem_only, .. } = r.location {
+                let Some(target) = effective(name, r) else {
+                    continue;
+                };
                 let cap = if stem_only {
                     len
                 } else {
-                    len.checked_sub(ext(&r.target).len() + 1)
+                    len.checked_sub(ext(&target).len() + 1)
                         .ok_or("Bad literal capacity")?
                 };
-                let b = budget.get_mut(&r.target).unwrap();
+                let b = budget.get_mut(&target).ok_or("Unmapped reference")?;
                 *b = (*b).min(cap);
             }
         }
     }
     let mut mapping = BTreeMap::new();
     let mut used = catalog.clone();
+    // A kept name must never become the private name of a copied resource.
+    let mut kept = BTreeSet::new();
+    for u in &found {
+        if u.resolution == Resolution::Keep {
+            kept.insert(u.target.clone());
+            used.insert(u.target.clone());
+        }
+    }
     assign(
         &donor,
         format!("{id}.{}", ext(&donor)),
@@ -302,14 +481,14 @@ pub fn build_with(
         &budget,
     )?;
     if let Some(main) = &main {
-        if main != &donor {
+        if main != &donor && graph.contains_key(main) {
             assign(main, format!("{id}.SH"), &mut mapping, &mut used, &budget)?;
         }
     }
     if let Some(family) = &family {
         for suffix in ["A", "B", "C", "D", "S"] {
             let name = format!("{family}_{suffix}.SH");
-            if !mapping.contains_key(&name) {
+            if !mapping.contains_key(&name) && graph.contains_key(&name) {
                 assign(
                     &name,
                     format!("{id}_{suffix}.SH"),
@@ -321,7 +500,7 @@ pub fn build_with(
         }
     }
     if let Some(h) = &hud {
-        if !mapping.contains_key(h) {
+        if !mapping.contains_key(h) && graph.contains_key(h) {
             assign(h, format!("{id}.HUD"), &mut mapping, &mut used, &budget)?;
         }
     }
@@ -446,7 +625,7 @@ pub fn build_with(
                 if used.insert(target.clone()) {
                     originals.push((target, bytes));
                 } else {
-                    unresolved.insert(format!(
+                    diagnostics.insert(format!(
                         "{org}: stored original not copied; {target} is already in use."
                     ));
                 }
@@ -482,7 +661,7 @@ pub fn build_with(
             }
         }
         if identities.is_empty() {
-            unresolved.insert("Display-name block unrecognized; existing text preserved.".into());
+            diagnostics.insert("Display-name block unrecognized; existing text preserved.".into());
         }
     }
     let mut ordered: Vec<_> = graph.keys().cloned().collect();
@@ -495,8 +674,8 @@ pub fn build_with(
             let brf = Brf::parse(&bytes, ext(&name))?;
             let mut edits = BTreeMap::new();
             for r in &node.refs {
-                if let Location::Text(index) = r.location {
-                    edits.insert(index, format!("\"{}\"", mapping[&r.target]));
+                if let (Location::Text(index), Some(target)) = (&r.location, effective(&name, r)) {
+                    edits.insert(*index, format!("\"{}\"", mapping[&target]));
                 }
             }
             if name == donor {
@@ -515,7 +694,11 @@ pub fn build_with(
         } else {
             for r in &node.refs {
                 if let Location::Literal { at, len, stem_only } = r.location {
-                    let target = &mapping[&r.target];
+                    // Kept names stay byte-for-byte; substitutes use the same bounded slot.
+                    let Some(source) = effective(&name, r) else {
+                        continue;
+                    };
+                    let target = &mapping[&source];
                     let text = if stem_only { stem(target) } else { target };
                     if text.len() > len {
                         return Err(invalid("New module name exceeds original string slot"));
@@ -545,7 +728,7 @@ pub fn build_with(
             continue;
         }
         for r in references(&e.name, &bytes, &audit_catalog, &mut BTreeSet::new())? {
-            if !output_catalog.contains(&r.target) {
+            if !output_catalog.contains(&r.target) && !kept.contains(&r.target) {
                 return Err(format!(
                     "Output validation: {} still references {}",
                     e.name, r.target
@@ -566,7 +749,26 @@ pub fn build_with(
             if copied_originals == 1 { "its PIC" } else { "their PICs" }
         ));
     }
-    notes.extend(unresolved);
+    let kept_count = found
+        .iter()
+        .filter(|u| u.resolution == Resolution::Keep)
+        .count();
+    if kept_count > 0 {
+        notes.push(format!(
+            "{kept_count} unresolved reference{} kept as in the source LIB; no searched LIB provides {}.",
+            if kept_count == 1 { "" } else { "s" },
+            if kept_count == 1 { "it" } else { "them" }
+        ));
+    }
+    for u in &found {
+        if let Resolution::Substitute(new) = &u.resolution {
+            notes.push(format!(
+                "{} in {} retargeted to {} ({}).",
+                u.target, u.resource, new, mapping[new]
+            ));
+        }
+    }
+    notes.extend(diagnostics);
     let mut mapping: Vec<_> = mapping.into_iter().collect();
     let main_name = format!("{id}.SH");
     let family_prefix = format!("{id}_");
@@ -592,6 +794,7 @@ pub fn build_with(
         donor,
         id,
         notes,
+        unresolved: found,
     })
 }
 
@@ -684,7 +887,7 @@ mod tests {
     fn graph_is_private_recursive_lossless_and_bounded() {
         let a = source();
         let original = a.bytes().unwrap();
-        let p = build(&[&a], "DEMO.PT", "NEW", "New aircraft").unwrap();
+        let p = build(&[&a], "DEMO.PT", "NEW", "New aircraft", &Policy::default()).unwrap();
         let mapping: BTreeMap<_, _> = p.mapping.iter().cloned().collect();
         // 16 mapped resources plus the stored original of ~PANEL.PIC. DEMO.ORG
         // is not a PIC payload, so it is not treated as DEMO.PIC's original.
@@ -738,7 +941,14 @@ mod tests {
         let decoded = Archive::parse(p.archive.bytes().unwrap()).unwrap();
         assert_eq!(decoded.entries.len(), p.mapping.len() + 1);
         assert_eq!(a.bytes().unwrap(), original);
-        let again = build(&[&p.archive], "NEW.PT", "NEXT", "Next variant").unwrap();
+        let again = build(
+            &[&p.archive],
+            "NEW.PT",
+            "NEXT",
+            "Next variant",
+            &Policy::default(),
+        )
+        .unwrap();
         assert!(again.archive.find("NEXT.PAL").is_some());
         assert!(again
             .archive
@@ -749,15 +959,217 @@ mod tests {
     #[test]
     fn missing_dependencies_and_collisions_block_before_output() {
         let mut a = source();
-        assert!(build(&[&a], "DEMO.PT", "DEMO", "Same").is_err());
+        assert!(build(&[&a], "DEMO.PT", "DEMO", "Same", &Policy::default()).is_err());
         a.entries.retain(|e| e.name != "SFX.11K");
-        let e = build(&[&a], "DEMO.PT", "NEW", "New").unwrap_err();
+        let e = build(&[&a], "DEMO.PT", "NEW", "New", &Policy::default()).unwrap_err();
         assert!(e.contains("SFX.11K"));
         let mut extra = Archive::empty();
         extra
             .entries
             .push(Entry::new("SFX.11K", vec![128]).unwrap());
-        assert!(build(&[&a, &extra], "DEMO.PT", "NEW", "New").is_ok());
+        assert!(build(&[&a, &extra], "DEMO.PT", "NEW", "New", &Policy::default()).is_ok());
+    }
+    /// `source()` plus a second aircraft; both C damage shapes draw `name`,
+    /// which no catalog provides, in a reached E2 record.
+    fn dangling(name: &str) -> (Archive, Vec<u8>) {
+        let mut a = source();
+        let mut ghost = crate::model::demo_textured();
+        assert_eq!(&ghost[256..258], [0xe2, 0]);
+        ghost[258..272].fill(0);
+        ghost[258..258 + name.len()].copy_from_slice(name.as_bytes());
+        let pt = a.entries[a.find("DEMO.PT").unwrap()].read().unwrap();
+        let two = String::from_utf8(pt).unwrap().replace("DEMO", "TWO");
+        a.entries
+            .push(Entry::new("TWO.PT", two.into_bytes()).unwrap());
+        for (from, to) in [("DEMO.SH", "TWO.SH"), ("DEMO.HUD", "TWO.HUD")] {
+            let bytes = a.entries[a.find(from).unwrap()].read().unwrap();
+            a.entries.push(Entry::new(to, bytes).unwrap());
+        }
+        for suffix in ["A", "B", "C", "D", "S"] {
+            let bytes = if suffix == "C" {
+                ghost.clone()
+            } else {
+                crate::model::demo_shape()
+            };
+            let at = a.find(&format!("DEMO_{suffix}.SH")).unwrap();
+            a.entries[at] = Entry::new(&format!("DEMO_{suffix}.SH"), bytes.clone()).unwrap();
+            a.entries
+                .push(Entry::new(&format!("TWO_{suffix}.SH"), bytes).unwrap());
+        }
+        (a, ghost)
+    }
+    fn read(p: &Package, name: &str) -> Vec<u8> {
+        p.archive.entries[p.archive.find(name).unwrap()]
+            .read()
+            .unwrap()
+    }
+    fn keep() -> Policy {
+        Policy {
+            keep_unresolved: true,
+            ..Policy::default()
+        }
+    }
+    #[test]
+    fn unresolved_names_refuse_by_default_and_keep_preserves_bytes() {
+        let (a, ghost) = dangling("GHOST.PIC");
+        let before = a.bytes().unwrap();
+        let e = build(&[&a], "DEMO.PT", "NEW", "New", &Policy::default()).unwrap_err();
+        assert!(
+            e.starts_with("Unresolved in source: GHOST.PIC in DEMO_C.SH"),
+            "{e}"
+        );
+        assert!(e.contains("Add the LIB") && e.contains("substitute"), "{e}");
+        // A source LIB that provides the name resolves it; nothing is unresolved.
+        let mut extra = Archive::empty();
+        extra
+            .entries
+            .push(Entry::new("GHOST.PIC", crate::picture::demo()).unwrap());
+        let p = build(&[&a, &extra], "DEMO.PT", "NEW", "New", &Policy::default()).unwrap();
+        assert!(p.unresolved.is_empty());
+        assert!(p.mapping.iter().any(|(old, _)| old == "GHOST.PIC"));
+
+        let p = build(&[&a], "DEMO.PT", "NEW", "New", &keep()).unwrap();
+        assert_eq!(
+            p.unresolved,
+            [Unresolved {
+                resource: "DEMO_C.SH".into(),
+                target: "GHOST.PIC".into(),
+                evidence: Evidence::Texture(Some(true)),
+                resolution: Resolution::Keep,
+            }]
+        );
+        assert_eq!(p.unresolved[0].drawn(), Some(true));
+        // Not renamed, not copied, not a private resource.
+        assert!(p
+            .mapping
+            .iter()
+            .all(|(old, new)| old != "GHOST.PIC" && new != "GHOST.PIC"));
+        assert!(p.archive.find("GHOST.PIC").is_none());
+        assert_eq!(read(&p, "NEW_C.SH"), ghost);
+        assert!(p
+            .notes
+            .iter()
+            .any(|n| n.contains("1 unresolved reference kept")));
+        assert_eq!(a.bytes().unwrap(), before);
+        // Bytes outside the decoded records keep the bounded heuristic; their
+        // reachability is unknown rather than guessed.
+        let mut a = a;
+        a.entries.retain(|e| e.name != "HIDDEN.PIC");
+        let p = build(&[&a], "DEMO.PT", "NEW", "New", &keep()).unwrap();
+        let hidden = p
+            .unresolved
+            .iter()
+            .find(|u| u.target == "HIDDEN.PIC")
+            .unwrap();
+        assert_eq!(
+            (hidden.resource.as_str(), hidden.drawn()),
+            ("DEMO.SH", None)
+        );
+        assert_eq!(p.unresolved.len(), 2);
+    }
+    #[test]
+    fn substitute_patches_only_the_copied_name_slot() {
+        let (a, ghost) = dangling("GHOST.PIC");
+        let before = a.bytes().unwrap();
+        let mut policy = Policy::default();
+        policy.substitutes.insert(
+            ("DEMO_C.SH".into(), "GHOST.PIC".into()),
+            "symbol.pic".into(),
+        );
+        let p = build(&[&a], "DEMO.PT", "NEW", "New", &policy).unwrap();
+        let mapping: BTreeMap<_, _> = p.mapping.iter().cloned().collect();
+        // The substitute was not otherwise referenced; it joins the package.
+        let private = &mapping["SYMBOL.PIC"];
+        assert_eq!(read(&p, private), crate::picture::demo());
+        assert_eq!(
+            p.unresolved[0].resolution,
+            Resolution::Substitute("SYMBOL.PIC".into())
+        );
+        let after = read(&p, "NEW_C.SH");
+        assert_eq!(after.len(), ghost.len());
+        let slot = 256 + 2..256 + 16;
+        for (i, (x, y)) in ghost.iter().zip(&after).enumerate() {
+            assert!(x == y || slot.contains(&i), "byte {i} changed");
+        }
+        let mut name = private.as_bytes().to_vec();
+        name.resize(14, 0);
+        assert_eq!(after[slot], name[..]);
+        assert!(crate::model::Model::parse(&after)
+            .unwrap()
+            .textures
+            .contains(private));
+        assert!(p
+            .notes
+            .iter()
+            .any(|n| n.contains("retargeted to SYMBOL.PIC")));
+        // The second aircraft and the source keep the stored name.
+        assert_eq!(a.bytes().unwrap(), before);
+        assert_eq!(
+            a.entries[a.find("TWO_C.SH").unwrap()].read().unwrap(),
+            ghost
+        );
+        let two = build(&[&a], "TWO.PT", "NEXT", "Next", &keep()).unwrap();
+        assert_eq!(read(&two, "NEXT_C.SH"), ghost);
+        assert_eq!(two.unresolved[0].resource, "TWO_C.SH");
+        // Any-resource substitutes apply to every reference of the name.
+        let mut any = Policy::default();
+        any.substitutes
+            .insert((String::new(), "GHOST.PIC".into()), "DEMO.PIC".into());
+        let p = build(&[&a], "DEMO.PT", "NEW", "New", &any).unwrap();
+        let mapping: BTreeMap<_, _> = p.mapping.iter().cloned().collect();
+        assert!(crate::model::Model::parse(&read(&p, "NEW_C.SH"))
+            .unwrap()
+            .textures
+            .contains(&mapping["DEMO.PIC"]));
+    }
+    #[test]
+    fn substitutes_are_bounded_and_explicit() {
+        let (a, _) = dangling("GHOST.PIC");
+        let fail = |policy: Policy, old: &str, new: &str| {
+            let mut policy = policy;
+            policy
+                .substitutes
+                .insert((String::new(), old.into()), new.into());
+            build(&[&a], "DEMO.PT", "NEW", "New", &policy).unwrap_err()
+        };
+        let none = Policy::default;
+        assert!(fail(none(), "GHOST.PIC", "SFX.11K").contains("only PIC references"));
+        assert!(fail(none(), "GHOST.PIC", "NOWHERE.PIC").contains("not in this LIB"));
+        // A typo does not resolve GHOST.PIC, and is reported rather than ignored.
+        assert!(fail(none(), "GOST.PIC", "DEMO.PIC").contains("Unresolved in source"));
+        let e = fail(keep(), "GOST.PIC", "DEMO.PIC");
+        assert!(e.contains("GOST.PIC is not an unresolved reference"), "{e}");
+    }
+    #[test]
+    fn kept_names_are_reserved_and_collisions_still_block() {
+        // NEW0.PIC is the first private name the generator would choose.
+        let (a, _) = dangling("NEW0.PIC");
+        let p = build(&[&a], "DEMO.PT", "NEW", "New", &keep()).unwrap();
+        assert_eq!(p.unresolved[0].target, "NEW0.PIC");
+        assert!(p.mapping.iter().all(|(_, new)| new != "NEW0.PIC"));
+        assert!(p.archive.find("NEW0.PIC").is_none());
+        // A kept name equal to a fixed private name is a collision, not an overwrite.
+        let (a, _) = dangling("NEW.PAL");
+        let e = build(&[&a], "DEMO.PT", "NEW", "New", &keep()).unwrap_err();
+        assert!(e.contains("Name collision: NEW.PAL"), "{e}");
+        let (a, _) = dangling("GHOST.PIC");
+        assert!(build(&[&a], "DEMO.PT", "DEMO", "Same", &keep()).is_err());
+        assert!(build(&[&a], "DEMO.PT", "TWO", "Same", &keep()).is_err());
+    }
+    #[test]
+    fn missing_family_members_are_unresolved_conventions() {
+        let mut a = source();
+        a.entries.retain(|e| e.name != "DEMO_D.SH");
+        let e = build(&[&a], "DEMO.PT", "NEW", "New", &Policy::default()).unwrap_err();
+        assert!(
+            e.contains("DEMO_D.SH in DEMO.PT") && !e.contains("substitute"),
+            "{e}"
+        );
+        let p = build(&[&a], "DEMO.PT", "NEW", "New", &keep()).unwrap();
+        assert_eq!(p.unresolved[0].evidence, Evidence::Convention);
+        assert!(p.archive.find("NEW_D.SH").is_none());
+        assert!(p.archive.find("NEW_C.SH").is_some());
+        assert!(p.mapping.iter().all(|(old, _)| old != "DEMO_D.SH"));
     }
     #[test]
     fn index_reads_only_directory_and_checks_eof() {
@@ -809,7 +1221,7 @@ mod object_tests {
             Entry::new("$OLD.PIC", crate::picture::demo()).unwrap(),
         ];
         let before = a.bytes().unwrap();
-        let out = build(&[&a], "OLD.JT", "NEW", "New missile").unwrap();
+        let out = build(&[&a], "OLD.JT", "NEW", "New missile", &Policy::default()).unwrap();
         assert!(out.archive.find("NEW.JT").is_some());
         assert!(out.archive.find("NEW.SH").is_some());
         assert!(out.archive.find("$NEW.PIC").is_some());
@@ -839,10 +1251,10 @@ mod object_tests {
             Entry::new("SOUND.11K", b"BAD.SH\0".to_vec()).unwrap(),
             Entry::new("OPAQUE.BIN", vec![1, 2, 3]).unwrap(),
         ];
-        let out = build(&[&a], "SOUND.11K", "NEW", "Sound").unwrap();
+        let out = build(&[&a], "SOUND.11K", "NEW", "Sound", &Policy::default()).unwrap();
         assert_eq!(out.archive.entries.len(), 1);
         assert_eq!(out.archive.entries[0].read().unwrap(), b"BAD.SH\0");
-        let out = build(&[&a], "OPAQUE.BIN", "NEW", "Unknown").unwrap();
+        let out = build(&[&a], "OPAQUE.BIN", "NEW", "Unknown", &Policy::default()).unwrap();
         assert_eq!(out.archive.entries[0].read().unwrap(), vec![1, 2, 3]);
         assert!(out.notes.iter().any(|s| s.contains("opaque")));
     }

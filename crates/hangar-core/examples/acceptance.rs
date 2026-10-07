@@ -64,7 +64,13 @@ fn run() -> Result<()> {
         "case\tbaseline_load\tedited_load\tvisuals_and_damage\tlaunch_and_slew\tnotes\n",
     );
     for (folder, donor, id, title) in cases {
-        let package = clone_aircraft::build(&[&sources[0], &sources[1]], donor, id, title)?;
+        let package = clone_aircraft::build(
+            &[&sources[0], &sources[1]],
+            donor,
+            id,
+            title,
+            &Default::default(),
+        )?;
         let ext = donor.rsplit('.').next().unwrap();
         let name = format!("{id}.{ext}");
         let original = Brf::parse(&read(&sources[0], donor)?, ext)?;
@@ -156,6 +162,7 @@ fn run() -> Result<()> {
             &format!("{stem}.PT"),
             id,
             &format!("Hangar {stem} texture test"),
+            &Default::default(),
         )?;
         let name = format!("{id}.SH");
         let bytes = read(&package.archive, &name)?;

@@ -103,7 +103,7 @@ pub fn run() -> Result<()> {
         Some("clone-aircraft"|"export-object") => {
             let mut sources=vec![Archive::parse(platform::read(argument(&args,1)?)?)?];
             for path in args.iter().skip(6){sources.push(Archive::parse(platform::read(path)?)?);}
-            let refs:Vec<_>=sources.iter().collect();let package=hangar_core::clone_aircraft::build(&refs,argument(&args,2)?,argument(&args,3)?,argument(&args,4)?)?;
+            let refs:Vec<_>=sources.iter().collect();let package=hangar_core::clone_aircraft::build(&refs,argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,&Default::default())?;
             crate::saving::library(argument(&args,5)?,&package.archive.bytes()?)?;
             for (old,new) in &package.mapping{println!("{old:13} -> {new}");}
             println!("{} private resources; {} bytes",package.archive.entries.len(),package.archive.bytes()?.len());

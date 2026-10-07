@@ -143,6 +143,7 @@ impl App {
             self.name(),
             &self.variant_id,
             &self.clone_title,
+            &Default::default(),
             |name| {
                 if let Some(i) = self.doc.archive.find(name) {
                     return self.doc.archive.entries[i].read();
