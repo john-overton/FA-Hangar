@@ -215,7 +215,7 @@ impl Pic {
         radius: usize,
         color: u8,
     ) -> Result<usize> {
-        self.brush(source, x, y, radius, |_| color)
+        self.brush(source, x, y, radius, |_, _| color)
     }
     /// Same raster geometry and byte map, so pixels can be copied back one by one.
     pub fn same_layout(&self, other: &Pic) -> bool {
@@ -236,7 +236,7 @@ impl Pic {
                 "Stored original has a different raster layout; use Restore texture",
             ));
         }
-        self.brush(source, x, y, radius, |i| original.pixels[i])
+        self.brush(source, x, y, radius, |i, _| original.pixels[i])
     }
     fn brush(
         &mut self,
@@ -244,7 +244,7 @@ impl Pic {
         x: usize,
         y: usize,
         radius: usize,
-        color: impl Fn(usize) -> u8,
+        color: impl Fn(usize, u8) -> u8,
     ) -> Result<usize> {
         if !self.paintable || source.len() != self.source_len {
             return Err(invalid(
@@ -264,7 +264,7 @@ impl Pic {
                 }
                 let i = yy * self.width + xx;
                 let off = self.offsets[i];
-                let color = color(i);
+                let color = color(i, self.pixels[i]);
                 if off != u32::MAX && self.pixels[i] != color {
                     source[off as usize] = color;
                     self.pixels[i] = color;
@@ -447,5 +447,401 @@ mod edit_tests {
         assert_eq!(&b[..64], &old[..64]);
         assert_eq!(&b[65..], &old[65..]);
         assert!(!Pic::parse(&b).unwrap().mask[0]);
+    }
+}
+
+/// Palette indices a color replacement acts on, by index.
+pub type IndexSet = [bool; 256];
+/// Largest replacement tolerance, in 6-bit palette steps.
+pub const MAX_TOLERANCE: u8 = 64;
+/// The indices that match `from` within `tolerance`: the Euclidean distance
+/// between their RGB and `from`'s, in 6-bit palette steps (the units a PAL
+/// stores), is at most `tolerance`. Tolerance 0 is `from` alone, even when
+/// another index holds the same color.
+pub fn matching(colors: &[[u8; 3]; 256], from: u8, tolerance: u8) -> IndexSet {
+    let mut set = [false; 256];
+    set[from as usize] = true;
+    if tolerance == 0 {
+        return set;
+    }
+    // Exact inverse of the 6-bit expansion in `palette` and `Pic::parse`.
+    let six = |c: [u8; 3]| c.map(|v| (v as i32 * 63 + 127) / 255);
+    let a = six(colors[from as usize]);
+    let t = tolerance.min(MAX_TOLERANCE) as i32;
+    for (i, c) in colors.iter().enumerate() {
+        let b = six(*c);
+        if (0..3).map(|k| (a[k] - b[k]).pow(2)).sum::<i32>() <= t * t {
+            set[i] = true;
+        }
+    }
+    set
+}
+/// Pixels covered by face UV polygons (stored SH UVs, V counted up from the
+/// bottom row as the renderer maps them). A pixel is covered when its centre
+/// lies inside or on a polygon whose corners are pixel centres, so thin and
+/// degenerate faces still cover the pixels on their edges. Bounded: at most
+/// 4,096 polygons of 3 to 64 corners within ±65,536.
+pub fn footprint(width: usize, height: usize, polygons: &[&[[i32; 2]]]) -> Result<Vec<bool>> {
+    if width == 0 || height == 0 || width > 8192 || height > 8192 || width * height > 4_194_304 {
+        return Err(invalid("Footprint outside PIC limits"));
+    }
+    if polygons.len() > 4096 {
+        return Err(invalid("Too many faces for one footprint"));
+    }
+    let mut mask = vec![false; width * height];
+    for uv in polygons {
+        if uv.len() > 64 || uv.iter().flatten().any(|v| !(-65536..=65536).contains(v)) {
+            return Err(invalid("Face UVs outside footprint limits"));
+        }
+        if uv.is_empty() {
+            continue;
+        }
+        let p: Vec<[i64; 2]> = uv
+            .iter()
+            .map(|q| [q[0] as i64, height as i64 - 1 - q[1] as i64])
+            .collect();
+        let lo = |k: usize| p.iter().map(|q| q[k]).min().unwrap();
+        let hi = |k: usize| p.iter().map(|q| q[k]).max().unwrap();
+        let (x0, x1) = (lo(0).max(0), hi(0).min(width as i64 - 1));
+        let (y0, y1) = (lo(1).max(0), hi(1).min(height as i64 - 1));
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let mut inside = false;
+                let mut edge = false;
+                for j in 0..p.len() {
+                    let (a, b) = (p[j], p[(j + 1) % p.len()]);
+                    let cross = (b[0] - a[0]) * (y - a[1]) - (x - a[0]) * (b[1] - a[1]);
+                    if cross == 0
+                        && x >= a[0].min(b[0])
+                        && x <= a[0].max(b[0])
+                        && y >= a[1].min(b[1])
+                        && y <= a[1].max(b[1])
+                    {
+                        edge = true;
+                        break;
+                    }
+                    if (a[1] > y) != (b[1] > y) && (cross > 0) == (b[1] > a[1]) {
+                        inside = !inside;
+                    }
+                }
+                if edge || inside {
+                    mask[y as usize * width + x as usize] = true;
+                }
+            }
+        }
+    }
+    Ok(mask)
+}
+impl Pic {
+    /// Whether pixel `i` may take part in a replacement: opaque, inside
+    /// `region`, and not the transparent index 255 of a glyph strip.
+    fn replaceable(&self, i: usize, region: Option<&[bool]>) -> bool {
+        self.offsets[i] != u32::MAX
+            && self.mask[i]
+            && region.is_none_or(|r| r[i])
+            && (self.glyphs.is_empty() || self.pixels[i] != 255)
+    }
+    fn replace_guard(&self, source: Option<&[u8]>, to: u8, region: Option<&[bool]>) -> Result<()> {
+        if !self.paintable || source.is_some_and(|s| s.len() != self.source_len) {
+            return Err(invalid(
+                "PIC storage aliases metadata or samples; painting disabled",
+            ));
+        }
+        if region.is_some_and(|r| r.len() != self.pixels.len()) {
+            return Err(invalid("Region does not match the PIC size"));
+        }
+        if !self.glyphs.is_empty() && to == 255 {
+            return Err(invalid("Index 255 is transparent in this glyph strip"));
+        }
+        Ok(())
+    }
+    /// Replace brush: the same circle as `paint`, writing `to` only over opaque
+    /// pixels whose index is in `from` (and inside `region` when given). Only
+    /// raster bytes change; transparency and span holes stay as they are.
+    #[allow(clippy::too_many_arguments)]
+    pub fn replace(
+        &mut self,
+        source: &mut [u8],
+        x: usize,
+        y: usize,
+        radius: usize,
+        from: &IndexSet,
+        to: u8,
+        region: Option<&[bool]>,
+    ) -> Result<usize> {
+        self.replace_guard(Some(source), to, region)?;
+        let glyph = !self.glyphs.is_empty();
+        // `brush` writes opaque pixels only (those with a source offset).
+        self.brush(source, x, y, radius, |i, p| {
+            if region.is_none_or(|r| r[i]) && from[p as usize] && !(glyph && p == 255) {
+                to
+            } else {
+                p
+            }
+        })
+    }
+    /// Pixels `replace_all` would change, without changing anything.
+    pub fn replace_count(&self, from: &IndexSet, to: u8, region: Option<&[bool]>) -> Result<usize> {
+        self.replace_guard(None, to, region)?;
+        Ok((0..self.pixels.len())
+            .filter(|i| {
+                let p = self.pixels[*i];
+                p != to && from[p as usize] && self.replaceable(*i, region)
+            })
+            .count())
+    }
+    /// Replace every opaque `from` pixel of the image, or of `region` (for
+    /// example a `footprint`), with `to`. Raster bytes only; returns the
+    /// number of pixels changed, and with none the bytes are untouched.
+    pub fn replace_all(
+        &mut self,
+        source: &mut [u8],
+        from: &IndexSet,
+        to: u8,
+        region: Option<&[bool]>,
+    ) -> Result<usize> {
+        self.replace_guard(Some(source), to, region)?;
+        let mut count = 0;
+        for i in 0..self.pixels.len() {
+            let p = self.pixels[i];
+            if p != to && from[p as usize] && self.replaceable(i, region) {
+                source[self.offsets[i] as usize] = to;
+                self.pixels[i] = to;
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+}
+#[cfg(test)]
+mod replace_tests {
+    use super::*;
+    /// A 4 x 3 span PIC: row 0 x 1..=2, row 2 x 0..=3, the rest holes.
+    fn spans() -> Vec<u8> {
+        let mut b = vec![0; 64 + 6 + 30];
+        b[0] = 1;
+        for (at, n) in [(2, 4u32), (6, 3), (10, 64), (14, 6), (26, 70), (30, 30)] {
+            b[at..at + 4].copy_from_slice(&n.to_le_bytes());
+        }
+        b[64..70].copy_from_slice(&[5, 9, 5, 5, 0, 9]);
+        let span = |b: &mut Vec<u8>, at: usize, v: [u16; 3], off: u32| {
+            for (k, n) in v.iter().enumerate() {
+                b[at + k * 2..at + k * 2 + 2].copy_from_slice(&n.to_le_bytes());
+            }
+            b[at + 6..at + 10].copy_from_slice(&off.to_le_bytes());
+        };
+        span(&mut b, 70, [0, 1, 2], 0);
+        span(&mut b, 80, [2, 0, 3], 2);
+        b[90..92].copy_from_slice(&65535u16.to_le_bytes());
+        b
+    }
+    fn changed(a: &[u8], b: &[u8]) -> Vec<usize> {
+        a.iter()
+            .zip(b)
+            .enumerate()
+            .filter(|(_, (x, y))| x != y)
+            .map(|(i, _)| i)
+            .collect()
+    }
+    #[test]
+    fn tolerance_maps_palette_distance_to_indices() {
+        for c6 in 0..=63u16 {
+            let c8 = ((c6 * 255 + 31) / 63) as i32;
+            assert_eq!((c8 * 63 + 127) / 255, c6 as i32);
+        }
+        let mut raw = [0u8; 768];
+        raw[30..33].copy_from_slice(&[20, 20, 20]);
+        raw[33..36].copy_from_slice(&[20, 20, 20]); // index 11: the same color
+        raw[36..39].copy_from_slice(&[21, 20, 20]); // index 12: 1 step
+        raw[39..42].copy_from_slice(&[22, 22, 21]); // index 13: 3 steps
+        raw[42..45].copy_from_slice(&[24, 20, 20]); // index 14: 4 steps
+        for i in 15..256 {
+            raw[i * 3..i * 3 + 3].copy_from_slice(&[63, 63, 63]);
+        }
+        let colors = palette(&raw).unwrap();
+        let on = |s: IndexSet| (0..256).filter(|i| s[*i]).collect::<Vec<_>>();
+        assert_eq!(on(matching(&colors, 10, 0)), [10], "exact index only");
+        assert_eq!(on(matching(&colors, 10, 1)), [10, 11, 12]);
+        assert_eq!(on(matching(&colors, 10, 3)), [10, 11, 12, 13]);
+        assert_eq!(on(matching(&colors, 10, 4)), [10, 11, 12, 13, 14]);
+        assert_eq!(
+            matching(&colors, 10, 255),
+            matching(&colors, 10, MAX_TOLERANCE)
+        );
+        assert!(on(matching(&colors, 0, MAX_TOLERANCE)).len() < 256);
+    }
+    #[test]
+    fn replace_brush_changes_only_matching_pixels_in_the_circle() {
+        let original = demo();
+        let mut bytes = original.clone();
+        let mut p = Pic::parse(&bytes).unwrap();
+        let before = p.clone();
+        // Pixel (5, 5) is index 32; its 7 px circle also covers 0, 16 and 48.
+        let from = matching(&p.colors(&[[0; 3]; 256]), 32, 0);
+        let n = p.replace(&mut bytes, 5, 5, 7, &from, 200, None).unwrap();
+        let expected: Vec<usize> = (0..1024)
+            .filter(|i| {
+                let (x, y) = ((i % 32) as i64, (i / 32) as i64);
+                before.pixels[*i] == 32 && (x - 5).pow(2) + (y - 5).pow(2) <= 49
+            })
+            .collect();
+        assert_eq!(n, expected.len());
+        assert!(n > 10);
+        assert_eq!(
+            changed(&original, &bytes),
+            expected.iter().map(|i| 64 + i).collect::<Vec<_>>()
+        );
+        assert!(p
+            .pixels
+            .iter()
+            .zip(&before.pixels)
+            .all(|(a, b)| a == b || (*b == 32 && *a == 200)));
+        // A second pass over the same pixels changes nothing more.
+        assert_eq!(p.replace(&mut bytes, 5, 5, 7, &from, 200, None).unwrap(), 0);
+        assert_eq!(Pic::parse(&bytes).unwrap().pixels, p.pixels);
+    }
+    #[test]
+    fn replace_all_whole_image_and_footprint_regions() {
+        let original = demo();
+        let p0 = Pic::parse(&original).unwrap();
+        let from = matching(&p0.colors(&[[0; 3]; 256]), 32, 0);
+        let total = p0.pixels.iter().filter(|v| **v == 32).count();
+        let mut bytes = original.clone();
+        let mut p = p0.clone();
+        assert_eq!(p.replace_count(&from, 7, None).unwrap(), total);
+        assert_eq!(p.replace_all(&mut bytes, &from, 7, None).unwrap(), total);
+        assert!(changed(&original, &bytes)
+            .iter()
+            .all(|at| *at >= 64 && p0.pixels[at - 64] == 32 && bytes[*at] == 7));
+        assert_eq!(changed(&original, &bytes).len(), total);
+        assert_eq!(
+            &bytes[64 + 1024..],
+            &original[64 + 1024..],
+            "palette untouched"
+        );
+        // The UV square (0,31)-(7,24) is the top-left 8 x 8 pixels (V flipped).
+        let square: &[[i32; 2]] = &[[0, 31], [7, 31], [7, 24], [0, 24]];
+        let region = footprint(32, 32, &[square]).unwrap();
+        assert_eq!(region.iter().filter(|r| **r).count(), 64);
+        assert!(region[0] && region[7 * 32 + 7] && !region[8] && !region[8 * 32]);
+        let mut bytes = original.clone();
+        let mut p = p0.clone();
+        let n = p.replace_all(&mut bytes, &from, 7, Some(&region)).unwrap();
+        let inside = (0..1024)
+            .filter(|i| region[*i] && p0.pixels[*i] == 32)
+            .count();
+        assert_eq!(n, inside);
+        assert!(n > 0 && n < total);
+        assert!(changed(&original, &bytes)
+            .iter()
+            .all(|at| region[at - 64] && p0.pixels[at - 64] == 32));
+        // The brush honours the same region.
+        let mut bytes = original.clone();
+        let mut p = p0.clone();
+        assert!(
+            p.replace(&mut bytes, 8, 3, 7, &from, 7, Some(&region))
+                .unwrap()
+                > 0
+        );
+        assert!(changed(&original, &bytes).iter().all(|at| region[at - 64]));
+    }
+    #[test]
+    fn footprints_cover_triangles_edges_and_refuse_bad_input() {
+        // Right triangle with legs of 4 pixels: 15 centres inside or on it.
+        let tri: &[[i32; 2]] = &[[0, 7], [4, 7], [0, 3]];
+        let m = footprint(8, 8, &[tri]).unwrap();
+        assert_eq!(m.iter().filter(|v| **v).count(), 15);
+        assert!(m[0] && m[4] && m[4 * 8] && !m[4 * 8 + 1]);
+        // A degenerate face still covers the pixels along it.
+        let line: &[[i32; 2]] = &[[1, 6], [5, 6], [3, 6]];
+        let m = footprint(8, 8, &[line]).unwrap();
+        assert_eq!(
+            (0..8).filter(|x| m[8 + x]).collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5]
+        );
+        assert_eq!(m.iter().filter(|v| **v).count(), 5);
+        // Clipped to the image; corners far outside are bounded.
+        let big: &[[i32; 2]] = &[[-50, -50], [60, -50], [60, 60], [-50, 60]];
+        assert!(footprint(8, 8, &[big]).unwrap().iter().all(|v| *v));
+        assert!(footprint(8, 8, &[]).unwrap().iter().all(|v| !*v));
+        let far: &[[i32; 2]] = &[[0, 0], [70000, 0], [0, 1]];
+        assert!(footprint(8, 8, &[far]).is_err());
+        assert!(footprint(0, 8, &[]).is_err());
+        let many = vec![tri; 4097];
+        assert!(footprint(8, 8, &many).is_err());
+    }
+    #[test]
+    fn span_pics_keep_holes_tables_and_transparency() {
+        let original = spans();
+        let p0 = Pic::parse(&original).unwrap();
+        assert_eq!(
+            p0.mask,
+            [false, true, true, false, false, false, false, false, true, true, true, true]
+        );
+        // Holes read as index 0; replacing 0 must leave them alone.
+        let zero = matching(&[[0; 3]; 256], 0, 0);
+        let mut bytes = original.clone();
+        let mut p = p0.clone();
+        assert_eq!(p.replace_all(&mut bytes, &zero, 3, None).unwrap(), 1);
+        assert_eq!(changed(&original, &bytes), [68]);
+        assert_eq!(Pic::parse(&bytes).unwrap().mask, p0.mask);
+        let five = matching(&[[0; 3]; 256], 5, 0);
+        let mut bytes = original.clone();
+        let mut p = p0.clone();
+        assert_eq!(p.replace(&mut bytes, 1, 1, 2, &five, 3, None).unwrap(), 3);
+        assert_eq!(changed(&original, &bytes), [64, 66, 67]);
+        assert_eq!(&bytes[70..], &original[70..], "span table untouched");
+        assert_eq!(Pic::parse(&bytes).unwrap().mask, p0.mask);
+    }
+    #[test]
+    fn no_op_identity_bounds_and_truncation() {
+        let original = demo();
+        let p0 = Pic::parse(&original).unwrap();
+        let colors = p0.colors(&[[0; 3]; 256]);
+        let mut bytes = original.clone();
+        let mut p = p0.clone();
+        // Same index, and an index the image never uses: identical bytes.
+        let same = matching(&colors, 16, 0);
+        assert_eq!(p.replace_all(&mut bytes, &same, 16, None).unwrap(), 0);
+        assert_eq!(p.replace(&mut bytes, 4, 4, 7, &same, 16, None).unwrap(), 0);
+        let unused = matching(&colors, 3, 0);
+        assert_eq!(p.replace_count(&unused, 9, None).unwrap(), 0);
+        assert_eq!(p.replace_all(&mut bytes, &unused, 9, None).unwrap(), 0);
+        assert_eq!(bytes, original);
+        // Bounds: brush outside the image, wrong region size, truncated source.
+        let from = matching(&colors, 0, 0);
+        assert!(p.replace(&mut bytes, 32, 0, 1, &from, 9, None).is_err());
+        assert!(p.replace(&mut bytes, 0, 0, 33, &from, 9, None).is_err());
+        assert!(p
+            .replace_all(&mut bytes, &from, 9, Some(&[true; 3]))
+            .is_err());
+        assert!(p.replace_count(&from, 9, Some(&[true; 3])).is_err());
+        let mut short = original[..original.len() - 1].to_vec();
+        assert!(p.replace_all(&mut short, &from, 9, None).is_err());
+        assert!(p.replace(&mut short, 1, 1, 1, &from, 9, None).is_err());
+        assert_eq!(short, original[..original.len() - 1]);
+        assert_eq!(bytes, original);
+        assert_eq!(p.pixels, p0.pixels);
+        // Truncated payloads never parse, so nothing is replaced in them.
+        for end in [0, 63, 64, 1000, original.len() - 1] {
+            assert!(Pic::parse(&original[..end]).is_err());
+        }
+    }
+    #[test]
+    fn glyph_strips_keep_index_255_transparent() {
+        let mut bytes = demo();
+        let at = bytes.len() as u32;
+        bytes[42..46].copy_from_slice(&at.to_le_bytes());
+        bytes.extend(vec![0; 256 * 6]);
+        bytes[64] = 255;
+        let original = bytes.clone();
+        let mut p = Pic::parse(&bytes).unwrap();
+        assert!(!p.glyphs.is_empty());
+        let expected = p.pixels.iter().filter(|v| **v != 255 && **v != 4).count();
+        let all = [true; 256];
+        assert!(p.replace_all(&mut bytes, &all, 255, None).is_err());
+        assert_eq!(p.replace_all(&mut bytes, &all, 4, None).unwrap(), expected);
+        assert_eq!(bytes[64], 255, "transparent glyph pixel kept");
+        assert_eq!(&bytes[64 + 1024..], &original[64 + 1024..]);
     }
 }
