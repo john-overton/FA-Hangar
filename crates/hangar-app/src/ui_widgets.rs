@@ -334,6 +334,10 @@ pub(super) struct Item<'a> {
     pub on: bool,
     /// A warn badge after the label ("Not seen in retail").
     pub badge: Option<&'a str>,
+    /// Disabled items draw in `ink-faint` and get no hit region.
+    pub enabled: bool,
+    /// Opens a submenu: a chevron instead of a keycap.
+    pub sub: bool,
 }
 impl<'a> Item<'a> {
     pub const fn new(label: &'a str, action: Action) -> Self {
@@ -344,6 +348,8 @@ impl<'a> Item<'a> {
             action: Some(action),
             on: false,
             badge: None,
+            enabled: true,
+            sub: false,
         }
     }
     pub const fn sep() -> Self {
@@ -354,6 +360,8 @@ impl<'a> Item<'a> {
             action: None,
             on: false,
             badge: None,
+            enabled: true,
+            sub: false,
         }
     }
     pub const fn key(mut self, key: &'a str) -> Self {
@@ -372,8 +380,31 @@ impl<'a> Item<'a> {
         self.badge = Some(text);
         self
     }
+    pub const fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
+    pub const fn sub(mut self) -> Self {
+        self.sub = true;
+        self
+    }
 }
-const MENU_SEP_H: i32 = 1 + 2 * space::SPACE_1;
+pub(super) const MENU_SEP_H: i32 = 1 + 2 * space::SPACE_1;
+/// Top of item `index` in a dropdown whose top edge is `y`.
+pub(super) fn menu_item_y(items: &[Item], y: i32, index: usize) -> i32 {
+    y + 1
+        + space::SPACE_1
+        + items[..index.min(items.len())]
+            .iter()
+            .map(|i| {
+                if i.action.is_none() {
+                    MENU_SEP_H
+                } else {
+                    m::MENU_ITEM_H
+                }
+            })
+            .sum::<i32>()
+}
 /// (width, height) of a dropdown with these items.
 pub(super) fn menu_size(items: &[Item]) -> (i32, i32) {
     let icons = items.iter().any(|i| i.icon.is_some());
@@ -386,7 +417,12 @@ pub(super) fn menu_size(items: &[Item]) -> (i32, i32) {
         }
         h += m::MENU_ITEM_H;
         let key = i.key.map_or(0, |k| keycap_width(k) + space::SPACE_4)
-            + i.badge.map_or(0, |b| badge_width(b) + space::SPACE_2);
+            + i.badge.map_or(0, |b| badge_width(b) + space::SPACE_2)
+            + if i.sub {
+                m::ICON_SM + space::SPACE_4
+            } else {
+                0
+            };
         let icon = if icons { m::ICON + space::SPACE_2 } else { 0 };
         w = w.max(2 * space::SPACE_3 + icon + text_width(i.label, Style::Label) + key + 2);
     }
@@ -741,7 +777,7 @@ impl Layout {
                 continue;
             };
             let row = [x + 1, iy, w - 2, m::MENU_ITEM_H];
-            let hot = self.over(row);
+            let hot = item.enabled && (self.over(row) || (item.sub && item.on));
             let ground = if hot { c::AMBER_DEEP } else { c::GM_800 };
             if hot {
                 self.canvas
@@ -760,7 +796,9 @@ impl Layout {
                 }
                 tx += m::ICON + space::SPACE_2;
             }
-            let key_w = item.key.map_or(0, keycap_width);
+            let key_w = item
+                .key
+                .map_or(if item.sub { m::ICON_SM } else { 0 }, keycap_width);
             let badge_w = item.badge.map_or(0, |b| badge_width(b) + space::SPACE_2);
             let room =
                 x + w - space::SPACE_3 - key_w - badge_w - tx - if key_w > 0 { 8 } else { 0 };
@@ -777,7 +815,13 @@ impl Layout {
                 tx,
                 baseline(iy, m::MENU_ITEM_H, Style::Label),
                 &fit(item.label, room, Style::Label),
-                if item.on { c::AMBER } else { c::INK },
+                if !item.enabled {
+                    c::INK_FAINT
+                } else if item.on {
+                    c::AMBER
+                } else {
+                    c::INK
+                },
                 Style::Label,
             );
             if let Some(k) = item.key {
@@ -787,8 +831,22 @@ impl Layout {
                     iy + (m::MENU_ITEM_H - m::KEYCAP_H) / 2,
                     k,
                 );
+            } else if item.sub {
+                self.canvas.icon_sm(
+                    x + w - space::SPACE_3 - key_w,
+                    iy + (m::MENU_ITEM_H - m::ICON_SM) / 2,
+                    Icon::ChevronRight,
+                    if item.enabled {
+                        c::INK_MUTED
+                    } else {
+                        c::INK_FAINT
+                    },
+                    ground,
+                );
             }
-            self.hit(row, action);
+            if item.enabled {
+                self.hit(row, action);
+            }
             iy += m::MENU_ITEM_H;
         }
         rect

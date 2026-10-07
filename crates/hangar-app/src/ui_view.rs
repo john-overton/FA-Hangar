@@ -29,6 +29,11 @@ pub(super) enum Action {
     LibraryToggle(u64),
     LibraryCategory(u64, usize),
     TransferMove(bool),
+    /// Context menu: open the Copy to (1) or Move to (2) submenu.
+    ContextSub(u8),
+    /// Review a copy (false) or move (true) of the selection into LIB `id`.
+    TransferTo(u64, bool),
+    DeleteEntry,
     LibraryEntry(u64, usize),
     NewLibrary,
     CloseLibrary,
@@ -215,7 +220,7 @@ impl Layout {
 }
 impl App {
     pub(super) fn act(&mut self, a: Action) {
-        if !matches!(a, Action::Menu(_) | Action::MenuPad) {
+        if !matches!(a, Action::Menu(_) | Action::MenuPad | Action::ContextSub(_)) {
             self.menu = None;
         }
         if !matches!(a, Action::Filter) {
@@ -548,6 +553,21 @@ impl App {
                 self.act(Action::Category(cat));
             }
             Action::TransferMove(moving) => self.transfer_move = moving,
+            Action::ContextSub(n) => {
+                self.context.sub = n;
+            }
+            Action::TransferTo(id, moving) => {
+                let result = self.prepare_drop(id);
+                if result.is_ok() && moving {
+                    self.transfer_move = true;
+                    self.status = "Review the move; known shared dependencies stay in the source. Files change only when saved".into();
+                }
+                self.result(result);
+            }
+            Action::DeleteEntry => {
+                let result = self.delete_entry();
+                self.result(result);
+            }
             Action::Library(id) => {
                 let result = self.switch_library(id);
                 self.result(result);
@@ -863,8 +883,8 @@ impl App {
             return Ok(());
         }
 
-        // Outliner drag states over SOURCE.LIB and MYMOD.LIB.
-        if name.starts_with("drag-") {
+        // Outliner drag and context menu states over SOURCE.LIB and MYMOD.LIB.
+        if name.starts_with("drag-") || name.starts_with("context-") {
             let target = self.drag_fixture()?;
             self.mode = Mode::Model;
             let x = 70;
@@ -877,6 +897,27 @@ impl App {
                     .ok_or("Row not visible")
             };
             let from = at(self, (self.library_id, Some(0), Some(1)))?;
+            if let Some(menu) = name.strip_prefix("context-") {
+                if menu == "root" {
+                    let root = at(self, (target, None, None))?;
+                    self.pointer(x, root, 3, true, false);
+                    return Ok(());
+                }
+                self.pointer(x, from, 3, true, false);
+                self.pointer(x, from, 3, false, false);
+                if menu != "menu" {
+                    let n = if menu == "move" { 2 } else { 1 };
+                    let item = self
+                        .chrome_hit(&|a| matches!(a, Action::ContextSub(i) if i == n))
+                        .ok_or("Copy to missing")?;
+                    self.motion(item[0] + 30, item[1] + 8, false);
+                    let lib = self
+                        .chrome_hit(&|a| matches!(a, Action::TransferTo(..)))
+                        .ok_or("LIB item missing")?;
+                    self.motion(lib[0] + 30, lib[1] + 8, false);
+                }
+                return Ok(());
+            }
             self.motion(x, from, false);
             self.pointer(x, from, 1, true, false);
             let (tx, ty) = match name {
@@ -1278,6 +1319,14 @@ impl App {
         self.drag_ghost(&mut out);
         out.mouse = self.mouse;
         if let Some(menu) = self.menu {
+            // Controls under an open menu cannot be reached; drop their hits.
+            let rects = self.open_menu_rects();
+            out.hits.retain(|h| {
+                let [x, y, w, h] = h.rect;
+                rects.iter().all(|[mx, my, mw, mh]| {
+                    x >= mx + mw || mx >= &(x + w) || y >= my + mh || my >= &(y + h)
+                })
+            });
             self.menu_layout(&mut out, menu);
         }
         if self
@@ -2814,7 +2863,13 @@ impl App {
             if !covered(&plain, hit.rect) {
                 let mouse = self.mouse;
                 self.mouse = [x + rw / 2, y + rh / 2];
+                // Controls beside an open menu show hover once it closes.
+                let menu = self.menu;
+                if !self.in_open_menu(self.mouse[0], self.mouse[1]) {
+                    self.menu = None;
+                }
                 let hovered = self.draw();
+                self.menu = menu;
                 self.mouse = mouse;
                 assert!(
                     covered(&hovered, hit.rect),
@@ -2841,7 +2896,7 @@ impl App {
     /// window sizes.
     pub(super) fn smoke_hit_geometry(&mut self) {
         for (w, h) in [(1280, 800), (800, 600)] {
-            for state in 0..25 {
+            for state in 0..26 {
                 self.libraries.clear();
                 self.demo();
                 self.width = w;
@@ -2946,6 +3001,25 @@ impl App {
                         self.paste_resources().unwrap();
                         "transfer review"
                     }
+                    25 => {
+                        // The outliner context menu with Copy to open.
+                        let source = self.library_id;
+                        self.install_library(Document::new(Archive::empty()), "TARGET.LIB".into())
+                            .unwrap();
+                        self.refresh();
+                        self.switch_library(source).unwrap();
+                        self.mode = Mode::Model;
+                        self.scroll = 0;
+                        let row = self.chrome_hit(&|a| matches!(a, Action::Entry(_))).unwrap();
+                        self.pointer(row[0] + 70, row[1] + 8, 3, true, false);
+                        let sub = self
+                            .chrome_hit(&|a| matches!(a, Action::ContextSub(1)))
+                            .unwrap();
+                        self.motion(sub[0] + 20, sub[1] + 8, false);
+                        assert_eq!(self.menu, Some(chrome::MENU_CONTEXT));
+                        assert_eq!(self.context.sub, 1);
+                        "context menu"
+                    }
                     20..=24 => {
                         self.doc
                             .replace(0, hangar_core::shape_testkit::demo_parts())
@@ -2995,6 +3069,7 @@ impl App {
                     }
                 };
                 self.smoke_geometry(name);
+                self.menu = None;
                 self.graft_donor = None;
                 self.graft_mask = 0;
                 self.transfer_plan = None;

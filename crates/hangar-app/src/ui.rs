@@ -452,6 +452,8 @@ pub struct App {
     /// Outliner type filter (aircraft, shapes, images): only that group shows.
     type_filter: Option<usize>,
     menu: Option<usize>,
+    /// Outliner context menu anchor and open submenu (`MENU_CONTEXT`).
+    context: libraries_ui::ContextMenu,
     dock: u8,
     table_scroll: usize,
     /// Right editor panel scroll in px, for `inspector_kind`.
@@ -602,6 +604,7 @@ impl App {
             type_filter: None,
             category: None,
             menu: None,
+            context: libraries_ui::ContextMenu::default(),
             dock: 0,
             table_scroll: 0,
             inspector_scroll: 0,
@@ -2077,9 +2080,7 @@ impl App {
             return;
         }
         if button == 1 && down && self.prompt.is_none() && self.menu.is_some() {
-            let inside = self
-                .open_menu_rect()
-                .is_some_and(|[mx, my, mw, mh]| x >= mx && y >= my && x < mx + mw && y < my + mh);
+            let inside = self.in_open_menu(x, y);
             let action = self
                 .layout()
                 .hits
@@ -2213,12 +2214,17 @@ impl App {
             return;
         }
         if button == 3 {
+            // RMB closes menus and cancels drags and prompts (transforms);
+            // on an outliner entry or LIB root it opens the context menu.
+            let inside = self.menu.is_some() && self.in_open_menu(x, y);
             self.menu = None;
             if self.drag_live() {
                 self.resource_drag = None;
                 self.status = "Drag cancelled; nothing changed".into();
             } else if self.prompt.is_some() {
                 self.key(Key::Escape, false, false);
+            } else if !inside {
+                self.open_context_menu(x, y);
             }
             return;
         }
@@ -2291,6 +2297,9 @@ impl App {
             }
             self.mouse = [x, y];
             return;
+        }
+        if self.menu == Some(chrome::MENU_CONTEXT) {
+            self.context_hover(x, y);
         }
         if let Some(d) = &mut self.resource_drag {
             d.live |=

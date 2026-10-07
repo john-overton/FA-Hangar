@@ -20,6 +20,8 @@ pub(super) const MENU_SELECT: usize = 11;
 pub(super) const MENU_MESH: usize = 12;
 /// The options Select of a part setting (`App::part_menu`).
 pub(super) const MENU_PART: usize = 13;
+/// The outliner context menu (`App::context`).
+pub(super) const MENU_CONTEXT: usize = 14;
 const TABS: [(&str, Mode); 6] = [
     ("Browse", Mode::Browse),
     ("Model", Mode::Model),
@@ -326,6 +328,9 @@ impl App {
     /// Run `f` over dropdown `menu`'s items; the Shape Select lists entry
     /// names owned here.
     fn with_menu<R>(&self, menu: usize, f: &mut dyn FnMut(&[Item]) -> R) -> R {
+        if menu == MENU_CONTEXT {
+            return f(&self.context_items());
+        }
         if menu == MENU_PART {
             let options = self.part_menu_items();
             let items: Vec<Item> = options
@@ -382,6 +387,19 @@ impl App {
         let y = y.min(self.height - h).max(0);
         Some([x, y, w, h])
     }
+    /// The open dropdown and its open submenu, if any.
+    pub(super) fn open_menu_rects(&self) -> Vec<[i32; 4]> {
+        let mut rects: Vec<[i32; 4]> = self.open_menu_rect().into_iter().collect();
+        if self.menu == Some(MENU_CONTEXT) {
+            rects.extend(self.context_sub_rect());
+        }
+        rects
+    }
+    pub(super) fn in_open_menu(&self, x: i32, y: i32) -> bool {
+        self.open_menu_rects()
+            .iter()
+            .any(|[mx, my, mw, mh]| x >= *mx && y >= *my && x < mx + mw && y < my + mh)
+    }
     /// Top-left anchor of dropdown `menu`.
     pub(super) fn menu_anchor(&self, menu: usize) -> (i32, i32) {
         match menu {
@@ -394,6 +412,7 @@ impl App {
                 let rect = self.ed.part_menu.map_or([0; 4], |(_, r)| r);
                 (rect[0], rect[1] + rect[3] + 1)
             }
+            MENU_CONTEXT => (self.context.at[0], self.context.at[1]),
             _ => {
                 let header = self.viewport_header_slots();
                 let rect = match menu {
@@ -412,6 +431,9 @@ impl App {
         self.with_menu(menu, &mut |items| {
             o.menu(x, y, items, Action::MenuPad);
         });
+        if menu == MENU_CONTEXT {
+            self.context_sub_layout(o);
+        }
     }
     /// Status bar: key hints (or the last message) left; active entry · LIB
     /// and the save state right.

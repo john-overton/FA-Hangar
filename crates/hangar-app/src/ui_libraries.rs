@@ -1,5 +1,6 @@
 //! Multiple documents share immutable payload buffers and retain independent history.
 use super::view::{count, Action, Icon, Layout};
+use super::widgets::Item;
 use super::*;
 use hangar_core::resource_ops::{self, Choice};
 
@@ -1092,6 +1093,8 @@ impl App {
     /// holding MYJET.PT; returns MYMOD.LIB's id with SOURCE.LIB active.
     pub(super) fn drag_fixture(&mut self) -> Result<u64> {
         self.libraries.clear();
+        self.clipboard = None;
+        self.doc = Document::new(Archive::empty());
         self.demo();
         let mut source = self.doc.archive.clone();
         source.entries.push(Entry::new(
@@ -1263,6 +1266,374 @@ impl App {
         self.demo();
     }
 }
+/// The outliner context menu: where it opened, its open submenu (0 none,
+/// 1 Copy to, 2 Move to) and whether it belongs to a LIB root.
+#[derive(Clone, Copy, Default)]
+pub(super) struct ContextMenu {
+    pub at: [i32; 2],
+    pub sub: u8,
+    pub root: bool,
+}
+/// A submenu LIB (name, id), or a disabled note with no id.
+type SubItem = (String, Option<u64>);
+impl App {
+    /// RMB on an outliner entry or LIB root: select it (switching LIB when
+    /// needed) and open the context menu at the pointer.
+    pub(super) fn open_context_menu(&mut self, x: i32, y: i32) -> bool {
+        let Some((id, cat, entry)) = self.outliner_row_at(x, y) else {
+            return false;
+        };
+        let root = match (cat, entry) {
+            (_, Some(i)) => {
+                if id != self.library_id {
+                    self.act(Action::LibraryEntry(id, i));
+                } else if i != self.selected {
+                    self.act(Action::Entry(i));
+                }
+                if id != self.library_id || self.selected != i {
+                    return false;
+                }
+                false
+            }
+            (None, None) => {
+                let result = self.switch_library(id);
+                if result.is_err() {
+                    self.result(result);
+                    return false;
+                }
+                true
+            }
+            _ => return false,
+        };
+        self.context = ContextMenu {
+            at: [x, y],
+            sub: 0,
+            root,
+        };
+        self.menu = Some(super::chrome::MENU_CONTEXT);
+        true
+    }
+    /// Context menu items. Actions that cannot run here are drawn disabled.
+    pub(super) fn context_items(&self) -> Vec<Item<'static>> {
+        let paste = Item::new("Paste", Action::PasteResources)
+            .key("Ctrl+V")
+            .enabled(self.clipboard.is_some());
+        if self.context.root {
+            return vec![
+                paste,
+                Item::new(
+                    if self.root_collapsed {
+                        "Expand"
+                    } else {
+                        "Collapse"
+                    },
+                    Action::LibraryToggle(self.library_id),
+                ),
+                Item::sep(),
+                Item::new("Package LIB", Action::File(FileAction::Save)).key("Ctrl+S"),
+                Item::new("Close LIB", Action::CloseLibrary).key("Ctrl+W"),
+            ];
+        }
+        let others = !self.libraries.is_empty();
+        let object = self
+            .doc
+            .archive
+            .entries
+            .get(self.selected)
+            .is_some_and(|e| matches!(super::view::category_of(&e.name), 0 | 3 | 4));
+        let mut items = vec![
+            Item::new("Copy to", Action::ContextSub(1))
+                .sub()
+                .on(self.context.sub == 1)
+                .enabled(others),
+            Item::new("Move to", Action::ContextSub(2))
+                .sub()
+                .on(self.context.sub == 2)
+                .enabled(others),
+            Item::sep(),
+            Item::new("Copy", Action::CopyResource).key("Ctrl+C"),
+            paste,
+            Item::new("Duplicate", Action::RenameResource(true)).key("Ctrl+D"),
+            Item::new("Rename\u{2026}", Action::RenameResource(false)),
+            Item::sep(),
+            Item::new("Export entry\u{2026}", Action::File(FileAction::Export)).key("Ctrl+E"),
+        ];
+        if object {
+            items.push(Item::new(
+                "Export object\u{2026}",
+                Action::File(FileAction::Variant),
+            ));
+        }
+        items.push(Item::sep());
+        items.push(Item::new("Delete", Action::DeleteEntry).key("Del"));
+        items
+    }
+    /// The open submenu's LIBs (outliner order) and its top-left anchor;
+    /// LIBs beyond the window height collapse into one disabled note.
+    fn context_sub(&self) -> Option<(Vec<SubItem>, i32, i32)> {
+        use theme::{metric as m, space};
+        let sub = self.context.sub;
+        if sub == 0 || self.context.root {
+            return None;
+        }
+        let main = self.open_menu_rect()?;
+        let items = self.context_items();
+        let parent = items
+            .iter()
+            .position(|i| matches!(i.action, Some(Action::ContextSub(n)) if n == sub))?;
+        let mut libs: Vec<(u64, String)> = self
+            .libraries
+            .iter()
+            .map(|l| (l.id, self.library_name(l.id).to_string()))
+            .collect();
+        libs.sort_unstable_by_key(|l| l.0);
+        let fit = ((self.height - 2 * space::SPACE_1 - 2) / m::MENU_ITEM_H).max(2) as usize;
+        let mut entries: Vec<SubItem> = Vec::new();
+        let overflow = libs.len() > fit;
+        for (id, name) in libs.iter().take(if overflow { fit - 1 } else { fit }) {
+            entries.push((name.clone(), Some(*id)));
+        }
+        if overflow {
+            entries.push((
+                format!("{} more open LIBs; drag to them", libs.len() - (fit - 1)),
+                None,
+            ));
+        }
+        let (w, _) = widgets::menu_size(&self.context_sub_items(&entries));
+        let x = if main[0] + main[2] + w <= self.width {
+            main[0] + main[2]
+        } else {
+            main[0] - w
+        };
+        let y = widgets::menu_item_y(&items, main[1], parent) - space::SPACE_1 - 1;
+        Some((entries, x, y))
+    }
+    fn context_sub_items<'a>(&self, entries: &'a [SubItem]) -> Vec<Item<'a>> {
+        let moving = self.context.sub == 2;
+        entries
+            .iter()
+            .map(|(name, id)| match id {
+                Some(id) => Item::new(name, Action::TransferTo(*id, moving)).icon(Icon::Lib),
+                None => Item::new(name, Action::MenuPad).enabled(false),
+            })
+            .collect()
+    }
+    /// The open submenu's drawn rect.
+    pub(super) fn context_sub_rect(&self) -> Option<[i32; 4]> {
+        let (entries, x, y) = self.context_sub()?;
+        let (w, h) = widgets::menu_size(&self.context_sub_items(&entries));
+        Some([
+            x.min(self.width - w).max(0),
+            y.min(self.height - h).max(0),
+            w,
+            h,
+        ])
+    }
+    pub(super) fn context_sub_layout(&self, o: &mut Layout) {
+        if let Some((entries, x, y)) = self.context_sub() {
+            o.menu(x, y, &self.context_sub_items(&entries), Action::MenuPad);
+        }
+    }
+    /// Hovering Copy to or Move to opens its submenu; hovering another item
+    /// of the main menu closes it.
+    pub(super) fn context_hover(&mut self, x: i32, y: i32) {
+        let over = |r: Option<[i32; 4]>| {
+            r.is_some_and(|[rx, ry, rw, rh]| x >= rx && y >= ry && x < rx + rw && y < ry + rh)
+        };
+        if over(self.context_sub_rect()) || !over(self.open_menu_rect()) {
+            return;
+        }
+        let hit = self
+            .layout()
+            .hits
+            .into_iter()
+            .rev()
+            .find(|h| h.contains(x, y))
+            .map(|h| h.action);
+        match hit {
+            Some(Action::ContextSub(n)) => self.context.sub = n,
+            Some(Action::MenuPad) | None => {}
+            Some(_) => self.context.sub = 0,
+        }
+    }
+}
+impl App {
+    /// The outliner context menu through RMB and its hit regions: selection,
+    /// Copy to and Move to reviews, disabled items, LIB roots, dismissal,
+    /// clamping, and RMB elsewhere keeping its cancel role.
+    #[inline(never)]
+    pub(super) fn smoke_context_menu(&mut self) {
+        use super::chrome::MENU_CONTEXT;
+        let hit = |app: &App, p: &dyn Fn(Action) -> bool| app.chrome_hit(p);
+        let inside = |app: &App| {
+            app.open_menu_rects()
+                .iter()
+                .all(|[x, y, w, h]| *x >= 0 && *y >= 0 && x + w <= app.width && y + h <= app.height)
+        };
+        for (w, h) in [(800, 600), (1280, 800)] {
+            let target = self.drag_fixture().unwrap();
+            self.width = w;
+            self.height = h;
+            self.mode = Mode::Model;
+            let source = self.library_id;
+            let demo2 = self.doc.archive.find("DEMO2.PT").unwrap();
+            let rmb = |app: &mut App, r: [i32; 4]| {
+                app.motion(r[0] + 70, r[1] + 8, false);
+                app.pointer(r[0] + 70, r[1] + 8, 3, true, false);
+                app.pointer(r[0] + 70, r[1] + 8, 3, false, false);
+            };
+            // RMB selects the entry under the pointer and opens the menu there.
+            let row = hit(self, &|a| matches!(a, Action::Entry(i) if i == demo2)).unwrap();
+            rmb(self, row);
+            assert_eq!(self.menu, Some(MENU_CONTEXT));
+            assert_eq!(self.selected, demo2);
+            let rect = self.open_menu_rect().unwrap();
+            assert_eq!([rect[0], rect[1]], [row[0] + 70, row[1] + 8]);
+            // Paste is disabled with an empty clipboard: drawn, but no hit.
+            assert!(hit(self, &|a| matches!(a, Action::PasteResources)).is_none());
+            assert!(self.draw().commands.iter().any(
+                |d| matches!(d, Draw::Text(_, _, s, c, _) if s == "Paste" && *c == c::INK_FAINT.0)
+            ));
+            for action in [
+                Action::CopyResource,
+                Action::RenameResource(true),
+                Action::RenameResource(false),
+                Action::File(FileAction::Export),
+                Action::File(FileAction::Variant),
+                Action::DeleteEntry,
+            ] {
+                let r = hit(self, &|a| {
+                    core::mem::discriminant(&a) == core::mem::discriminant(&action)
+                })
+                .unwrap();
+                assert!(r[0] >= rect[0] && r[1] >= rect[1] && r[1] + r[3] <= rect[1] + rect[3]);
+            }
+            // Hover opens Copy to; its LIB item opens the review with Copy.
+            let copy_to = hit(self, &|a| matches!(a, Action::ContextSub(1))).unwrap();
+            self.motion(copy_to[0] + 20, copy_to[1] + 8, false);
+            assert_eq!(self.context.sub, 1);
+            assert!(inside(self));
+            let lib = hit(
+                self,
+                &|a| matches!(a, Action::TransferTo(id, false) if id == target),
+            )
+            .unwrap();
+            self.chrome_click(lib);
+            assert!(self.menu.is_none());
+            assert_eq!(self.library_id, target);
+            assert!(matches!(
+                self.prompt.as_ref().map(|p| &p.kind),
+                Some(PromptKind::TransferReview)
+            ));
+            assert!(!self.transfer_move, "Copy to opens the review with Copy");
+            assert_eq!(
+                self.transfer_plan.as_ref().unwrap().items[0].entry.name,
+                "DEMO2.PT"
+            );
+            self.key(Key::Escape, false, false);
+            self.switch_library(source).unwrap();
+            // Move to: a click opens the submenu; its LIB item preselects Move.
+            let row = hit(self, &|a| matches!(a, Action::Entry(1))).unwrap();
+            rmb(self, row);
+            assert_eq!(self.selected, 1);
+            let move_to = hit(self, &|a| matches!(a, Action::ContextSub(2))).unwrap();
+            self.chrome_click(move_to);
+            assert_eq!((self.menu, self.context.sub), (Some(MENU_CONTEXT), 2));
+            let lib = hit(
+                self,
+                &|a| matches!(a, Action::TransferTo(id, true) if id == target),
+            )
+            .unwrap();
+            self.chrome_click(lib);
+            assert!(self.transfer_move, "Move to opens the review with Move");
+            self.key(Key::Escape, false, false);
+            self.switch_library(source).unwrap();
+            // Dismissal: a click outside, Esc, and RMB outside each close it.
+            let viewport = [self.left() + 200, 300];
+            for close in 0..3 {
+                rmb(self, row);
+                assert_eq!(self.menu, Some(MENU_CONTEXT));
+                let mode = self.mode;
+                match close {
+                    0 => self.click(viewport[0], viewport[1], 1, true),
+                    1 => self.key(Key::Escape, false, false),
+                    _ => self.click(viewport[0], viewport[1], 3, true),
+                }
+                assert!(self.menu.is_none() && self.prompt.is_none());
+                assert!(self.mode == mode && self.library_id == source);
+                self.click(viewport[0], viewport[1], 1, false);
+                self.click(viewport[0], viewport[1], 3, false);
+                assert!(self.menu.is_none());
+            }
+            // Copy, then Paste is enabled in the target LIB's root menu.
+            rmb(self, row);
+            self.chrome_click(hit(self, &|a| matches!(a, Action::CopyResource)).unwrap());
+            assert!(self.clipboard.is_some() && self.menu.is_none());
+            let root = hit(self, &|a| matches!(a, Action::Library(id) if id == target)).unwrap();
+            rmb(self, root);
+            assert_eq!(self.library_id, target);
+            assert!(self.context.root);
+            assert!(hit(self, &|a| matches!(
+                a,
+                Action::TransferTo(..) | Action::ContextSub(_)
+            ))
+            .is_none());
+            self.chrome_click(
+                hit(
+                    self,
+                    &|a| matches!(a, Action::LibraryToggle(id) if id == target),
+                )
+                .unwrap(),
+            );
+            assert!(self.root_collapsed && self.menu.is_none());
+            self.toggle_library(target);
+            rmb(self, root);
+            self.chrome_click(hit(self, &|a| matches!(a, Action::PasteResources)).unwrap());
+            assert!(matches!(
+                self.prompt.as_ref().map(|p| &p.kind),
+                Some(PromptKind::TransferReview)
+            ));
+            self.key(Key::Escape, false, false);
+            self.switch_library(source).unwrap();
+            // Delete through the menu is one undo step.
+            let before = self.doc.archive.bytes().unwrap();
+            let row = hit(self, &|a| matches!(a, Action::Entry(i) if i == demo2)).unwrap();
+            rmb(self, row);
+            self.chrome_click(hit(self, &|a| matches!(a, Action::DeleteEntry)).unwrap());
+            assert!(self.doc.archive.find("DEMO2.PT").is_none());
+            self.act(Action::Undo);
+            assert_eq!(self.doc.archive.bytes().unwrap(), before);
+            // Category rows and the viewport open no menu; RMB there cancels.
+            let group = hit(self, &|a| matches!(a, Action::Category(0))).unwrap();
+            rmb(self, group);
+            assert!(self.menu.is_none());
+            self.click(viewport[0], viewport[1], 3, true);
+            assert!(self.menu.is_none());
+            // Clamped at the window corner, the submenu included.
+            rmb(self, row);
+            self.context.at = [w - 4, h - 4];
+            self.context.sub = 1;
+            assert!(inside(self));
+            for hit in self.layout().hits {
+                let [x, y, rw, rh] = hit.rect;
+                assert!(x >= 0 && y >= 0 && x + rw <= w && y + rh <= h);
+            }
+            self.menu = None;
+            // A single open LIB: Copy to and Move to are disabled.
+            self.libraries.clear();
+            let row = hit(self, &|a| matches!(a, Action::Entry(1))).unwrap();
+            rmb(self, row);
+            assert_eq!(self.menu, Some(MENU_CONTEXT));
+            assert!(hit(self, &|a| matches!(a, Action::ContextSub(_))).is_none());
+            self.key(Key::Escape, false, false);
+        }
+        self.libraries.clear();
+        self.clipboard = None;
+        self.width = 1280;
+        self.height = 800;
+        self.demo();
+    }
+}
 #[inline(never)]
 fn library_test_app() -> Box<App> {
     Box::new(App::new())
@@ -1375,5 +1746,6 @@ impl App {
         assert!(a.root_collapsed);
         let mut d = library_test_app();
         d.smoke_drag_feedback();
+        d.smoke_context_menu();
     }
 }
