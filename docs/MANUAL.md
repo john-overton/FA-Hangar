@@ -124,8 +124,9 @@ Windows uses Tahoma for interface labels and Lucida Console for resource data.
 - View a bounded static pose from SH data, orbit/pan/zoom, use front/side/top
   views, and export geometry-only OBJ files.
 - Move, rotate and scale the supported static SH subset. Tab opens vertex edit
-  mode; click a vertex, drag in an orthographic view, or use G for numeric
-  offsets. A selects all vertices. Shapes with unhandled spatial records,
+  mode; click a vertex, drag in an orthographic view, or use G/R/S, which act
+  on the selected vertices about their median point. A selects all vertices
+  or clears a full selection. Shapes with unhandled spatial records,
   bounds, visibility logic or animation remain read-only. The synthetic demo
   exercises transforms without retail data.
 - Entry-level undo/redo, dirty state and explicit discard on close. Retail LIB
@@ -473,15 +474,20 @@ resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 | Orbit / pan | Middle-drag / Shift+middle-drag |
 | Zoom / frame | Wheel over viewport / Home or period |
 | Front / side / top / projection | 1 / 3 / 7 / 5, including numpad |
-| Vertex edit mode | Tab; click vertex, A selects all, G numeric offsets, orthographic drag |
-| Transform supported static shape | G / R / S, X/Y/Z, numeric value, Enter |
+| Vertex edit mode | Tab; click vertex, A all/none, G/R/S on the selection, orthographic drag |
+| Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
 | Cancel transform or dialog | Esc or right mouse button |
 | Close with unsaved edits | Click Discard changes, or Cancel/Esc to return |
 
-Scale currently acts on the selected axis in percent; rotation is in degrees,
-translation in integer source coordinates.
+G/R/S start with no axis lock; X, Y or Z locks that axis and pressing it again
+removes the lock. Translation is in integer source coordinates: with no lock
+one value moves along X and three values (`X Y Z`) move freely. Rotation is in
+degrees about the locked axis, or about the principal axis nearest the view
+direction. Scale is in percent on the locked axis, or uniform with no lock.
+In Object mode transforms pivot on the shape origin; in Edit mode they act
+only on the selected vertices and pivot on their median point.
 
 ## Limits
 

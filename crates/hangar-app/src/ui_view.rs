@@ -530,11 +530,8 @@ impl App {
                 self.selected_face = None;
             }
             Action::MeshVertex(i) => self.mesh_select(i, false),
-            Action::MeshAll => {
-                self.mesh_vertices =
-                    (0..self.model.as_ref().map_or(0, |m| m.vertices.len())).collect()
-            }
-            Action::MeshMove => self.mesh_move_prompt(),
+            Action::MeshAll => self.mesh_toggle_all(),
+            Action::MeshMove => self.mesh_transform_prompt('g'),
             Action::BaseColor(face) => self.base_color_prompt(face),
             Action::Recolor => {
                 self.prompt = Some(Prompt {
@@ -2583,10 +2580,18 @@ impl App {
             .rev()
             .collect();
         d.text(x + 26, y + 94, &format!("{value}_"), c::INK);
-        let hint = if matches!(p.kind, PromptKind::Transform(_) | PromptKind::StationMove) {
+        let hint = if let PromptKind::Transform(op) = p.kind {
+            let lock = match (p.axis, op) {
+                (0..=2, _) => format!("Axis {}", ['X', 'Y', 'Z'][p.axis]),
+                (_, 'g') => "Free: one value moves X, or X Y Z".into(),
+                (_, 'r') => format!("View axis {}", ['X', 'Y', 'Z'][self.view_axis()]),
+                _ => "Uniform".into(),
+            };
+            format!("{lock} / X Y Z toggles the axis lock / integer value")
+        } else if matches!(p.kind, PromptKind::StationMove) {
             format!(
                 "Axis {} / X Y Z to constrain / integer value",
-                ['X', 'Y', 'Z'][p.axis]
+                ['X', 'Y', 'Z'][p.axis.min(2)]
             )
         } else {
             "Enter applies / Esc cancels / Ctrl+A clears".into()

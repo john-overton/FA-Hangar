@@ -222,42 +222,46 @@ impl App {
         }
         Ok(())
     }
-    pub(super) fn mesh_move_prompt(&mut self) {
-        let Some(model) = &self.model else {
-            return;
-        };
-        if !model.writable {
-            self.status = model.reason.clone();
+    /// Why vertex edits are unavailable, if they are.
+    pub(super) fn mesh_blocked(&self) -> Option<String> {
+        let model = self.model.as_ref()?;
+        if self.model_entry.is_none() {
+            let owner = self
+                .external_model
+                .and_then(|(id, i)| {
+                    let l = self.libraries.iter().find(|l| l.id == id)?;
+                    let name = &l.doc.archive.entries.get(i)?.name;
+                    Some(format!(
+                        "{name} in {}",
+                        l.path.rsplit(['/', '\\']).next().unwrap_or(&l.path)
+                    ))
+                })
+                .unwrap_or_else(|| "another LIB".into());
+            return Some(format!(
+                "Shape is stored in {owner}; switch to that LIB to edit vertices"
+            ));
+        }
+        (!model.writable).then(|| model.reason.clone())
+    }
+    pub(super) fn mesh_transform_prompt(&mut self, op: char) {
+        if let Some(reason) = self.mesh_blocked() {
+            self.status = reason;
             return;
         }
         if self.mesh_vertices.is_empty() {
             self.status = "Select vertices first".into();
             return;
         }
-        self.prompt = Some(Prompt {
-            kind: PromptKind::MeshMove,
-            title: "Move selected vertices / source offsets X Y Z".into(),
-            value: "0 0 0".into(),
-            axis: 0,
-        });
+        self.transform_prompt(op);
     }
-    pub(super) fn mesh_move(&mut self, text: &str) -> Result<()> {
-        let entry = self.model_entry.ok_or("Open the SH owner before editing")?;
-        let n: Vec<i32> = text
-            .split_whitespace()
-            .map(str::parse)
-            .collect::<core::result::Result<_, _>>()
-            .map_err(|_| "Enter three integer offsets")?;
-        let delta: [i32; 3] = n.try_into().map_err(|_| "Enter X Y Z offsets")?;
-        let bytes = shape_edit::move_vertices(
-            &self.doc.archive.entries[entry].read()?,
-            &self.mesh_vertices,
-            delta,
-        )?;
-        self.doc.replace(entry, bytes)?;
-        self.refresh();
-        self.status = "Selected vertices moved / Ctrl+Z undo".into();
-        Ok(())
+    /// A selects every vertex, or clears a complete selection.
+    pub(super) fn mesh_toggle_all(&mut self) {
+        let n = self.model.as_ref().map_or(0, |m| m.vertices.len());
+        if self.mesh_vertices.len() >= n {
+            self.mesh_vertices.clear();
+        } else {
+            self.mesh_vertices = (0..n).collect();
+        }
     }
     pub(super) fn mesh_inspector(&self, o: &mut Layout) {
         let (r, w, h) = (self.right(), self.width - self.right(), self.height);
@@ -288,7 +292,7 @@ impl App {
         );
         o.button(
             [r + 12, 122, w - 24, 24],
-            "Select all vertices (A)",
+            "Select all / none (A)",
             Action::MeshAll,
             false,
         );
@@ -329,7 +333,7 @@ impl App {
         if model.writable {
             o.button(
                 [r + 12, 330, w - 24, 26],
-                "Move selection (G)",
+                "Move selection (G, R, S)",
                 Action::MeshMove,
                 false,
             );
@@ -465,13 +469,66 @@ impl App {
         assert!(a.mesh_edit);
         a.mesh_vertices = vec![0];
         let before = a.model.as_ref().unwrap().vertices[0].point;
-        a.mesh_move("2 3 4").unwrap();
+        let type_keys = |a: &mut App, keys: &str| {
+            for c in keys.chars() {
+                a.key(Key::Char(c), false, false);
+            }
+        };
+        type_keys(&mut a, "g2 3 4");
+        a.key(Key::Enter, false, false);
         assert_eq!(
             a.model.as_ref().unwrap().vertices[0].point,
             [before[0] + 2, before[1] + 3, before[2] + 4]
         );
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // Edit-mode R and S act on the selection about its median, never the whole shape.
+        let points = |a: &App| -> Vec<[i32; 3]> {
+            a.model
+                .as_ref()
+                .unwrap()
+                .vertices
+                .iter()
+                .map(|v| v.point)
+                .collect()
+        };
+        let start = points(&a);
+        a.mesh_vertices = vec![1, 2];
+        type_keys(&mut a, "s200");
+        a.key(Key::Enter, false, false);
+        let scaled = points(&a);
+        assert_eq!(scaled[1], [-160, -35, 0]);
+        assert_eq!(scaled[2], [160, -35, 0]);
+        assert!((0..start.len())
+            .filter(|i| ![1, 2].contains(i))
+            .all(|i| scaled[i] == start[i]));
+        a.act(Action::Undo);
+        type_keys(&mut a, "rz90");
+        a.key(Key::Enter, false, false);
+        let turned = points(&a);
+        assert_eq!(turned[1], [0, -115, 0]);
+        assert_eq!(turned[2], [0, 45, 0]);
+        assert_eq!(turned[0], start[0]);
+        assert_eq!(a.mesh_vertices, vec![1, 2], "Selection survives the edit");
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        assert_eq!(a.mesh_vertices, vec![1, 2], "Selection survives undo");
+        a.key(Key::Char('a'), false, false);
+        assert_eq!(a.mesh_vertices.len(), start.len());
+        a.key(Key::Char('a'), false, false);
+        assert!(a.mesh_vertices.is_empty());
+        a.key(Key::Char('g'), false, false);
+        assert!(a.prompt.is_none() && a.status.contains("Select vertices"));
+        // Object mode: S with no axis lock scales uniformly about the origin.
+        a.mesh_edit = false;
+        type_keys(&mut a, "s50");
+        a.key(Key::Enter, false, false);
+        let halved = points(&a);
+        assert!((0..start.len()).all(|i| halved[i] == start[i].map(|n| n * 50 / 100)));
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        a.mesh_edit = true;
+        a.mesh_vertices = vec![0];
         let [x, y] = a.hp_project(before).unwrap();
         a.mesh_select(0, true);
         a.mesh_motion(x + 12, y + 6).unwrap();

@@ -91,7 +91,6 @@ enum PromptKind {
     CloneReview,
     Recolor,
     BaseColor(bool),
-    MeshMove,
     PartPosition(usize),
     AnimationState(usize),
     Isolate,
@@ -1129,6 +1128,32 @@ impl App {
             });
         }
     }
+    /// Principal axis closest to the view direction, for unconstrained rotation.
+    pub(super) fn view_axis(&self) -> usize {
+        let d = self.camera_inverse([0, 0, 1024]);
+        (0..3).max_by_key(|k| d[*k].abs()).unwrap_or(2)
+    }
+    /// Axis 3 means unconstrained: G takes one X value or X Y Z, R uses the view
+    /// axis and S scales uniformly, as in Blender.
+    fn transform_value(&self, op: char, axis: usize, value: &str) -> Result<Transform> {
+        let n = value
+            .split_whitespace()
+            .map(str::parse::<i32>)
+            .collect::<core::result::Result<Vec<_>, _>>()
+            .map_err(|_| "Enter an integer transform value")?;
+        let lock = (axis < 3).then_some(axis);
+        Ok(match (op, n.as_slice()) {
+            ('g', []) => Transform::Translate([0; 3]),
+            ('g', [v]) => Transform::Move(lock.unwrap_or(0), *v),
+            ('g', [x, y, z]) if lock.is_none() => Transform::Translate([*x, *y, *z]),
+            ('r', []) => Transform::Rotate(lock.unwrap_or(self.view_axis()), 0),
+            ('r', [v]) => Transform::Rotate(lock.unwrap_or(self.view_axis()), *v),
+            ('s', []) => Transform::Scale(lock, 100),
+            ('s', [v]) => Transform::Scale(lock, *v),
+            ('g', _) => return Err("Enter one value, or X Y Z offsets with no axis lock".into()),
+            _ => return Err("Enter one integer value".into()),
+        })
+    }
     fn transform_preview(&mut self) {
         let Some(p) = &self.prompt else {
             return;
@@ -1136,29 +1161,23 @@ impl App {
         let PromptKind::Transform(op) = p.kind else {
             return;
         };
-        let value = if p.value.is_empty() {
-            if op == 's' {
-                100
-            } else {
-                0
+        let t = match self.transform_value(op, p.axis, &p.value) {
+            Ok(t) => t,
+            Err(e) => {
+                self.preview = None;
+                self.status = format!("Error: {e}");
+                return;
             }
-        } else {
-            match p.value.parse::<i32>() {
-                Ok(n) => n,
-                Err(_) => {
-                    self.preview = None;
-                    self.status = "Error: enter an integer transform value".into();
-                    return;
-                }
-            }
-        };
-        let t = match op {
-            'g' => Transform::Move(p.axis, value),
-            'r' => Transform::Rotate(p.axis, value),
-            _ => Transform::Scale(Some(p.axis), value),
         };
         if let Some(m) = &self.model {
-            match m.transformed(t) {
+            let result = if self.mesh_edit {
+                m.median(&self.mesh_vertices)
+                    .ok_or_else(|| "Select vertices first".to_string())
+                    .and_then(|pivot| m.transform_selection(t, Some(&self.mesh_vertices), pivot))
+            } else {
+                m.transformed(t)
+            };
+            match result {
                 Ok(m) => self.preview = Some(m),
                 Err(e) => {
                     self.preview = None;
@@ -1166,6 +1185,42 @@ impl App {
                 }
             }
         }
+    }
+    fn transform_prompt(&mut self, op: char) {
+        let title = match (self.mesh_edit, op) {
+            (false, 'g') => "Move in source units",
+            (false, 'r') => "Rotate in degrees",
+            (false, _) => "Scale in percent",
+            (true, 'g') => "Move selected vertices in source units",
+            (true, 'r') => "Rotate selection about its median point in degrees",
+            (true, _) => "Scale selection about its median point in percent",
+        };
+        self.prompt = Some(Prompt {
+            kind: PromptKind::Transform(op),
+            title: title.into(),
+            value: String::new(),
+            axis: 3,
+        });
+        self.transform_preview();
+    }
+    fn apply_transform(&mut self) -> Result<()> {
+        let preview = self
+            .preview
+            .take()
+            .ok_or_else(|| "Enter a valid transform value".to_string())?;
+        if self.mesh_edit {
+            let entry = self.model_entry.ok_or("Open the SH owner before editing")?;
+            let bytes = preview.write(&self.doc.archive.entries[entry].read()?)?;
+            self.doc.replace(entry, bytes)?;
+            self.refresh();
+            self.status = "Selected vertices transformed | Ctrl+Z undo".into();
+        } else {
+            let bytes = preview.write(&self.data)?;
+            self.doc.replace(self.selected, bytes)?;
+            self.refresh();
+            self.status = "Geometry changed | Ctrl+Z undo".into();
+        }
+        Ok(())
     }
     pub fn key(&mut self, key: Key, ctrl: bool, shift: bool) {
         if self.mesh_drag.is_some()
@@ -1344,7 +1399,6 @@ impl App {
                         PromptKind::AnimationState(address) => {
                             self.set_animation_state(address, &p.value)
                         }
-                        PromptKind::MeshMove => self.mesh_move(&p.value),
                         PromptKind::BaseColor(face) => self.apply_base_color(face),
                         PromptKind::Recolor => {
                             let r = (|| {
@@ -1543,20 +1597,7 @@ impl App {
                             }
                             r
                         }
-                        PromptKind::Transform(_) => {
-                            let r = self
-                                .preview
-                                .as_ref()
-                                .ok_or_else(|| "Enter a valid transform value".to_string())
-                                .and_then(|m| m.write(&self.data))
-                                .and_then(|b| self.doc.replace(self.selected, b));
-                            if r.is_ok() {
-                                self.refresh();
-                                self.status = "Geometry changed | Ctrl+Z undo".into();
-                            }
-                            self.preview = None;
-                            r
-                        }
+                        PromptKind::Transform(_) => self.apply_transform(),
                     };
                     if let Err(e) = r {
                         self.status = format!("Error: {e}");
@@ -1572,10 +1613,16 @@ impl App {
                     if matches!(p.kind, PromptKind::Transform(_) | PromptKind::StationMove)
                         && "xyzXYZ".contains(ch)
                     {
-                        p.axis = match ch.to_ascii_lowercase() {
+                        let axis = match ch.to_ascii_lowercase() {
                             'x' => 0,
                             'y' => 1,
                             _ => 2,
+                        };
+                        // Transform locks toggle; a station move always needs an axis.
+                        p.axis = if p.axis == axis && matches!(p.kind, PromptKind::Transform(_)) {
+                            3
+                        } else {
+                            axis
                         };
                     } else if ctrl && ch.eq_ignore_ascii_case(&'a') {
                         p.value.clear();
@@ -1610,13 +1657,13 @@ impl App {
         match key {
             Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'c'=>{let r=self.copy_resource();self.result(r);},'v'=>{let r=self.paste_resources();self.result(r);},'d'=>self.rename_prompt(true),'w'=>{let r=self.close_library();self.result(r);},'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
             Key::Char('h')|Key::Char('H')=>{let r=self.station_add(false,true);self.result(r);},
-            Key::Char('a')|Key::Char('A') if self.mesh_edit&&self.mode==Mode::Model=>{self.mesh_vertices=(0..self.model.as_ref().map_or(0,|m|m.vertices.len())).collect();},
-            Key::Char('g')|Key::Char('G') if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_move_prompt(),
+            Key::Char('a')|Key::Char('A') if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_toggle_all(),
+            Key::Char(ch) if "gGrRsS".contains(ch)&&self.mesh_edit&&self.mode==Mode::Model=>self.mesh_transform_prompt(ch.to_ascii_lowercase()),
             Key::Tab if self.mode==Mode::Model=>self.act(view::Action::MeshMode),
             Key::Char('g')|Key::Char('G') if self.hp_tool&&self.mode==Mode::Model => {self.prompt=Some(Prompt{kind:PromptKind::StationMove,title:"Move station / X Y Z axis, source-unit offset".into(),value:"0".into(),axis:0});},
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.model.is_some()=>{
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
-                let op=ch.to_ascii_lowercase();self.prompt=Some(Prompt{kind:PromptKind::Transform(op),title:match op{'g'=>"Move in source units",'r'=>"Rotate in degrees",_=>"Scale in percent"}.into(),value:String::new(),axis:0});self.transform_preview();
+                self.transform_prompt(ch.to_ascii_lowercase());
             },
             Key::Char('1')|Key::Num(1)=>{self.yaw=0;self.pitch=0;},Key::Char('3')|Key::Num(3)=>{self.yaw=90;self.pitch=0;},Key::Char('7')|Key::Num(7)=>{self.yaw=0;self.pitch = 90;},Key::Char('5')|Key::Num(5)=>{if self.textured{self.perspective=false;self.status="Textured paint preview uses orthographic projection".into();}else{self.perspective = !self.perspective;}},
             Key::Home|Key::Char('.')=>self.frame(),
@@ -1625,7 +1672,7 @@ impl App {
             Key::Enter=>self.edit_field(self.field_selected),
             Key::Delete=>{let r=self.doc.remove(self.selected);self.result(r);self.refresh();self.status="Entry removed | Ctrl+Z undo".into();},
             Key::Escape=>{self.graft_library=None;self.resource_drag=None;},
-            Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform".into(),
+            Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform, X/Y/Z toggles axis lock | Tab edit mode: G/R/S act on selected vertices, Shift+click extends, A all/none".into(),
             _=>{}
         }
     }

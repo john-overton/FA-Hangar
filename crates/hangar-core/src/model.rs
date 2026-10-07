@@ -56,6 +56,7 @@ pub enum Transform {
     Move(usize, i32),
     Rotate(usize, i32),
     Scale(Option<usize>, i32),
+    Translate([i32; 3]),
 }
 // Integer trig keeps the core independent of a C math runtime. Angle is degrees;
 // Bhaskara's approximation is for editor interaction, not original game simulation.
@@ -476,6 +477,16 @@ impl Model {
     }
     /// Preview transform works for any decoded pose. Packaging edits is restricted.
     pub fn transformed(&self, t: Transform) -> Result<Self> {
+        self.transform_selection(t, None, [0; 3])
+    }
+    /// Transform the selected vertices (all when None) about `pivot`. Vertices sharing a
+    /// source offset move together; affected face normals are refreshed.
+    pub fn transform_selection(
+        &self,
+        t: Transform,
+        selection: Option<&[usize]>,
+        pivot: [i32; 3],
+    ) -> Result<Self> {
         let mut out = self.clone();
         match t {
             Transform::Move(a, _) | Transform::Rotate(a, _) if a > 2 => {
@@ -487,18 +498,44 @@ impl Model {
             }
             _ => {}
         }
+        let offsets = match selection {
+            Some(selection) => {
+                let mut offsets = BTreeSet::new();
+                for i in selection {
+                    offsets.insert(self.vertices.get(*i).ok_or("No selected vertex")?.offset);
+                }
+                if offsets.is_empty() {
+                    return Err(invalid("Select at least one vertex"));
+                }
+                Some(offsets)
+            }
+            None => None,
+        };
         for v in &mut out.vertices {
-            v.point = match t {
+            if offsets.as_ref().is_some_and(|o| !o.contains(&v.offset)) {
+                continue;
+            }
+            let local: [i32; 3] = core::array::from_fn(|k| v.point[k] - pivot[k]);
+            let moved = match t {
                 Transform::Move(a, n) => {
-                    let mut p = v.point;
+                    let mut p = local;
                     p[a] = p[a]
                         .checked_add(n)
                         .ok_or_else(|| invalid("Coordinate overflow"))?;
                     p
                 }
-                Transform::Rotate(a, n) => rotate(v.point, a, n),
+                Transform::Translate(d) => {
+                    let mut p = local;
+                    for (x, d) in p.iter_mut().zip(d) {
+                        *x = x
+                            .checked_add(d)
+                            .ok_or_else(|| invalid("Coordinate overflow"))?;
+                    }
+                    p
+                }
+                Transform::Rotate(a, n) => rotate(local, a, n),
                 Transform::Scale(a, n) => {
-                    let mut p = v.point;
+                    let mut p = local;
                     for (i, x) in p.iter_mut().enumerate() {
                         if a.is_none_or(|a| a == i) {
                             *x = (*x as i64 * n as i64 / 100) as i32;
@@ -507,12 +544,27 @@ impl Model {
                     p
                 }
             };
+            v.point = core::array::from_fn(|k| moved[k].saturating_add(pivot[k]));
             if v.point.iter().any(|n| !(-32768..=32767).contains(n)) {
                 return Err(invalid("Transform exceeds signed 16-bit coordinates"));
             }
         }
         out.refresh_normals(self);
         Ok(out)
+    }
+    /// Blender-style median point: the truncated average of the selected vertices.
+    pub fn median(&self, selection: &[usize]) -> Option<[i32; 3]> {
+        let points: Vec<_> = selection
+            .iter()
+            .filter_map(|i| self.vertices.get(*i))
+            .map(|v| v.point)
+            .collect();
+        if points.is_empty() {
+            return None;
+        }
+        Some(core::array::from_fn(|k| {
+            (points.iter().map(|p| p[k] as i64).sum::<i64>() / points.len() as i64) as i32
+        }))
     }
     pub fn write(&self, source: &[u8]) -> Result<Vec<u8>> {
         if !self.writable {
@@ -930,6 +982,36 @@ mod tests {
         let reread = Model::parse(&out).unwrap();
         assert_eq!(reread.vertices[0].point, [-5, 0, 0]);
         assert_eq!(reread.faces[0].normal, Some([0, 0, -32765]));
+    }
+    #[test]
+    fn selection_transforms_use_the_median_pivot() {
+        let b = lit_shape();
+        let m = Model::parse(&b).unwrap();
+        let pick = [1, 3];
+        assert_eq!(m.median(&pick), Some([15, 0, 0]));
+        let scaled = m
+            .transform_selection(Transform::Scale(None, 200), Some(&pick), [15, 0, 0])
+            .unwrap();
+        assert_eq!(scaled.vertices[1].point, [5, 0, 0]);
+        assert_eq!(scaled.vertices[3].point, [25, 0, 0]);
+        assert_eq!(scaled.vertices[0].point, m.vertices[0].point);
+        let turned = m
+            .transform_selection(Transform::Rotate(2, 90), Some(&pick), [15, 0, 0])
+            .unwrap();
+        assert_eq!(turned.vertices[1].point, [15, -5, 0]);
+        assert_eq!(turned.vertices[3].point, [15, 5, 0]);
+        let moved = m
+            .transform_selection(Transform::Translate([1, 2, 3]), Some(&[0]), [0; 3])
+            .unwrap();
+        assert_eq!(moved.vertices[0].point, [1, 2, 3]);
+        assert!(m
+            .transform_selection(Transform::Translate([0; 3]), Some(&[99]), [0; 3])
+            .is_err());
+        let written = Model::parse(&turned.write(&b).unwrap()).unwrap();
+        assert_eq!(written.vertices[3].point, [15, 5, 0]);
+        for (preview, stored) in turned.faces.iter().zip(&written.faces) {
+            assert_eq!(preview.normal, stored.normal);
+        }
     }
     #[test]
     fn degenerate_faces_keep_stored_normals_and_byte_centres_are_bounded() {

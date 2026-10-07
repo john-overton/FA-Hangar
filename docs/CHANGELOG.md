@@ -15,6 +15,10 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 - Transform and vertex-drag previews refresh face normals the same way the
   write does, so the textured preview hides the same rear faces the saved
   shape will.
+- Edit mode G/R/S act on the selected vertices about their median point;
+  previously R and S transformed the whole shape. G/R/S start unconstrained:
+  S scales uniformly, R uses the view axis and G accepts `X Y Z` offsets.
+  X/Y/Z toggles the axis lock. A toggles select all/none.
 
 ## 0.8.2
 
