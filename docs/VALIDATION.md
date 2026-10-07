@@ -700,8 +700,9 @@ after, and no game data is in the repository). `_F18.PIC` is a raw 256 × 644
 PIC drawn by 178 of the 287 faces of `F18.SH`; colors come from
 `PALETTE.PAL`.
 
-- **Whole texture.** Replace color from index 255 (the fuselage gray, the
-  most used index) to 160 at tolerance 0: 126,217 pixels, the same number
+- **Whole texture.** Replace color from index 255 (white in `PALETTE.PAL`,
+  the most used index, covering the skin) to 160 (black) at tolerance 0:
+  126,217 pixels, the same number
   the dialog counted and exactly the pixels of that index; every changed
   byte is one of those raster bytes, header and transparency unchanged.
   Status: "Replaced 126,217 pixels of index 255 with 160 in _F18.PIC;
@@ -721,8 +722,8 @@ PIC drawn by 178 of the 287 faces of `F18.SH`; colors come from
   dab returned the saved bytes and dropped the session's `_F18.ORG`.
 - **Renders.** `before.png`, `whole.png` and `fin.png` of `_F18.PIC` and
   `--snapshot ... F18.SH paint-side 1280x800` of the original, `WHOLE.LIB`
-  and `FIN.LIB` show the whole gray skin replaced in the first and only the
-  fins in the second. They stayed in `/tmp/claude-1000/replace/` (not
+  and `FIN.LIB` show the whole light skin turned black in the first and
+  only the fins in the second. They stayed in `/tmp/claude-1000/replace/` (not
   committed). The existing `--paint-check` and `--restore-check` still pass
   on the same copy.
 
