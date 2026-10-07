@@ -321,7 +321,7 @@ pub fn atlas_density(model: &Model) -> Option<u32> {
 }
 
 /// Upper-case texture name an E2 selector names; empty for E0.
-fn selector_texture(bytes: &[u8]) -> String {
+pub(crate) fn selector_texture(bytes: &[u8]) -> String {
     if bytes.first() != Some(&0xe2) {
         return String::new();
     }
@@ -332,7 +332,7 @@ fn selector_texture(bytes: &[u8]) -> String {
         .collect()
 }
 /// The same-size stub `stub_out` writes over `[a, e)` jumping to `to`.
-fn stub_bytes(a: usize, e: usize, to: usize) -> Result<Vec<u8>> {
+pub(crate) fn stub_bytes(a: usize, e: usize, to: usize) -> Result<Vec<u8>> {
     if e < a + 4 {
         return Err(invalid("Record too short for a jump stub"));
     }

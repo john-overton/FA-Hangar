@@ -210,6 +210,29 @@ pub(crate) fn stub_out(payload: &mut [u8], at: usize, end: usize, to: usize) -> 
     }
     Ok(())
 }
+/// Install an edited CODE payload (same length as CODE) whose bytes from
+/// `from` to the end marker are replaced by `extension`: the marker and
+/// import tail move back (or forward), relocations follow. Needs the native
+/// tail.
+pub(crate) fn replace_continuation(
+    source: &[u8],
+    payload: Vec<u8>,
+    from: usize,
+    extension: Vec<u8>,
+) -> Result<Vec<u8>> {
+    let code = code(source)?;
+    if payload.len() != code.len {
+        return Err(invalid("Edited CODE payload changed size"));
+    }
+    let tail = layout::tail(source, &code)?
+        .ok_or("Rebuilding the appended records needs the native end marker and import tail")?;
+    if from + align(extension.len(), 16)? + (tail.end - tail.start) > code.limit {
+        return Err(invalid(
+            "CODE has no virtual-address room for this continuation; relocation support is required",
+        ));
+    }
+    layout::replace_before_tail(source, payload, from, extension, tail)
+}
 /// Install an edited CODE payload (same length as CODE) plus an extension that
 /// was built to start at `continuation_start`. Body RVAs stay fixed; with the
 /// native tail the end marker and import stubs move and relocations follow.

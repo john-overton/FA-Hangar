@@ -93,8 +93,12 @@ pub(super) fn repack(
     source: &[u8],
     payload: Vec<u8>,
     old_tail: Tail,
-    shift: usize,
+    shift: isize,
 ) -> Result<Vec<u8>> {
+    let moved = |v: usize| -> Result<usize> {
+        v.checked_add_signed(shift)
+            .ok_or_else(|| invalid("Address overflow"))
+    };
     let c = code(source)?;
     if c.optional_size < 224 {
         return Err(invalid("Incomplete SH module header"));
@@ -181,7 +185,7 @@ pub(super) fn repack(
                     ));
                 }
                 let new_site = if (tail_begin..tail_end).contains(&site) {
-                    site + shift
+                    moved(site)?
                 } else {
                     site
                 };
@@ -189,7 +193,7 @@ pub(super) fn repack(
                     .checked_sub(base)
                     .is_some_and(|v| (tail_begin..tail_end).contains(&v))
                 {
-                    value.checked_add(shift).ok_or("Address overflow")?
+                    moved(value)?
                 } else {
                     value
                 };
@@ -208,7 +212,7 @@ pub(super) fn repack(
         if old_code.get(stub..stub + 2) != Some(&[0xff, 0x25])
             || !relocations
                 .iter()
-                .any(|(site, _)| *site == c.rva + stub + 2 + shift)
+                .any(|(site, _)| Ok(*site) == moved(c.rva + stub + 2))
         {
             return Err(invalid("Unrelocated SH import stub"));
         }
@@ -354,6 +358,31 @@ pub(super) fn append_before_tail(
     body.extend(extension);
     body.resize(tail.start + shift, 0x1e);
     body.extend(old);
+    repack(source, body, tail, shift as isize)
+}
+/// Replace the CODE bytes from `from` up to the end marker with `extension`
+/// (1E-padded to 16 bytes, as `append_before_tail` lays it out), moving the
+/// marker and import tail back or forward. Removing everything a series of
+/// appends added gives back the layout before them.
+pub(super) fn replace_before_tail(
+    source: &[u8],
+    mut body: Vec<u8>,
+    from: usize,
+    extension: Vec<u8>,
+    tail: Tail,
+) -> Result<Vec<u8>> {
+    if tail.end != body.len() || from > tail.start {
+        return Err(invalid(
+            "Repair the legacy panel tail before adding another panel",
+        ));
+    }
+    let size = align(extension.len(), 16)?;
+    let old = body.split_off(tail.start);
+    body.truncate(from);
+    body.extend(extension);
+    body.resize(from + size, 0x1e);
+    body.extend(old);
+    let shift = (from + size) as isize - tail.start as isize;
     repack(source, body, tail, shift)
 }
 pub(super) fn repair(source: &[u8]) -> Result<Option<(Vec<u8>, usize)>> {
@@ -444,7 +473,7 @@ pub(super) fn repair(source: &[u8]) -> Result<Option<(Vec<u8>, usize)>> {
     body.extend(extra);
     body.resize(tail.start + shift, 0x1e);
     body.extend(old_tail);
-    let output = repack(source, body, tail, shift)?;
+    let output = repack(source, body, tail, shift as isize)?;
     let checked = Model::parse(&output)?;
     if model.faces.len() != checked.faces.len()
         || model

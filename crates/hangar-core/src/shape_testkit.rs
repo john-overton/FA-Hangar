@@ -565,6 +565,118 @@ pub fn demo_looped_kit() -> Vec<u8> {
         .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
     a.finish()
 }
+/// One runtime marking: an 82 with a quad, `E0 00 slot`, the textured
+/// face, then `E2 KIT.PIC` restoring the skin, as retail aircraft do.
+fn marking(a: &mut Asm, slot: u16, at: u16, quad: [[i16; 3]; 4]) {
+    a.verts(at, &quad);
+    a.b(&[0xe0, 0]).w(slot as i16);
+    let p: Vec<[i32; 3]> = quad.iter().map(|q| q.map(|v| v as i32)).collect();
+    let n = crate::model::face_normal(&p).unwrap_or([0, 0, 32765]);
+    let c: [i32; 3] = core::array::from_fn(|k| p.iter().map(|q| q[k]).sum::<i32>() / 4);
+    a.face(
+        0x28,
+        150,
+        Some((n.map(|v| v as i16), c.map(|v| v as i16))),
+        &[at, at + 1, at + 2, at + 3],
+        &[[0, 0], [63, 0], [63, 63], [0, 63]],
+    );
+    a.b(&[0xe2, 0]).b(b"KIT.PIC\0\0\0\0\0\0\0");
+}
+/// The textured kit with runtime markings on top of its wings: slot 4 on
+/// the right wing and slot 3 on the left (as the F-5's roundels), plus nose
+/// art (slot 2) and a gear leg unless `damaged`. Not a game asset.
+pub fn demo_markings_kit(damaged: bool) -> Vec<u8> {
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x10, 0]);
+    a.b(&[0xe2, 0]).b(b"KIT.PIC\0\0\0\0\0\0\0");
+    let box_points: [[i16; 3]; 8] = core::array::from_fn(|i| {
+        [
+            if i & 1 == 0 { -5 } else { 5 },
+            if i & 2 == 0 { -40 } else { 40 },
+            if i & 4 == 0 { -4 } else { 4 },
+        ]
+    });
+    let region = |k: u16| -> Vec<[u16; 2]> {
+        let (u, v) = ((k % 2) * 16, (k / 2) * 10);
+        alloc::vec![[u, v], [u + 15, v], [u + 15, v + 9], [u, v + 9]]
+    };
+    let sides: [(&[u16], [i32; 3]); 6] = [
+        (&[0, 1, 3, 2], [0; 3]),
+        (&[4, 5, 7, 6], [0; 3]),
+        (&[0, 1, 5, 4], [0; 3]),
+        (&[2, 3, 7, 6], [0; 3]),
+        (&[0, 2, 6, 4], [0; 3]),
+        (&[1, 3, 7, 5], [0; 3]),
+    ];
+    a.solid_uv(
+        0,
+        &box_points,
+        &sides,
+        150,
+        &(0..6).map(region).collect::<Vec<_>>(),
+    );
+    plate(
+        &mut a,
+        8,
+        [[-5, -6, 0], [-40, -12, 0], [-40, -2, 0], [-5, 10, 0]],
+        151,
+    );
+    plate(
+        &mut a,
+        12,
+        [[5, -6, 0], [40, -12, 0], [40, -2, 0], [5, 10, 0]],
+        151,
+    );
+    marking(
+        &mut a,
+        4,
+        16,
+        [[18, -6, 1], [30, -8, 1], [30, 2, 1], [18, 4, 1]],
+    );
+    marking(
+        &mut a,
+        3,
+        20,
+        [[-18, 4, 1], [-30, 2, 1], [-30, -8, 1], [-18, -6, 1]],
+    );
+    if !damaged {
+        marking(
+            &mut a,
+            2,
+            24,
+            [[6, 30, -3], [6, 36, -3], [6, 36, 3], [6, 30, 3]],
+        );
+        a.xform(
+            "gl",
+            Some(("_PLgearDown", 1)),
+            "_PLgearPos",
+            Shift::One,
+            true,
+            0x0a,
+            [-12, -4, 2],
+            "legl",
+            "s1",
+        );
+        a.label("s1").b(&[0xca, 0, 0, 0]);
+        a.jump("end");
+        a.label("legl");
+        let leg = [[0, 0, 0], [0, 0, -10], [1, 0, -10], [1, 0, 0]];
+        a.solid_uv(
+            28,
+            &leg,
+            &[(&[0, 1, 2, 3], [0, 1, -5]), (&[0, 1, 2, 3], [0, -1, -5])],
+            153,
+            &[
+                alloc::vec![[20, 30], [23, 30], [23, 31], [20, 31]],
+                alloc::vec![[24, 30], [27, 30], [27, 31], [24, 31]],
+            ],
+        );
+        a.b(&[0x1e]);
+    }
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    a.finish()
+}
 /// A flat quad drawn from both sides.
 fn plate(a: &mut Asm, slot: u16, p: [[i16; 3]; 4], color: u8) {
     let c: [i32; 3] = core::array::from_fn(|k| p.iter().map(|q| q[k] as i32).sum::<i32>() / 4);

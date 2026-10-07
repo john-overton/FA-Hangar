@@ -684,8 +684,11 @@ impl Geometry {
     /// The one writer record that holds for a proof key at a face, or why
     /// there is not exactly one.
     fn prove(&self, key: usize, face: usize) -> Resolved {
+        self.explain(key, self.reaching(key, face)?)
+    }
+    /// The one writer record in a reaching set, or why there is not one.
+    fn explain(&self, key: usize, set: flow::Set) -> Resolved {
         let material = key == MATERIAL;
-        let set = self.reaching(key, face)?;
         if set.is_top() {
             return Err(if material {
                 "more than four different texture states reach it".into()
@@ -773,6 +776,62 @@ impl Geometry {
     /// Whether any path from the shape start reaches the face.
     pub fn drawn(&self, face: usize) -> bool {
         !matches!(self.reaching(MATERIAL, face), Ok(s) if s.is_bottom())
+    }
+    /// CODE offsets of the E2/E0 records (by first record with the same
+    /// bytes) that may hold at a face, when the set is small and explained:
+    /// `None` for top, unexplained bytes or an analysis failure.
+    pub fn material_writers(&self, face: usize) -> Option<Vec<usize>> {
+        let set = self.reaching(MATERIAL, face).ok()?;
+        if set.is_top() {
+            return None;
+        }
+        let mut out = Vec::new();
+        for v in set.values() {
+            match flow::origin(*v) {
+                Some(Ok(rec)) => out.push(self.inventory.records[rec as usize].offset),
+                Some(Err(_)) => return None,
+                None => {}
+            }
+        }
+        Some(out)
+    }
+    /// `material` on entry to records that need not be faces (CODE offsets
+    /// of record starts), solved once for the whole list. A record no path
+    /// reaches gets "no path from the shape start draws it".
+    pub fn state_at(&self, records: &[usize]) -> Vec<Resolved> {
+        let recs: Vec<Option<u32>> = records
+            .iter()
+            .map(|at| self.inventory.starting_at(*at).map(|i| i as u32))
+            .collect();
+        let list: Vec<u32> = recs.iter().flatten().copied().collect();
+        let solved = {
+            let mut proofs = self.proofs.borrow_mut();
+            let graph = proofs.graph.get_or_insert_with(|| self.graph());
+            match graph {
+                Ok(g) => g.solve(&|rec| self.gen(MATERIAL, rec), &list),
+                Err(e) => Err(e.clone()),
+            }
+        };
+        let mut sets = match solved {
+            Ok(v) => v.into_iter(),
+            Err(e) => return records.iter().map(|_| Err(e.clone())).collect(),
+        };
+        recs.iter()
+            .map(|r| match r {
+                None => Err("no record starts there".into()),
+                Some(_) => {
+                    let set = sets.next().unwrap_or(flow::Set::BOTTOM);
+                    let rec = self.explain(MATERIAL, set)?;
+                    Ok(self.inventory.records[rec].offset)
+                }
+            })
+            .collect()
+    }
+    /// Why CODE bytes `[a, e)` may not be rewritten in place, if they may
+    /// not (pointer or relocation fields, inner pointer targets, native
+    /// addressing).
+    pub(crate) fn bytes_refusal(&self, a: usize, e: usize, label: &str) -> Option<String> {
+        self.guard_bytes(a, e, label).err()
     }
     /// Refusal when CODE bytes `[a, e)` may not be rewritten: a pointer or
     /// relocation field inside, a pointer target strictly inside, or a
@@ -908,7 +967,7 @@ pub(crate) fn verify_structure(before: &Geometry, source: &[u8], out: &[u8]) -> 
     Ok(after)
 }
 /// Same decoded face at the same CODE offset, ignoring the file position.
-fn same_face(a: &Geometry, i: usize, b: &Geometry, j: usize) -> bool {
+pub(crate) fn same_face(a: &Geometry, i: usize, b: &Geometry, j: usize) -> bool {
     let (x, y) = (&a.faces[i], &b.faces[j]);
     x.offset - a.inventory.code_start == y.offset - b.inventory.code_start
         && x.len == y.len
@@ -935,7 +994,11 @@ fn pick_faces(g: &Geometry, faces: &[usize]) -> Result<Vec<usize>> {
     Ok(out.into_iter().collect())
 }
 /// Check that every face outside `changed` (CODE offsets) is unchanged.
-fn others_unchanged(before: &Geometry, after: &Geometry, changed: &BTreeSet<usize>) -> Result<()> {
+pub(crate) fn others_unchanged(
+    before: &Geometry,
+    after: &Geometry,
+    changed: &BTreeSet<usize>,
+) -> Result<()> {
     for i in 0..before.faces.len() {
         let at = before.faces[i].offset - before.inventory.code_start;
         if changed.contains(&at) {

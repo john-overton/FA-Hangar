@@ -30,6 +30,7 @@ mod schema;
 pub mod shape_code;
 pub mod shape_edit;
 pub mod shape_geometry;
+pub mod shape_markings;
 pub mod shape_parts;
 pub mod shape_remap;
 #[doc(hidden)]
