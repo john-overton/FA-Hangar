@@ -20,10 +20,33 @@ pub(crate) enum Location {
         stem_only: bool,
     },
 }
+/// How a stored name was found; used for review labels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Evidence {
+    Brf,
+    /// An E2 texture record operand. `Some(false)` when no SH traversal reaches it.
+    Texture(Option<bool>),
+    Hud,
+    Module,
+    /// A damage-family member derived from the shadow name, not a stored name.
+    Convention,
+}
+impl Evidence {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Brf => "BRF string",
+            Self::Texture(_) => "Texture record",
+            Self::Hud => "HUD texture name",
+            Self::Module => "Module filename",
+            Self::Convention => "Damage-family convention",
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub(crate) struct Reference {
     pub(crate) target: String,
     pub(crate) location: Location,
+    pub(crate) evidence: Evidence,
 }
 fn unquote(s: &str) -> &str {
     s.strip_prefix('"')
@@ -137,10 +160,14 @@ pub(crate) fn references(
                 out.push(Reference {
                     target,
                     location: Location::Text(i),
+                    evidence: Evidence::Brf,
                 });
             }
         }
     } else if bytes.starts_with(b"MZ") {
+        // SH texture operands are confirmed against the record inventory, so
+        // E2-like bytes inside face or vertex data are not taken for names.
+        let mut shape: Option<Option<crate::shape_code::Inventory>> = None;
         for (at, len, code) in sections(bytes)? {
             let b = &bytes[at..at + len];
             let mut start = 0;
@@ -155,7 +182,26 @@ pub(crate) fn references(
                     let token = core::str::from_utf8(&b[start..i])
                         .unwrap()
                         .to_ascii_uppercase();
-                    let e2 = code && start >= 2 && b[start - 2..start] == [0xe2, 0];
+                    let mut e2 = code && start >= 2 && b[start - 2..start] == [0xe2, 0];
+                    let mut reached = None;
+                    if e2 && ext(name) == "SH" {
+                        let inventory = shape.get_or_insert_with(|| {
+                            crate::shape_code::Inventory::parse(bytes)
+                                .ok()
+                                .filter(|v| v.code_start == at)
+                        });
+                        if let Some(r) = inventory
+                            .as_ref()
+                            .and_then(|v| v.record_index(start - 2).map(|i| &v.records[i]))
+                        {
+                            use crate::shape_code::Kind;
+                            if r.kind == Kind::Sh(0xe2) && r.offset == start - 2 {
+                                reached = Some(r.reached);
+                            } else if r.kind != Kind::Opaque {
+                                e2 = false;
+                            }
+                        }
+                    }
                     const HUD_NAMES: &[usize] = &[
                         1, 0xe, 0x1b, 0x13c, 0x149, 0x156, 0x163, 0x170, 0x17d, 0x18a, 0x197,
                         0x1a4, 0x275, 0x282,
@@ -176,6 +222,13 @@ pub(crate) fn references(
                     } else {
                         i - start
                     };
+                    let evidence = if e2 {
+                        Evidence::Texture(reached)
+                    } else if hud {
+                        Evidence::Hud
+                    } else {
+                        Evidence::Module
+                    };
                     if token.contains('.') {
                         if validate_name(&token).is_ok()
                             && (catalog.contains(&token) || resource_extension(&token))
@@ -187,6 +240,7 @@ pub(crate) fn references(
                                     len: capacity,
                                     stem_only: false,
                                 },
+                                evidence,
                             });
                         }
                     } else {
@@ -211,6 +265,7 @@ pub(crate) fn references(
                                     len: capacity,
                                     stem_only: true,
                                 },
+                                evidence,
                             });
                         }
                     }
@@ -365,15 +420,7 @@ impl Index {
                                         let mut unique = BTreeMap::new();
                                         for r in refs {
                                             if r.target != e.name {
-                                                unique.insert(
-                                                    r.target,
-                                                    match r.location {
-                                                        Location::Text(_) => "BRF string",
-                                                        Location::Literal { .. } => {
-                                                            "Module filename"
-                                                        }
-                                                    },
-                                                );
+                                                unique.insert(r.target, r.evidence.label());
                                             }
                                         }
                                         for link in conventional(&e.name, &bytes, &catalog) {
@@ -553,6 +600,50 @@ mod tests {
         index.update(&archive);
         assert!(index.get("BODY.SH").unwrap().unavailable.is_some());
         assert_eq!(index.incoming("DEMO.PIC").count(), 0);
+    }
+    #[test]
+    fn e2_like_bytes_inside_face_data_are_not_texture_names() {
+        let mut bytes = model::demo_textured();
+        // First face's texture coordinates spell E2 00 'B' 00, as F14_C.SH does.
+        let uv = 256 + 16 + 42 + 9;
+        bytes[uv..uv + 4].copy_from_slice(&[0xe2, 0, b'B', 0]);
+        let inventory = crate::shape_code::Inventory::parse(&bytes).unwrap();
+        let face = &inventory.records[inventory.record_index(uv - 256).unwrap()];
+        assert_eq!(face.kind, crate::shape_code::Kind::Sh(0xfc));
+        let mut notes = BTreeSet::new();
+        let refs = references("BODY.SH", &bytes, &BTreeSet::new(), &mut notes).unwrap();
+        let targets: Vec<_> = refs.iter().map(|r| r.target.as_str()).collect();
+        assert_eq!(targets, ["DEMO.PIC"]);
+        assert_eq!(refs[0].evidence, Evidence::Texture(Some(true)));
+        // Without an SH record inventory the bounded literal heuristic still applies.
+        let refs = references("BODY.HUD", &bytes, &BTreeSet::new(), &mut notes).unwrap();
+        assert!(refs.iter().any(|r| r.target == "B.PIC"));
+    }
+    #[test]
+    fn texture_records_carry_static_reachability() {
+        let mut a = crate::shape_testkit::Asm::default();
+        a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x40, 0]);
+        a.b(&[0xf2, 0]).rel16("end", 2);
+        a.b(&[0xe2, 0]).b(b"SKIN.PIC\0\0\0\0\0\0");
+        a.verts(0, &[[0, 0, 0], [10, 0, 0], [0, 10, 0]]);
+        a.face(0x23, 32, None, &[0, 1, 2], &[]);
+        a.jump("end");
+        a.b(&[0xe2, 0]).b(b"SPARE.PIC\0\0\0\0\0");
+        a.label("end")
+            .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+        let bytes = a.finish();
+        let refs = references("BODY.SH", &bytes, &BTreeSet::new(), &mut BTreeSet::new()).unwrap();
+        let found: Vec<_> = refs
+            .iter()
+            .map(|r| (r.target.as_str(), r.evidence))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("SKIN.PIC", Evidence::Texture(Some(true))),
+                ("SPARE.PIC", Evidence::Texture(Some(false)))
+            ]
+        );
     }
     #[test]
     fn too_many_reference_operands_fail_explicitly() {
