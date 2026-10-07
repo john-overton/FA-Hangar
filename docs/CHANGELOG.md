@@ -103,6 +103,14 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   identified by the game variable that drives them. Stored part angles now
   show in the preview. The Linux CLI gains `--shape-inventory`,
   `--shape-pose` and stub census checks for manual analysis.
+- Retail aircraft shapes are no longer read-only as a whole. Each vertex and
+  face reports whether it can be edited and why not. Vertex moves inside gear
+  and other parts write the part's local coordinates. The core can delete,
+  flip, add, duplicate, extrude and scale faces and add vertices, and can
+  change part settings in place (gear shift and rotation axis, pivots, gate
+  values and je/jne sense of toggled parts). The editing UI for these follows
+  in a later build; the Linux CLI gains `--geometry-check` for manual
+  real-data checks.
 
 ## 0.8.2
 

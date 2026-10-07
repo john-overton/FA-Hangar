@@ -335,6 +335,48 @@ pivots are per-aircraft. Posed A-10 and F/A-18 gear retract in plausible
 directions in the preview. This is preview plausibility, not original-game
 verification.
 
+## Unreleased geometry editing and part settings
+
+108 core tests pass. 17 of them are synthetic geometry fixtures covering
+frames and slot proofs. They also cover refusals for an inner pointer, an
+in-face relocation, a slot rewritten by a called block, mixed frames, CODE
+room, jump reach, the slot ceiling, collinear and per-vertex-shaded faces,
+and a missing native tail. Further cases cover no-op byte identity, pure-
+function determinism, one undo step through `Document`, 38-scope padding,
+texture switch and restore, word indices above slot 255, and truncated and
+corrupted input. 3 part-settings tests cover naming, every editable control
+with the binding re-checked, read-only D1 shift and direction, and locked
+unrecognised stubs. A shared synthetic SH assembler (`shape_testkit`) builds
+the fixtures; no retail data is used.
+
+Manual `--geometry-check` against the user's retail FA_2.LIB, 2026-10-07:
+
+- Analysis of all 1,275 SH: every shape analyses, and 313,097 of 313,097
+  stored vertices are writable. 249,364 of 249,943 faces are editable; the
+  other 579 are never drawn. 1,779 stub-driven parts are listed, with 21
+  locked (`_currentTicks`, `_PLstate`, `_PLdead`: radars, towers and the
+  ejection seat). swpatch.lib: 7 SH, 5,580 of 5,580 vertices, 3,892 of 3,892
+  faces and 130 parts, none locked.
+- Edits on in-memory copies of F18, F14, A10, F16, AV8 and B2, written
+  create-new under /tmp/claude-1000/wave3a/: delete, flip, add face, duplicate,
+  extrude (flipped base), part-vertex move and 110% scale of a drawn root face.
+  All 42 edits pass. Inventory coverage stays at 100% with no opaque bytes,
+  bindings are unchanged, every drawn face slot still resolves, and file sizes
+  are unchanged (the tail moved within existing CODE slack). The model reader
+  shows −1/0/+1/+1/+4..5 faces as expected. B2's neutral model already
+  failed on an unsupported pose guard before any edit, so B2 relies on the
+  inventory and geometry checks alone.
+- 83 part-setting edits across the six aircraft (gate compare, je/jne,
+  rotation axis, pivot and C1 shift on F18/F14/F16 gear) each change one byte
+  or one word. All pass the re-check that the binding reports the new value.
+  Nose gear naming matches the aircraft, including the A-10's offset nose leg.
+- Evidence found on the way: the 6C word at +8 is a branch for all 10,557
+  retail 6Cs. Without the 38-scope padding reading, 30–50% of the faces the
+  preview draws looked unreachable. 148 vertices sit behind jump chains
+  deeper than 32 regions, so proofs follow up to 128.
+
+None of these edited shapes has been loaded in the original game yet.
+
 ## Unreleased texture originals
 
 75 core tests pass, including synthetic `.ORG` coverage: one backup on the

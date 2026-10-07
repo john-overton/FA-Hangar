@@ -265,6 +265,28 @@ separately. No retail data is included in the test package.
    are unaffected compared with the same LIB after **Package > Remove stored
    originals**. Report any difference with the LIB name and entry count.
 
+## Edited geometry and part settings (unreleased)
+
+Use copies only. On Linux, run `tore-hangar --geometry-check NEW_DIR FA_2.LIB
+F18.SH A10.SH`. Then put the `F18-*.SH` and `A10-*.SH` results you test, renamed
+`F18.SH` and `A10.SH`, into a new custom LIB, one variant per LIB.
+
+1. **delete**, **flip**: fly the aircraft and look at the edited panel from
+   outside. Deleted: the panel is missing and nothing else is. Flipped: it is
+   visible from the other side. Report missing or flickering neighbours.
+2. **add**, **duplicate**, **extrude**: the new faces appear with the colour
+   of their neighbours, at every view distance where the original face shows.
+   No other part of the aircraft distorts, and the game does not crash.
+3. **move**: the moved gear-part vertex follows the gear through
+   extension and retraction.
+4. **scale**: the panel is 10% larger and its neighbours stretch to meet it.
+5. Part settings: with the `*-part-*Rotation_axis*` variant, the gear leg
+   swings about the other axis. With `*-part-*Shift*`, it travels a different
+   angle. With `*-part-*Pivot*`, it hinges one unit to the side. With
+   `*-part-*compare*` or `*branch*`, the toggled part shows in the other
+   state. Report any crash, a part drawn in the wrong place, or a
+   flight-model difference.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

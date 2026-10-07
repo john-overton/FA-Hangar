@@ -146,7 +146,8 @@ and updates centers/normals only of faces whose vertices moved. Centers are the
 truncated vertex average; normals are unit vectors (32765) from the first
 non-degenerate vertex triple with retail winding (c-a)x(b-a) in right/forward/up
 order, stored right/up/forward. A face with no such triple keeps its stored
-normal. General aircraft do not qualify.
+normal. General aircraft do not qualify; their vertices are written per region
+by `shape_geometry` instead (see Region geometry editing).
 The synthetic demo is an editor fixture, not a proven game-loadable aircraft.
 
 A complete SH writer must preserve every branch, LOD, state switch, local
@@ -461,7 +462,8 @@ arbitrary PE or full animated geometry writer.
 
 ## Whole-CODE inventory and part bindings (0.9 groundwork)
 
-`shape_code::Inventory` is analysis only; no writer uses it yet. It splits all
+`shape_code::Inventory` never writes; it is the analysis behind
+`shape_geometry` and `shape_parts` (below). It splits all
 of CODE into contiguous records with exact spans, in order: SH records, 1E
 bytes (one record each, since retail pointers land inside 1E runs), the end
 object, embedded x86, x86 data, the end marker with its zero padding, the
@@ -476,13 +478,14 @@ deviations, all measured on FA_2.LIB:
   that OpenFA merges into one pad). 0C/0E/10 follow the same shape (count at +10; 14 or
   12 bytes) and all 15,155 of their rel16s hit record starts. 6C is 10 bytes
   followed by its own 38/48/50 record, so the 48 jump inside OpenFA's 6C is
-  exposed. Hangar's older reached-path table (06 = 14, 0C = 10, 05 = 4, ...)
+  exposed. Its word at +8, measured from the end of the head, is a branch:
+  it lands on a record start for all 10,557 retail 6Cs. Hangar's older reached-path table (06 = 14, 0C = 10, 05 = 4, ...)
   resynchronises on these count fields by accident.
 - The 38 operand is not a code pointer: measured from the record end it lands
   on a record start for 46 of 64,981 retail 38s, and no tested base (record
   start, field, previous record, preceding 06 target, absolute) beats chance
   (best 17%). It is kept as unknown data, so Model's 38 scope reading is
-  unverified.
+  unverified; the geometry walks use that reading only where it adds paths.
 - 40 frame offsets are relative to each field's own position.
 - Face normals are present when content flag 0x40 is set (no retail face sets
   0x20 alone).
@@ -505,7 +508,7 @@ Records carry pointers with field offset, base and target: Rel16/Rel32/Off16
 SH displacements, HIGHLOW sites from `.reloc` (Abs32, CODE or import slot
 targets), x86 rel8/rel32 branches and `add r32, K` self-offsets after
 `call $+5; pop`. All are inputs for a later relocating writer. Reachability is
-the union over every branch: calls return to the next record, 06/A6/C8/AC take
+the union over every branch: calls return to the next record, 06/0C/0E/10/6C/A6/C8/AC take
 both paths, 48/40 jump, 00 and 1E end a path, and an F0 reaches every SH resume
 in its x86 flow. `slots` is every vertex slot any 82 record writes, for a
 free-slot allocator.
@@ -548,6 +551,125 @@ address keys for existing callers, and `state_names`,
 `--stub-census OUTPUT LIB...` groups address-masked stub signatures by
 variable, lists binding parameters per variable, and records which animated
 shapes lack each animation import and how much `.reloc` space remains.
+
+## Region geometry editing (0.9)
+
+`shape_geometry` puts the inventory to work. It decodes every FC face and 82
+vertex buffer in CODE, whether or not a pose reaches it. Each record gets the
+frame that draws it: the root, an innermost C4/C6 part (12/6E calls keep the
+caller's frame), Mixed when several frames reach it, or Unreached. A shape is
+no longer writable or read-only as a whole: each vertex and face says whether
+it can be edited, and why not.
+
+Slot liveness is proved, never assumed. To find the vertex a face's slot
+shows, the resolver walks back from the face. No record on the way may rewrite
+the slot, either directly or in a block a call reaches. The walk stops at the
+writing 82 or at a record that does not fall through. Every pointer entering
+that span from outside (Rel16/Rel32, HIGHLOW, x86 branches) must resolve to
+the same buffer, recursively up to 128 regions deep, with memoised results.
+Walking back, every 1E counts as falling through. Whether it is a return or
+padding, that only adds paths to check. The forward walks (frames and called
+blocks) follow `Model`: a 1E covered by a preceding 38 scope of the same walk
+is padding, and walks repeat until that set is stable. Without this, 30 to 50%
+of retail BSP faces looked unreachable even though the preview draws them.
+
+A face may be rewritten, deleted, flipped or used as a host only when no
+pointer or relocation field lies inside it, no pointer target lies strictly
+inside it, and no self-offset or x86 store addresses it. A vertex is writable
+when its buffer passes the same test, every drawn face that uses its slot
+resolves, and each of the faces it drives can take a new normal.
+
+All operations are pure functions from SH bytes to SH bytes. Each one is
+re-parsed before it returns. The inventory must still be contiguous with the
+same opaque byte count, the stub count and every binding must be unchanged,
+and a shape the model reader accepted must still parse. Untouched faces must
+decode identically, and the new records must resolve to the expected buffers.
+
+- `delete_faces` replaces each FC with a same-size stub: `48` jumping to the
+  record end, `1E` fill, and a closing `48` when the record has 8 bytes or
+  more, as `texture_panel` does. Pointers to the record start still land on a
+  valid record.
+- `flip_faces` reverses corner order and UVs and negates the stored normal in
+  place. The centre is kept. Flipping twice restores the bytes.
+- `write_vertices` writes stored (local) coordinates. The normals of exactly
+  the faces whose slots resolve to the moved vertex are recomputed retail-style:
+  (c−a)×(b−a) in right/forward/up order, length 32765, stored right/up/forward.
+  A face whose stored normal opposed that winding keeps its orientation.
+  Centres move by the change in the corner average rather than being
+  recomputed. About 4% of retail faces, mostly gear, store centres that are not
+  the local average, and this keeps whatever offset the original tool stored.
+  A byte centre that would overflow is refused. `scale_faces` scales corners
+  about their local centroid. `shape_edit::move_vertices` falls back to this
+  writer through `move_model_vertices` when every part frame above the
+  selection is unrotated in the shown model.
+- `append_geometry` (with `add_face`, `add_vertices`, `duplicate_faces` and
+  `extrude_faces`) detours a host face of the same frame. The continuation is
+  `[host copy] [82 new vertices] [faces] [E2 switch and restore] [48 back]`,
+  placed before the end marker through `shape_layout`. Every existing corner
+  must resolve at the host to the buffer it named, in the host's frame. With
+  no host given, one is picked from that frame's faces, preferring those that
+  share the most slots. Index width (u16 above slot 255), byte or word centre
+  and UV width are chosen automatically. New faces are lit flat 0x63 by default.
+  Per-vertex shaded content (0x80) is refused or mapped to 0x63/0x6C, because
+  new slots carry no F6 records. A textured face drawn under another texture
+  gets an E2 switch, then the host's own selector record restores the state.
+  An unknown host material is refused. Extrude keeps, flips or removes the
+  originals, winds side quads outward against the face normal, and skips edges
+  parallel to the offset.
+- New vertices take the first run of slots that no 82 writes and no face
+  references, below `SLOT_CEILING` = 640, the highest slot count of any retail
+  FA_2.LIB shape (CITY2.SH). Slots are contiguous from 0 in retail aircraft, so
+  in practice this means the slots after the last one in use.
+
+Limits fail with explicit messages. These include CODE virtual-address room,
+relocation-table room, the ±32 KiB `48` reach from the host to the
+continuation, and the slot ceiling. A module without the native end
+marker/import tail is also refused, because its trailing end object would
+absorb the continuation and no whole-CODE reader would see it. In-place
+edits have none of these limits.
+
+Read-only: F6 vertex records (gouraud vertex normals are not recomputed),
+faces never drawn, Mixed-frame hosts, rotated part frames for model-space
+moves (callers pass local coordinates instead), any face with internal
+pointers, and record growth in place. Draw order of appended faces follows
+the host; BSP placement of new faces is not recomputed.
+
+## Part settings catalog (0.9)
+
+`shape_parts::parts` lists every stub-driven part. Toggles are 12/6E/C4/C6
+calls drawn under conditions; transforms are laws stored into a C4/C6. Each
+part has a semantic name, its conditions, pivot, block and controls.
+`apply_part_setting` changes one field in place at the same size. It then
+re-parses the inventory and requires the stub to be recognised still, with
+the same instruction boundaries and kinds (a jcc keeps its class), and the
+binding to report the new value. Bindings of other stubs must not change.
+Stubs the evaluator does not fully understand are locked, as are variables
+outside the reviewed list (`_PLdead`, `_PLstate`, `_currentTicks` and others).
+
+| Control | Field | Allowed | Evidence |
+|---|---|---|---|
+| Gate compare | imm8 of `66 83 3D <var> imm8` | gearDown 0/1/4, flaps −2..1, rudder −1/0/1, brake, hook, afterBurner and bayOpen 0/1 | values observed per variable in the FA_2.LIB census; vtOn and slats show one value and stay fixed |
+| Branch sense | `74`/`75` after that compare | je or jne | same 2-byte form; both senses occur in retail. Ranged branches (`7C`, `7D`, `7F`) stay fixed |
+| Shift | imm8 of `66 C1 F8/F9 n` | 1–3; swing-wing terms 1–7 | C1 forms with 2 and 3 occur for gear |
+| Shift (D1 form) | `66 D1 F8` | read-only (1) | 2 or 3 would need the 4-byte C1 form |
+| Direction | `66 F7 D8` present or absent | read-only | adding or removing NEG changes size; no same-size substitute is in the census |
+| Rotation axis | disp8 of `66 89 43 d` | +6 r0 yaw, +8 r1 pitch, +0A r2 roll | gear uses +8 and +0A, swing wings +6; two stores of one stub may not share an axis |
+| Pivot | C4/C6 translation words | any i16 | refused when any stub stores into them or an unrecognised stub addresses them |
+
+Naming heuristic. The role comes from the law variable (gearPos, swingWing,
+canardPos, bayDoorPos, vtAngle) or else the gate variable (left/right flap,
+rudder, brake, hook, bayOpen, gearDown mesh, afterburner, vtOn, slats). The
+side comes from the variable for flaps, else from the pivot's right coordinate
+(below −1 left, above 1 right), else from the centroid of a toggled block's
+first vertex buffer. The gear transforms farthest from the centreline are the
+main legs. Gear pivots more than halfway from them towards the most forward
+gear pivot are named nose gear; this also names the A-10's offset nose leg.
+Gear doors and legs driven by the same variables are not told apart and are
+numbered. Toggle names carry the gate value ("Flap left (state -1)"), because
+the meaning of each retail state is not verified.
+
+Out of scope: authoring new stubs or adding template stubs to shapes without
+them, new imports, and changing law structure (direction, the D1 shift).
 
 ## Texture originals boundary
 
