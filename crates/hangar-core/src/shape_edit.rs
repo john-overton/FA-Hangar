@@ -111,7 +111,7 @@ fn code(source: &[u8]) -> Result<Code> {
         section_alignment,
     })
 }
-fn ensure_face_not_relocated(source: &[u8], start: usize, end: usize) -> Result<()> {
+pub(crate) fn ensure_face_not_relocated(source: &[u8], start: usize, end: usize) -> Result<()> {
     let p = u32_at(source, 60)?;
     let count = u16_at(source, p + 6)?;
     let table = p + 24 + u16_at(source, p + 20)?;
@@ -167,7 +167,7 @@ fn ensure_face_not_relocated(source: &[u8], start: usize, end: usize) -> Result<
     }
     Ok(())
 }
-fn jump(from: usize, to: usize) -> Result<[u8; 4]> {
+pub(crate) fn jump(from: usize, to: usize) -> Result<[u8; 4]> {
     let d = to as i64 - from as i64 - 4;
     let d = i16::try_from(d)
         .map_err(|_| invalid("Panel continuation exceeds the 16-bit SH jump reach"))?;
@@ -198,6 +198,91 @@ fn raw_picture(size: usize, color: u8, palette: &[[u8; 3]; 256]) -> Result<Vec<u
         }
     }
     crate::picture::Pic::parse(&out)?;
+    Ok(out)
+}
+/// CODE offset at which `append_continuation` places an extension: the end
+/// marker when the module has the native tail, otherwise the end of CODE.
+pub(crate) fn continuation_start(source: &[u8]) -> Result<usize> {
+    let code = code(source)?;
+    if repair_panel_layout(source)?.is_some() {
+        return Err(invalid(
+            "Repair the legacy generated-panel layout before adding geometry",
+        ));
+    }
+    Ok(layout::tail(source, &code)?.map_or(code.len, |t| t.start))
+}
+/// Replace a record at `[at, end)` of a CODE payload with a relative jump to
+/// `to`, 0x1E padding and, for records of 8 bytes or more, a closing jump to
+/// `end`, so readers that walk the dead bytes keep later record boundaries.
+pub(crate) fn stub_out(payload: &mut [u8], at: usize, end: usize, to: usize) -> Result<()> {
+    if end < at + 4 || end > payload.len() {
+        return Err(invalid("Record too short for a jump stub"));
+    }
+    payload[at..end].fill(0x1e);
+    payload[at..at + 4].copy_from_slice(&jump(at, to)?);
+    if end - at >= 8 {
+        payload[end - 4..end].copy_from_slice(&jump(end - 4, end)?);
+    }
+    Ok(())
+}
+/// Install an edited CODE payload (same length as CODE) plus an extension that
+/// was built to start at `continuation_start`. Body RVAs stay fixed; with the
+/// native tail the end marker and import stubs move and relocations follow.
+pub(crate) fn append_continuation(
+    source: &[u8],
+    mut payload: Vec<u8>,
+    extension: Vec<u8>,
+) -> Result<Vec<u8>> {
+    let code = code(source)?;
+    if payload.len() != code.len {
+        return Err(invalid("Edited CODE payload changed size"));
+    }
+    let new_len = code.len + extension.len();
+    if new_len > code.limit {
+        return Err(invalid(
+            "CODE has no virtual-address room for this continuation; relocation support is required",
+        ));
+    }
+    let out = if let Some(tail) = layout::tail(source, &code)? {
+        layout::append_before_tail(source, payload, extension, tail)?
+    } else {
+        payload.extend(extension);
+        let mut out = source.to_vec();
+        if new_len <= code.raw_size
+            && source[code.start + code.len..code.start + new_len]
+                .iter()
+                .all(|b| *b == 0)
+        {
+            out[code.start..code.start + new_len].copy_from_slice(&payload);
+        } else {
+            let new_start = align(out.len(), code.alignment)?;
+            out.resize(new_start, 0);
+            out.extend(&payload);
+            let raw = align(new_len, code.alignment)?;
+            out.resize(new_start + raw, 0);
+            put32(&mut out, code.header + 20, new_start)?;
+            put32(&mut out, code.header + 16, raw)?;
+            if code.optional_size >= 64 {
+                let old = u32_at(source, code.optional + 4)?;
+                put32(
+                    &mut out,
+                    code.optional + 4,
+                    old.saturating_sub(code.raw_size) + raw,
+                )?;
+            }
+        }
+        put32(&mut out, code.header + 8, new_len)?;
+        if code.optional_size >= 68 {
+            let image = u32_at(source, code.optional + 56)?
+                .max(align(code.rva + new_len, code.section_alignment)?);
+            put32(&mut out, code.optional + 56, image)?;
+            put32(&mut out, code.optional + 64, 0)?;
+        }
+        out
+    };
+    if out.len() > crate::archive::RESOURCE_LIMIT {
+        return Err(invalid("Expanded shape exceeds resource limit"));
+    }
     Ok(out)
 }
 /// Paintable flat-color face -> private PIC and UVs. The old face site becomes
@@ -280,8 +365,7 @@ pub fn texture_panel(
     let mut extension = vec![0xe2, 0];
     extension.extend(name.as_bytes());
     extension.resize(16, 0);
-    let tail = layout::tail(source, &code)?;
-    let extension_start = tail.map_or(code.len, |t| t.start);
+    let extension_start = continuation_start(source)?;
     let new_face = extension_start + 16;
     extension.extend(record);
     if face.material_selector.is_empty() {
@@ -290,65 +374,12 @@ pub fn texture_panel(
         extension.extend(&face.material_selector);
     }
     extension.extend(jump(extension_start + extension.len(), successor)?);
-    let new_len = code.len + extension.len();
-    if new_len > code.limit {
-        return Err(invalid(
-            "CODE has no virtual-address room for this panel; relocation support is required",
-        ));
-    }
     let mut payload = source[code.start..code.start + code.len].to_vec();
     // The original polygon was copied into the continuation. Replace its dead
     // bytes with valid padding so whole-module readers keep later boundaries.
-    if successor - local < 8 {
-        return Err(invalid("Face too short for a continuation stub"));
-    }
-    payload[local..successor].fill(0x1e);
-    payload[local..local + 4].copy_from_slice(&jump(local, extension_start)?);
-    payload[successor - 4..successor].copy_from_slice(&jump(successor - 4, successor)?);
-    let (out, new_start) = if let Some(tail) = tail {
-        let out = layout::append_before_tail(source, payload, extension, tail)?;
-        let start = self::code(&out)?.start;
-        (out, start)
-    } else {
-        payload.extend(extension);
-        let mut out = source.to_vec();
-        let new_start;
-        if new_len <= code.raw_size
-            && source[code.start + code.len..code.start + new_len]
-                .iter()
-                .all(|b| *b == 0)
-        {
-            new_start = code.start;
-            out[new_start..new_start + new_len].copy_from_slice(&payload);
-        } else {
-            new_start = align(out.len(), code.alignment)?;
-            out.resize(new_start, 0);
-            out.extend(&payload);
-            let raw = align(new_len, code.alignment)?;
-            out.resize(new_start + raw, 0);
-            put32(&mut out, code.header + 20, new_start)?;
-            put32(&mut out, code.header + 16, raw)?;
-            if code.optional_size >= 64 {
-                let old = u32_at(source, code.optional + 4)?;
-                put32(
-                    &mut out,
-                    code.optional + 4,
-                    old.saturating_sub(code.raw_size) + raw,
-                )?;
-            }
-        }
-        put32(&mut out, code.header + 8, new_len)?;
-        if code.optional_size >= 68 {
-            let image = u32_at(source, code.optional + 56)?
-                .max(align(code.rva + new_len, code.section_alignment)?);
-            put32(&mut out, code.optional + 56, image)?;
-            put32(&mut out, code.optional + 64, 0)?;
-        }
-        (out, new_start)
-    };
-    if out.len() > crate::archive::RESOURCE_LIMIT {
-        return Err(invalid("Expanded shape exceeds resource limit"));
-    }
+    stub_out(&mut payload, local, successor, extension_start)?;
+    let out = append_continuation(source, payload, extension)?;
+    let new_start = self::code(&out)?.start;
     let checked = Model::parse(&out)?;
     if checked.vertices.iter().map(|v| v.point).collect::<Vec<_>>()
         != original
@@ -387,10 +418,13 @@ pub fn repair_panel_layout(source: &[u8]) -> Result<Option<PanelRepair>> {
     layout::repair(source).map(|r| r.map(|(shape, panels)| PanelRepair { shape, panels }))
 }
 /// Safe selected-vertex edits on the understood spatial-record-free subset.
+/// Shapes outside the whole-shape writable subset go through the region
+/// writer (`shape_geometry::move_model_vertices`), which proves each moved
+/// vertex's faces and writes part vertices in their local frame.
 pub fn move_vertices(source: &[u8], selected: &[usize], delta: [i32; 3]) -> Result<Vec<u8>> {
     let mut model = Model::parse(source)?;
     if !model.writable {
-        return Err(model.reason.clone());
+        return crate::shape_geometry::move_model_vertices(source, &model, selected, delta);
     }
     let mut offsets = BTreeSet::new();
     for i in selected {
