@@ -102,6 +102,10 @@ pub(super) enum Action {
     DecalPlace,
     DecalCancel,
     DecalApply,
+    /// Press on a NumberField: starts a scrub (handled in `App::pointer`).
+    Number(widgets::NumberTarget),
+    /// NumberField hover arrow: step down (-1) or up (+1).
+    NumberStep(widgets::NumberTarget, i32),
 }
 pub(super) struct Hit {
     pub(super) rect: [i32; 4],
@@ -116,7 +120,14 @@ impl Hit {
     }
 }
 pub(super) struct Layout {
-    mouse: [i32; 2],
+    /// Pointer for hover; `i32::MIN` while a menu or dialog covers the editors.
+    pub(super) mouse: [i32; 2],
+    /// Left button held: hovered buttons draw pressed.
+    pub(super) pressed: bool,
+    /// Window size, for clamping menus.
+    pub(super) size: [i32; 2],
+    /// The NumberField being scrubbed and its live value.
+    pub(super) scrub: Option<(widgets::NumberTarget, i64)>,
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
 }
@@ -870,6 +881,8 @@ impl App {
                 self.field_scroll = 0;
                 self.mode = Mode::Properties;
             }
+            Action::Number(t) => self.number_press(t, self.mouse[0]),
+            Action::NumberStep(t, direction) => self.number_step(t, direction),
             Action::Apply => self.key(Key::Enter, false, false),
             Action::Cancel => self.key(Key::Escape, false, false),
         }
@@ -1158,6 +1171,9 @@ impl App {
         let covered = self.menu.is_some() || self.prompt.is_some();
         let mut out = Layout {
             mouse: if covered { [i32::MIN; 2] } else { self.mouse },
+            pressed: self.pressed,
+            size: [self.width, self.height],
+            scrub: self.scrub.map(|s| (s.target, s.value)),
             canvas: Canvas {
                 commands: Vec::new(),
             },
@@ -2535,6 +2551,7 @@ impl App {
                 true,
             );
         }
+        self.smoke_widgets();
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();

@@ -145,9 +145,10 @@ pub enum Draw {
     /// Baseline-positioned text in a theme style.
     Text(i32, i32, String, u32, Style),
     Bitmap(i32, i32, usize, usize, Vec<u32>),
-    /// A generated 16px icon at its top-left corner: full pixels in the first
-    /// color, half-coverage edge pixels in the second (icon mixed into ground).
-    Icon(i32, i32, Glyph, u32, u32),
+    /// A generated icon at its top-left corner, 12px when the flag is set and
+    /// 16px otherwise: full pixels in the first color, half-coverage edge
+    /// pixels in the second (the icon color mixed into its ground).
+    Icon(i32, i32, Glyph, bool, u32, u32),
 }
 pub use glyphs::Glyph;
 pub struct Canvas {
@@ -172,8 +173,19 @@ impl Canvas {
     }
     /// Icon `g` at (x, y) in `color` over a `ground` fill (for its edge pixels).
     pub fn icon(&mut self, x: i32, y: i32, g: Glyph, color: Rgb, ground: Rgb) {
+        self.commands.push(Draw::Icon(
+            x,
+            y,
+            g,
+            false,
+            color.0,
+            color.mix(ground, 128).0,
+        ));
+    }
+    /// The 12px (`th-ic-sm`) version of `icon`.
+    pub fn icon_sm(&mut self, x: i32, y: i32, g: Glyph, color: Rgb, ground: Rgb) {
         self.commands
-            .push(Draw::Icon(x, y, g, color.0, color.mix(ground, 128).0));
+            .push(Draw::Icon(x, y, g, true, color.0, color.mix(ground, 128).0));
     }
     pub fn styled(&mut self, x: i32, y: i32, s: &str, color: Rgb, style: Style) {
         self.commands
@@ -212,8 +224,8 @@ impl Canvas {
                         }
                     }
                 }
-                Draw::Icon(x, y, g, full, half) => {
-                    let mask = g.mask();
+                Draw::Icon(x, y, g, small, full, half) => {
+                    let mask = g.mask(*small);
                     for (runs, c) in [(mask.full, full), (mask.half, half)] {
                         for (row, at, len) in runs {
                             s.push_str(&format!(
@@ -310,6 +322,7 @@ enum PromptKind {
     DecalSetting(u8),
     DecalLibrary,
     TransferReview,
+    Number(widgets::NumberTarget),
 }
 struct Prompt {
     kind: PromptKind,
@@ -481,6 +494,11 @@ pub struct App {
     paint_lock: bool,
     context_model: Option<Model>,
     context_entry: Option<usize>,
+    /// Left button held (pressed button faces).
+    pressed: bool,
+    /// Ctrl held, reported by the backend (NumberField snapping).
+    ctrl: bool,
+    scrub: Option<widgets::Scrub>,
 }
 fn extension(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or("")
@@ -621,6 +639,9 @@ impl App {
             paint_lock: false,
             context_model: None,
             context_entry: None,
+            pressed: false,
+            ctrl: false,
+            scrub: None,
         }
     }
     pub fn demo(&mut self) {
@@ -1466,6 +1487,12 @@ impl App {
         Ok(())
     }
     pub fn key(&mut self, key: Key, ctrl: bool, shift: bool) {
+        if self.scrub.is_some() {
+            if matches!(key, Key::Escape) {
+                self.number_cancel();
+            }
+            return;
+        }
         if self.mesh_drag.is_some()
             && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
         {
@@ -1866,6 +1893,7 @@ impl App {
                             r
                         }
                         PromptKind::Transform(_) => self.apply_transform(),
+                        PromptKind::Number(t) => self.number_typed(t, &p.value),
                     };
                     if let Err(e) = r {
                         self.status = format!("Error: {e}");
@@ -1938,6 +1966,7 @@ impl App {
             Key::Up=>{self.select_entry(self.selected.saturating_sub(1));},
             Key::Down=>{self.select_entry(self.selected+1);},
             Key::Enter=>self.edit_field(self.field_selected),
+            Key::Backspace=>{if let Some(t)=self.number_under_mouse(){self.number_reset(t);}},
             Key::Delete=>{let r=self.delete_entry();self.result(r);},
             Key::Escape=>{self.graft_library=None;self.resource_drag=None;},
             Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform, X/Y/Z toggles axis lock | Tab edit mode: G/R/S act on selected vertices, Shift+click extends, A all/none".into(),
@@ -1981,7 +2010,14 @@ impl App {
     /// Mouse button event with the Shift state, which extends vertex selections.
     pub fn pointer(&mut self, x: i32, y: i32, button: u8, down: bool, shift: bool) {
         self.mouse = [x, y];
+        if button == 1 {
+            self.pressed = down;
+        }
         if button == 1 && !down {
+            if self.scrub.is_some() {
+                self.number_release();
+                return;
+            }
             if self.mesh_drag.is_some() {
                 let result = self.finish_mesh_drag();
                 self.result(result);
@@ -2154,6 +2190,10 @@ impl App {
             .rev()
             .find(|h| h.contains(x, y))
             .map(|h| h.action);
+        if let Some(view::Action::Number(t)) = action {
+            self.number_press(t, x);
+            return;
+        }
         if let Some(action) = action {
             self.resource_drag = if x < self.left() {
                 match action {
@@ -2171,6 +2211,11 @@ impl App {
         }
     }
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
+        if self.scrub.is_some() {
+            self.number_motion(x, shift);
+            self.mouse = [x, y];
+            return;
+        }
         if self.mesh_drag.is_some() {
             let result = self.mesh_motion(x, y);
             self.result(result);
@@ -2513,6 +2558,10 @@ fn clip(mut a: [i32; 2], mut b: [i32; 2], r: [i32; 4]) -> Option<([i32; 2], [i32
 
 #[path = "ui_view.rs"]
 mod view;
+// Components not yet adopted by every editor stay available for later passes.
+#[path = "ui_widgets.rs"]
+#[allow(dead_code)]
+mod widgets;
 
 #[path = "ui_browser.rs"]
 mod browser_ui;

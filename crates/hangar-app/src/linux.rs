@@ -331,6 +331,8 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
             XMapWindow(d, w);
         }
         let mut event = [0 as c_long; 24];
+        // Last left press (time ms, x, y) for double-click detection.
+        let mut last_press: (c_ulong, c_int, c_int) = (0, i32::MIN, i32::MIN);
         while !app.quit {
             if capture.is_none() {
                 XNextEvent(d, event.as_mut_ptr().cast());
@@ -372,15 +374,29 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                 }
                 4 | 5 => {
                     let e = &*(event.as_ptr().cast::<XKeyEvent>());
+                    app.modifiers(e.state & 4 != 0);
                     app.motion(e.x, e.y, e.state & 1 != 0);
                     if kind == 4 && (e.keycode == 4 || e.keycode == 5) {
                         app.wheel(if e.keycode == 4 { 1 } else { -1 });
                     } else {
                         app.pointer(e.x, e.y, e.keycode as u8, kind == 4, e.state & 1 != 0);
+                        if kind == 4 && e.keycode == 1 {
+                            let (time, x, y) = last_press;
+                            if e.time.wrapping_sub(time) < 400
+                                && (e.x - x).abs() < 4
+                                && (e.y - y).abs() < 4
+                            {
+                                app.double_click(e.x, e.y);
+                                last_press = (0, i32::MIN, i32::MIN);
+                            } else {
+                                last_press = (e.time, e.x, e.y);
+                            }
+                        }
                     }
                 }
                 6 => {
                     let e = &*(event.as_ptr().cast::<XKeyEvent>());
+                    app.modifiers(e.state & 4 != 0);
                     app.motion(e.x, e.y, e.state & 1 != 0);
                 }
                 22 => {
@@ -413,8 +429,8 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                         XSetForeground(d, gc, color as c_ulong);
                         XDrawLine(d, pix, gc, x, y, a, b);
                     }
-                    Draw::Icon(x, y, g, full, half) => {
-                        let mask = g.mask();
+                    Draw::Icon(x, y, g, small, full, half) => {
+                        let mask = g.mask(small);
                         for (runs, color) in [(mask.full, full), (mask.half, half)] {
                             XSetForeground(d, gc, color as c_ulong);
                             for (row, at, len) in runs {

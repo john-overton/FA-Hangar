@@ -36,13 +36,15 @@ Writes `crates/hangar-app/src/ui_glyphs.rs`, plain const data the app compiles
 in. Needs `rsvg-convert`, ImageMagick `magick` and the Liberation Sans TTFs.
 
 - **Icons.** Every `icons/*.svg` becomes a `Glyph` variant (file stem in
-  CamelCase). Each SVG is rasterized once by `rsvg-convert` at 16 x 16 and its
+  CamelCase). Each SVG is rasterized by `rsvg-convert` at 16 x 16 and its
   alpha (coverage) is thresholded into two run lists of `(row, x, len)`:
   *full* pixels (coverage >= 166/255, about 65%) and *half* pixels (>= 77/255,
   about 30%). The app draws full runs in the icon color and half runs in the
   icon color mixed halfway into the background (`Rgb::mix`), so the 1.5px
   strokes keep their weight while every pixel stays a solid GDI fill. Nothing
-  parses SVG at runtime. To add an icon, draw it on the 16px grid with a 1.5px
+  parses SVG at runtime. Each icon is also rasterized at 12 x 12 for the small
+  `th-ic-sm` size (select, twisty, checkbox and status icons): `Glyph::mask(true)`.
+  To add an icon, draw it on the 16px grid with a 1.5px
   round stroke (see `icons/README.md`), save it as `icons/<name>.svg`, add the
   path to `icons.py` for the previews, and rerun.
 - **Text advances.** Liberation Sans Regular and Bold advance widths for ASCII

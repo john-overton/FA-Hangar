@@ -474,8 +474,8 @@ unsafe fn paint(hwnd: Handle) {
                 );
                 DeleteObject(brush);
             }
-            Draw::Icon(x, y, g, full, half) => {
-                let mask = g.mask();
+            Draw::Icon(x, y, g, small, full, half) => {
+                let mask = g.mask(small);
                 for (runs, c) in [(mask.full, full), (mask.half, half)] {
                     let brush = CreateSolidBrush(color(c));
                     for (row, at, len) in runs {
@@ -620,11 +620,12 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
                 app.key(Key::Char(wp as u8 as char), false, shift);
             }
         }
-        0x201 | 0x202 | 0x204 | 0x205 | 0x207 | 0x208 => {
+        0x201 | 0x202 | 0x203 | 0x204 | 0x205 | 0x207 | 0x208 => {
             let x = lp as u16 as i16 as i32;
             let y = (lp >> 16) as u16 as i16 as i32;
+            app.modifiers(ctrl);
             let (button, down) = match msg {
-                0x201 => (1, true),
+                0x201 | 0x203 => (1, true),
                 0x202 => (1, false),
                 0x204 => (3, true),
                 0x205 => (3, false),
@@ -632,18 +633,25 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
                 _ => (2, false),
             };
             app.pointer(x, y, button, down, shift);
+            // With CS_DBLCLKS the second press arrives as WM_LBUTTONDBLCLK.
+            if msg == 0x203 {
+                app.double_click(x, y);
+            }
         }
-        0x200 => app.motion(
-            lp as u16 as i16 as i32,
-            (lp >> 16) as u16 as i16 as i32,
-            shift,
-        ),
+        0x200 => {
+            app.modifiers(ctrl);
+            app.motion(
+                lp as u16 as i16 as i32,
+                (lp >> 16) as u16 as i16 as i32,
+                shift,
+            )
+        }
         0x20a => app.wheel((wp >> 16) as u16 as i16 as i32 / 120),
         _ => return DefWindowProcA(hwnd, msg, wp, lp),
     }
     let quit = app.quit;
     // Capture can reenter the window procedure; the editor borrow ends above.
-    if msg == 0x207 || msg == 0x201 {
+    if msg == 0x207 || msg == 0x201 || msg == 0x203 {
         SetCapture(hwnd);
     }
     if msg == 0x208 || msg == 0x202 {
@@ -695,7 +703,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
         APP = Box::into_raw(app);
         let instance = GetModuleHandleA(ptr::null());
         let class = WndClass {
-            style: 3,
+            // CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS
+            style: 3 | 8,
             proc: Some(wndproc),
             cls_extra: 0,
             wnd_extra: 0,
@@ -826,9 +835,42 @@ extern "C" fn hangar_sdiv(a: i64, b: i64) -> i64 {
         q as i64
     }
 }
+#[cfg(target_arch = "x86")]
+#[no_mangle]
+extern "C" fn hangar_urem(a: u64, b: u64) -> u64 {
+    a.wrapping_sub(unsigned_divide(a, b).wrapping_mul(b))
+}
+#[cfg(target_arch = "x86")]
+#[no_mangle]
+extern "C" fn hangar_srem(a: i64, b: i64) -> i64 {
+    let r = hangar_urem(a.unsigned_abs(), b.unsigned_abs()) as i64;
+    if a < 0 {
+        r.wrapping_neg()
+    } else {
+        r
+    }
+}
 // MSVC's x86 64-bit divide helpers pop their arguments, unlike a C function.
 #[cfg(target_arch = "x86")]
 core::arch::global_asm!(
+    ".global __allrem",
+    "__allrem:",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "call _hangar_srem",
+    "add esp, 16",
+    "ret 16",
+    ".global __aullrem",
+    "__aullrem:",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "push dword ptr [esp + 16]",
+    "call _hangar_urem",
+    "add esp, 16",
+    "ret 16",
     ".global __alldiv",
     "__alldiv:",
     "push dword ptr [esp + 16]",
