@@ -529,6 +529,18 @@ impl App {
             MODES[d_mode(mode)].to_ascii_lowercase(),
             describe(&before)
         );
+        // Assign creates no PIC; warn when the chosen one is not an FA texture.
+        if let Some(Err(why)) = self
+            .doc
+            .archive
+            .find(&name)
+            .and_then(|i| self.doc.archive.entries[i].read().ok())
+            .map(|b| picture::retail_texture_check(&b))
+        {
+            self.status += &format!(
+                " {name} is not an FA texture ({why}); FA would crash drawing it. Package \u{b7} Repair textures for FA converts it."
+            );
+        }
         Ok(())
     }
     /// The Assign texture dialog: filter, PIC list, UV mode and plane.
@@ -1617,6 +1629,13 @@ impl App {
         let apply = a.smoke_find(&|x| matches!(x, Action::Apply));
         a.chrome_click(apply);
         assert!(a.prompt.is_none(), "{}", a.status);
+        // WIDE.PIC is 64 wide with a palette: the status says FA cannot draw it.
+        assert!(
+            a.status
+                .contains("WIDE.PIC is not an FA texture (64 pixels wide, not 256"),
+            "{}",
+            a.status
+        );
         let o = a.ed.mesh_faces[0];
         assert_eq!(a.smoke_texture_of(o), "WIDE.PIC");
         let face = a
