@@ -28,7 +28,7 @@ pub struct Item {
 pub struct Plan {
     pub items: Vec<Item>,
     pub removals: Vec<String>,
-    removed_before: Vec<Entry>,
+    pub(crate) removed_before: Vec<Entry>,
     pub notes: Vec<String>,
 }
 impl Plan {
@@ -275,7 +275,7 @@ pub fn transfer_from(
     plan.notes.push(if include_dependencies{"Includes observed stored references and reviewed resource conventions; other runtime lookups remain external".into()}else{"Copies only the selected resource; its references remain shared or external".into()});
     Ok(plan)
 }
-fn rewrite(
+pub(crate) fn rewrite(
     name: &str,
     bytes: &[u8],
     map: &BTreeMap<String, String>,

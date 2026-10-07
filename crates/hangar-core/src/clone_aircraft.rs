@@ -23,6 +23,28 @@ pub struct Package {
     pub notes: Vec<String>,
     /// References absent from the document and every searched catalog.
     pub unresolved: Vec<Unresolved>,
+    /// Names the copied resources keep referencing instead of copying.
+    pub shared: Vec<String>,
+}
+/// Short and long display names written into recognized identity blocks.
+#[derive(Clone, Copy, Debug)]
+pub struct Names<'a> {
+    pub short: &'a str,
+    pub long: &'a str,
+}
+impl<'a> From<&'a str> for Names<'a> {
+    /// One title for both names, as the single-title CLI form writes it.
+    fn from(title: &'a str) -> Self {
+        Self {
+            short: title,
+            long: title,
+        }
+    }
+}
+impl<'a> From<&'a String> for Names<'a> {
+    fn from(title: &'a String) -> Self {
+        title.as_str().into()
+    }
 }
 /// How the export treats one name that no searched LIB provides.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,11 +257,11 @@ fn generated(old: &str, id: &str, limit: usize, used: &BTreeSet<String>) -> Resu
 
 /// Sources are in priority order: current document first. All source filenames
 /// are reserved so the generated library cannot override any scanned resource.
-pub fn build(
+pub fn build<'a>(
     sources: &[&Archive],
     donor: &str,
     id: &str,
-    title: &str,
+    title: impl Into<Names<'a>>,
     policy: &Policy,
 ) -> Result<Package> {
     let mut catalog = BTreeSet::new();
@@ -278,30 +300,92 @@ fn refusal(found: &[Unresolved]) -> String {
         if one { "it" } else { "them" },
     )
 }
-pub fn build_with(
+pub fn build_with<'a>(
     catalog: &BTreeSet<String>,
     donor: &str,
     id: &str,
-    title: &str,
+    names: impl Into<Names<'a>>,
     policy: &Policy,
-    mut read: impl FnMut(&str) -> Result<Vec<u8>>,
+    read: impl FnMut(&str) -> Result<Vec<u8>>,
 ) -> Result<Package> {
-    let id = validate_id(id)?;
-    if title.is_empty()
-        || title.len() > 40
-        || !title.is_ascii()
-        || title.contains(['"', ';', '\r', '\n'])
-        || title.bytes().any(|b| b < 32)
-    {
-        return Err(invalid(
-            "Display name must be 1..40 plain ASCII characters without quotes/semicolons",
-        ));
-    }
+    build_sharing(
+        catalog,
+        donor,
+        id,
+        names.into(),
+        policy,
+        &BTreeSet::new(),
+        read,
+    )
+}
+/// The object graph and the roles of its reviewed roots, read without naming
+/// or rewriting anything. Unresolved names are kept.
+#[derive(Debug, Default)]
+pub struct Graph {
+    pub donor: String,
+    /// Every graph resource present in the catalog, the donor included.
+    pub resources: BTreeSet<String>,
+    pub main: Option<String>,
+    pub shadow: Option<String>,
+    /// Damage-family base: `F14` for `F14_S.SH`.
+    pub family: Option<String>,
+    pub hud: Option<String>,
+    /// The HUD is found by the donor's name (null hudName pointer).
+    pub default_hud: bool,
+    pub palette: Option<String>,
+    pub unresolved: Vec<Unresolved>,
+}
+pub fn graph(
+    catalog: &BTreeSet<String>,
+    donor: &str,
+    mut read: impl FnMut(&str) -> Result<Vec<u8>>,
+) -> Result<Graph> {
     let donor = donor.to_ascii_uppercase();
     validate_name(&donor)?;
-    let root_bytes = read(&donor)?;
+    let policy = Policy {
+        keep_unresolved: true,
+        ..Policy::default()
+    };
+    let c = collect(catalog, &donor, &policy, &BTreeSet::new(), &mut read)?;
+    Ok(Graph {
+        resources: c.graph.keys().cloned().collect(),
+        donor,
+        main: c.main,
+        shadow: c.shadow,
+        family: c.family,
+        default_hud: c.default_hud,
+        hud: c.hud,
+        palette: c.palette,
+        unresolved: c.ledger.found,
+    })
+}
+struct Collected {
+    root: Option<Brf>,
+    main: Option<String>,
+    shadow: Option<String>,
+    family: Option<String>,
+    hud: Option<String>,
+    default_hud: bool,
+    palette: Option<String>,
+    graph: BTreeMap<String, Node>,
+    ledger: Ledger,
+    diagnostics: BTreeSet<String>,
+    /// Shared names the collected resources reference; never traversed.
+    shared: BTreeSet<String>,
+}
+fn collect(
+    catalog: &BTreeSet<String>,
+    donor: &str,
+    policy: &Policy,
+    share: &BTreeSet<String>,
+    read: &mut impl FnMut(&str) -> Result<Vec<u8>>,
+) -> Result<Collected> {
+    if share.contains(donor) {
+        return Err(invalid("The selected object itself is always copied"));
+    }
+    let root_bytes = read(donor)?;
     let root = if root_bytes.starts_with(b"[brent's_relocatable_format]") {
-        Some(Brf::parse(&root_bytes, ext(&donor))?)
+        Some(Brf::parse(&root_bytes, ext(donor))?)
     } else {
         None
     };
@@ -315,7 +399,7 @@ pub fn build_with(
     };
     let main = optional_reference("object.shape")?;
     let shadow = optional_reference("object.shadowShape")?;
-    let family = if ext(&donor) == "PT" {
+    let family = if ext(donor) == "PT" {
         Some(
             shadow
                 .as_deref()
@@ -332,32 +416,48 @@ pub fn build_with(
         ));
     }
     let mut ledger = Ledger::default();
+    let mut shared = BTreeSet::new();
     // Stored root names absent everywhere are classified with the donor's references.
-    let mut roots = vec![donor.clone()];
+    let mut roots = vec![donor.to_string()];
+    let mut root_name = |name: &String, roots: &mut Vec<String>| {
+        if share.contains(name) {
+            shared.insert(name.clone());
+        } else {
+            roots.push(name.clone());
+        }
+    };
     for name in main.iter().chain(&shadow) {
         if catalog.contains(name) {
-            roots.push(name.clone());
+            root_name(name, &mut roots);
         }
     }
     if let Some(family) = &family {
         for suffix in ["A", "B", "C", "D"] {
             let name = format!("{family}_{suffix}.SH");
             if catalog.contains(&name) {
-                roots.push(name);
+                root_name(&name, &mut roots);
             } else {
-                ledger.note(policy, catalog, &donor, &name, Evidence::Convention)?;
+                ledger.note(policy, catalog, donor, &name, Evidence::Convention)?;
             }
         }
     }
-    let hud = optional_reference("object.hudName")?.or_else(|| {
-        let n = format!("{}.HUD", stem(&donor));
-        (ext(&donor) == "PT" && catalog.contains(&n)).then_some(n)
+    let explicit_hud = optional_reference("object.hudName")?;
+    let named_hud = explicit_hud.is_none();
+    let hud = explicit_hud.or_else(|| {
+        let n = format!("{}.HUD", stem(donor));
+        (ext(donor) == "PT" && catalog.contains(&n)).then_some(n)
     });
+    let default_hud = named_hud && hud.is_some();
     if let Some(h) = hud.as_ref().filter(|h| catalog.contains(*h)) {
-        roots.push(h.clone());
+        if default_hud && share.contains(h) {
+            return Err(format!(
+                "{h} is found by the aircraft's name; it is always copied"
+            ));
+        }
+        root_name(h, &mut roots);
     }
-    let private_palette = format!("{}.PAL", stem(&donor));
-    let palette = if matches!(ext(&donor), "5K" | "8K" | "11K" | "22K" | "WAV" | "PAL") {
+    let private_palette = format!("{}.PAL", stem(donor));
+    let palette = if matches!(ext(donor), "5K" | "8K" | "11K" | "22K" | "WAV" | "PAL") {
         None
     } else if catalog.contains(&private_palette) {
         Some(private_palette)
@@ -367,8 +467,9 @@ pub fn build_with(
         None
     };
     if let Some(name) = &palette {
-        roots.push(name.clone());
+        root_name(name, &mut roots);
     }
+    let palette = palette.filter(|p| !share.contains(p));
     let mut diagnostics = BTreeSet::new();
     let mut graph = BTreeMap::<String, Node>::new();
     let mut pending = roots;
@@ -400,7 +501,9 @@ pub fn build_with(
                 .map_err(|e| format!("{name}: {e}"))?
         };
         for r in &refs {
-            if catalog.contains(&r.target) {
+            if share.contains(&r.target) {
+                shared.insert(r.target.clone());
+            } else if catalog.contains(&r.target) {
                 pending.push(r.target.clone());
             } else if let Some(new) = ledger.note(policy, catalog, &name, &r.target, r.evidence)? {
                 pending.push(new);
@@ -410,11 +513,59 @@ pub fn build_with(
         if matches!(ext(&name), "JT" | "SEE" | "ECM" | "GAS") {
             let icon = format!("${}.PIC", stem(&name));
             if catalog.contains(&icon) {
+                if share.contains(&icon) {
+                    return Err(format!(
+                        "{icon} follows {name}; copy or share them together"
+                    ));
+                }
                 pending.push(icon);
             }
         }
         graph.insert(name, Node { bytes, refs });
     }
+    Ok(Collected {
+        root,
+        main,
+        shadow,
+        family,
+        hud,
+        default_hud,
+        palette,
+        graph,
+        ledger,
+        diagnostics,
+        shared,
+    })
+}
+/// `build_with`, except that names in `share` are not copied: copied
+/// resources keep their stored references to them, byte for byte. Used to
+/// duplicate an aircraft inside the LIB that already holds the shared names.
+pub fn build_sharing(
+    catalog: &BTreeSet<String>,
+    donor: &str,
+    id: &str,
+    names: Names<'_>,
+    policy: &Policy,
+    share: &BTreeSet<String>,
+    mut read: impl FnMut(&str) -> Result<Vec<u8>>,
+) -> Result<Package> {
+    let id = validate_id(id)?;
+    crate::identity::validate_display("Short name", names.short)?;
+    crate::identity::validate_display("Long name", names.long)?;
+    let donor = donor.to_ascii_uppercase();
+    validate_name(&donor)?;
+    let Collected {
+        root,
+        main,
+        family,
+        hud,
+        palette,
+        mut graph,
+        ledger,
+        mut diagnostics,
+        shared,
+        ..
+    } = collect(catalog, &donor, policy, share, &mut read)?;
     if !ledger.refused.is_empty() {
         return Err(refusal(&ledger.refused));
     }
@@ -434,6 +585,9 @@ pub fn build_with(
     }
     // The copied name a reference is rewritten to; None keeps the stored bytes.
     let effective = |resource: &str, r: &Reference| -> Option<String> {
+        if share.contains(&r.target) {
+            return None;
+        }
         if catalog.contains(&r.target) {
             return Some(r.target.clone());
         }
@@ -636,30 +790,7 @@ pub fn build_with(
     let mut archive = Archive::empty();
     let mut identities = Vec::new();
     if let Some(root) = &root {
-        for pointer in root.fields.iter().filter(|f| {
-            f.kind == "ptr"
-                && (f.label.ends_with(".ot_names")
-                    || f.label.ends_with(".si_names")
-                    || matches!(f.value.as_str(), "ot_names" | "si_names"))
-        }) {
-            let labels: Vec<_> = root
-                .fields
-                .iter()
-                .enumerate()
-                .filter(|(_, f)| f.block == pointer.value && f.kind == "string")
-                .map(|(i, _)| i)
-                .collect();
-            if labels.len() == 3
-                && root
-                    .fields
-                    .iter()
-                    .filter(|f| f.block == pointer.value)
-                    .count()
-                    == 3
-            {
-                identities.push(labels);
-            }
-        }
+        identities = crate::identity::blocks(root);
         if identities.is_empty() {
             diagnostics.insert("Display-name block unrecognized; existing text preserved.".into());
         }
@@ -680,8 +811,8 @@ pub fn build_with(
             }
             if name == donor {
                 for labels in &identities {
-                    edits.insert(labels[0], format!("\"{title}\""));
-                    edits.insert(labels[1], format!("\"{title}\""));
+                    edits.insert(labels[0], format!("\"{}\"", names.short));
+                    edits.insert(labels[1], format!("\"{}\"", names.long));
                     edits.insert(labels[2], format!("\"{id}.{}\"", ext(&donor)));
                 }
             }
@@ -728,7 +859,10 @@ pub fn build_with(
             continue;
         }
         for r in references(&e.name, &bytes, &audit_catalog, &mut BTreeSet::new())? {
-            if !output_catalog.contains(&r.target) && !kept.contains(&r.target) {
+            if !output_catalog.contains(&r.target)
+                && !kept.contains(&r.target)
+                && !shared.contains(&r.target)
+            {
                 return Err(format!(
                     "Output validation: {} still references {}",
                     e.name, r.target
@@ -795,6 +929,7 @@ pub fn build_with(
         id,
         notes,
         unresolved: found,
+        shared: shared.into_iter().collect(),
     })
 }
 
@@ -1243,6 +1378,29 @@ mod object_tests {
             4
         );
         assert_eq!(a.bytes().unwrap(), before);
+        // Separate short and long names land in their own operands of every block.
+        let names = Names {
+            short: "NEW",
+            long: "New missile",
+        };
+        let out = build(&[&a], "OLD.JT", "NEW", names, &Policy::default()).unwrap();
+        let bytes = out.archive.entries[out.archive.find("NEW.JT").unwrap()]
+            .read()
+            .unwrap();
+        let b = Brf::parse(&bytes, "JT").unwrap();
+        let blocks = crate::identity::blocks(&b);
+        assert_eq!(blocks.len(), 2);
+        for [s, l, r] in blocks {
+            assert_eq!(b.fields[s].value, "\"NEW\"");
+            assert_eq!(b.fields[l].value, "\"New missile\"");
+            assert_eq!(b.fields[r].value, "\"NEW.JT\"");
+        }
+        let long = Names {
+            short: "NEW",
+            long: "a;b",
+        };
+        let e = build(&[&a], "OLD.JT", "NEW", long, &Policy::default()).unwrap_err();
+        assert!(e.starts_with("Long name must be"), "{e}");
     }
     #[test]
     fn leaf_and_opaque_resources_export_without_inventing_dependencies() {

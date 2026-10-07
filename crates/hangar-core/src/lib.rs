@@ -17,6 +17,7 @@ pub mod definition;
 pub mod dependencies;
 pub mod document;
 pub mod hardpoints;
+pub mod identity;
 pub mod material;
 pub mod model;
 pub mod originals;
