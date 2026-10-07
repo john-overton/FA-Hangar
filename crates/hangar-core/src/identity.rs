@@ -749,6 +749,10 @@ mod tests {
         add("SHOT.JT", brf(&["SHOT.JT", "SFX.11K"]));
         add("DEMOR.SEE", brf(&["DEMOR.SEE"]));
         add("SFX.11K", b"DEMO.SH\0sample".to_vec());
+        // SH faces draw these: retail textures, as FA needs.
+        let texture = picture::to_retail_texture(&picture::demo(), None)
+            .unwrap()
+            .bytes;
         for n in [
             "DEMO.PIC",
             "DEMO_A.PIC",
@@ -757,9 +761,9 @@ mod tests {
             "$SHOT.PIC",
             "$DEMOR.PIC",
         ] {
-            add(n, picture::demo());
+            add(n, texture.clone());
         }
-        add("DEMO.ORG", picture::demo());
+        add("DEMO.ORG", texture);
         add("PALETTE.PAL", vec![0; 768]);
         add("TWO.PT", pt("TWO", &["SHOT.JT"]));
         add("TWO.SH", textured("SHARED.PIC"));

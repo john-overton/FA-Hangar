@@ -700,6 +700,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             app.smoke_layout();
             app.smoke_media();
             app.smoke_clone();
+            app.smoke_texture_repair();
             crate::saving::smoke();
             app.smoke_save_policy();
             ExitProcess(0);

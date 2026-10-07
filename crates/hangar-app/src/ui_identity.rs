@@ -730,9 +730,15 @@ impl App {
             )
             .unwrap(),
         );
-        for name in ["$SHOT.PIC", "DEMO.ORG"] {
-            a.entries.push(Entry::new(name, picture::demo()).unwrap());
-        }
+        // DEMO.SH draws DEMO.PIC: a retail texture, so Package checks pass.
+        let texture = picture::to_retail_texture(&picture::demo(), None)
+            .unwrap()
+            .bytes;
+        let pic = a.find("DEMO.PIC").unwrap();
+        a.entries[pic] = Entry::new("DEMO.PIC", texture.clone()).unwrap();
+        a.entries
+            .push(Entry::new("$SHOT.PIC", picture::demo()).unwrap());
+        a.entries.push(Entry::new("DEMO.ORG", texture).unwrap());
         self.doc = Document::new(a);
         self.refresh();
         self.select_entry(self.doc.archive.find("DEMO.PT").unwrap());

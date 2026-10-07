@@ -131,11 +131,143 @@ fn export_object(args: &[String]) -> Result<()> {
     );
     Ok(())
 }
+/// PIC header fields that decide whether FA's texture mapper can read it.
+fn texture_header(bytes: &[u8]) -> String {
+    let field = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let kind = bytes
+        .get(..2)
+        .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+    format!(
+        "kind {kind}, {} x {}, row table {}, palette {} B, span size {}",
+        field(2),
+        field(6),
+        if field(38) == 0 {
+            "none".into()
+        } else {
+            format!("@{} ({} B)", field(34), field(38))
+        },
+        field(22),
+        field(30)
+    )
+}
+/// `repair-textures INPUT.LIB NEW_OUTPUT.LIB [PALETTE.PAL|PALETTE_SOURCE.LIB]`:
+/// every PIC a textured SH face draws that is not a retail texture is
+/// rewritten in that layout; no SH changes. The game palette comes from the
+/// input's PALETTE.PAL, else the optional third argument.
+fn repair_textures(args: &[String]) -> Result<()> {
+    use hangar_core::{dependencies::Index, picture, picture::PaletteCheck, validation};
+    let input = argument(args, 1)?;
+    let output = argument(args, 2)?;
+    hangar_core::save::validate_destination(output)?;
+    let mut doc = Document::new(Archive::parse(platform::read(input)?)?);
+    let pal_of = |archive: &Archive| -> Option<Result<[[u8; 3]; 256]>> {
+        let at = archive.find("PALETTE.PAL")?;
+        Some(
+            archive.entries[at]
+                .read()
+                .and_then(|b| picture::palette(&b)),
+        )
+    };
+    let (game, source) = match pal_of(&doc.archive) {
+        Some(p) => (Some(p?), format!("{input} PALETTE.PAL")),
+        None => match args.get(3) {
+            Some(path) => {
+                let bytes = platform::read(path)?;
+                let p = if bytes.starts_with(b"EALIB") {
+                    pal_of(&Archive::parse(bytes)?)
+                        .ok_or_else(|| format!("{path} has no PALETTE.PAL"))??
+                } else {
+                    picture::palette(&bytes)?
+                };
+                (Some(p), path.clone())
+            }
+            None => (None, "none".into()),
+        },
+    };
+    println!("Game palette: {source}");
+    let shapes: Vec<(String, Vec<u8>)> = doc
+        .archive
+        .entries
+        .iter()
+        .filter(|e| e.name.ends_with(".SH"))
+        .map(|e| Ok((e.name.clone(), e.read()?)))
+        .collect::<Result<_>>()?;
+    let before: Vec<(String, String)> = {
+        let mut index = Index::default();
+        index.update(&doc.archive);
+        validation::texture_layout_problems(&doc.archive, &index)
+            .into_iter()
+            .map(|p| (p.pic, p.reason))
+            .collect()
+    };
+    if before.is_empty() {
+        println!("Every texture a textured SH face draws is already in the retail layout; nothing written");
+        return Ok(());
+    }
+    let mut index = Index::default();
+    let repair = validation::repair_textures(&doc.archive, &mut index, game.as_ref())?;
+    let read = |doc: &Document, name: &str| -> Result<Vec<u8>> {
+        doc.archive.entries[doc.archive.find(name).ok_or("Entry missing")?].read()
+    };
+    let old: Vec<(String, Vec<u8>)> = repair
+        .entries
+        .iter()
+        .map(|e| Ok((e.name.clone(), read(&doc, &e.name)?)))
+        .collect::<Result<_>>()?;
+    doc.transaction(repair.entries, &[])?;
+    for (name, bytes) in &old {
+        let new = read(&doc, name)?;
+        println!("{name}");
+        println!("  before: {}", texture_header(bytes));
+        println!("  after:  {}", texture_header(&new));
+    }
+    for (name, check) in &repair.repaired {
+        let note = match check {
+            PaletteCheck::None => "no embedded palette".to_string(),
+            PaletteCheck::Same => "embedded palette equals the game palette; indices kept".into(),
+            PaletteCheck::Remapped(n) => format!(
+                "FLAG: embedded palette differs from the game palette; {n} used indices mapped to the nearest game color"
+            ),
+            PaletteCheck::Unverified => {
+                "FLAG: no game palette given; indices kept unverified".into()
+            }
+        };
+        println!("{name}: {note}");
+    }
+    for (name, why) in &repair.refused {
+        println!("{name}: not repaired: {why}");
+    }
+    for (name, bytes) in &shapes {
+        if read(&doc, name)? != *bytes {
+            return Err(format!("{name} changed; repair stopped"));
+        }
+    }
+    let mut index = Index::default();
+    let left = hangar_core::validation::inspect(&doc, &mut index);
+    let remaining = left
+        .checks
+        .iter()
+        .filter(|c| c.message.starts_with(validation::TEXTURE_LAYOUT_ERROR))
+        .count();
+    platform::write_new(output, &doc.archive.bytes()?)?;
+    println!(
+        "Repaired {} of {} textures ({} stored originals); {} SH entries unchanged; {remaining} texture-layout errors remain; wrote {output}",
+        repair.repaired.len(),
+        before.len(),
+        repair.originals.len(),
+        shapes.len()
+    );
+    Ok(())
+}
 pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]... [--short NAME] [--long NAME]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]...\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  --shape-inventory INPUT.LIB [ENTRY.SH]\n  --shape-pose INPUT.LIB ENTRY.SH [NAME=VALUE...]\n  --stub-census NEW_OUTPUT.txt INPUT.LIB...\n  --geometry-check OUTPUT_DIR INPUT.LIB [ENTRY.SH...]\n  --edit-check INPUT.LIB ENTRY.SH...\n  --face-texture-check INPUT.LIB NEW_OUTPUT.LIB ENTRY.SH...\n  --replace-check INPUT.LIB ENTRY.SH NEW_OUTPUT_DIR\n  --remap-check INPUT.LIB NEW_OUTPUT_DIR ENTRY.SH...\n  --identity-check INPUT.LIB RENAME.PT NEW_ID DUPLICATE.PT DUPLICATE_ID NEW_OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]... [--short NAME] [--long NAME]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]...\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  repair-textures INPUT.LIB NEW_OUTPUT.LIB [PALETTE.PAL|PALETTE_SOURCE.LIB]\n  --texture-repair-check INPUT.LIB ENTRY.SH [PALETTE.PAL|PALETTE_SOURCE.LIB]\n  --shape-inventory INPUT.LIB [ENTRY.SH]\n  --shape-pose INPUT.LIB ENTRY.SH [NAME=VALUE...]\n  --stub-census NEW_OUTPUT.txt INPUT.LIB...\n  --geometry-check OUTPUT_DIR INPUT.LIB [ENTRY.SH...]\n  --edit-check INPUT.LIB ENTRY.SH...\n  --face-texture-check INPUT.LIB NEW_OUTPUT.LIB ENTRY.SH...\n  --replace-check INPUT.LIB ENTRY.SH NEW_OUTPUT_DIR\n  --remap-check INPUT.LIB NEW_OUTPUT_DIR ENTRY.SH...\n  --identity-check INPUT.LIB RENAME.PT NEW_ID DUPLICATE.PT DUPLICATE_ID NEW_OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -163,6 +295,7 @@ pub fn run() -> Result<()> {
             app.smoke_layout();
             app.smoke_media();
             app.smoke_clone();
+            app.smoke_texture_repair();
             crate::saving::smoke();
             app.smoke_save_policy();
             println!("App size: {} bytes",core::mem::size_of::<App>());
@@ -172,6 +305,7 @@ pub fn run() -> Result<()> {
         Some("--shape-pose")=>print!("{}",shape::pose(argument(&args,1)?,argument(&args,2)?,&args[3..])?),
         Some("--geometry-check")=>print!("{}",shape::geometry_check(argument(&args,1)?,argument(&args,2)?,&args[3..])?),
         Some("--shape-inventory")=>print!("{}",shape::inventory(argument(&args,1)?,args.get(2).map(String::as_str))?),
+        Some("--texture-repair-check")=>{app.open(argument(&args,1)?)?;print!("{}",app.check_texture_repair(argument(&args,2)?,args.get(3).map(String::as_str))?);},
         Some("--repair-check")=>{
             app.open(argument(&args,1)?)?;
             let at=app.doc.archive.find(argument(&args,2)?).ok_or("SH not found")?;
@@ -179,6 +313,7 @@ pub fn run() -> Result<()> {
             app.check_panel_repair()?;
             println!("PASS: repair preserves rendered pixels; one undo restores the exact archive; redo restores the repaired SH");
         },
+        Some("repair-textures")=>repair_textures(&args)?,
         Some("repair-panels")=>{
             let mut doc=Document::new(Archive::parse(platform::read(argument(&args,1)?)?)?);
             let name=argument(&args,2)?;

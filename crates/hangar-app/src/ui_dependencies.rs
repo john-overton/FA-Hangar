@@ -73,6 +73,150 @@ impl App {
         let providers = self.dependency_providers();
         hangar_core::validation::inspect_with(&self.doc, &mut self.dependencies, &providers)
     }
+    /// Package errors for textures FA's texture mapper cannot read.
+    pub(super) fn texture_layout_errors(&self) -> usize {
+        self.validation.as_ref().map_or(0, |r| {
+            r.checks
+                .iter()
+                .filter(|c| {
+                    c.message
+                        .starts_with(hangar_core::validation::TEXTURE_LAYOUT_ERROR)
+                })
+                .count()
+        })
+    }
+    /// Repair textures for FA: every PIC a textured SH face draws that is not
+    /// a retail texture (and its stored original) is rewritten in that layout
+    /// in one undo step. No SH changes; texels keep their UVs. The loaded base
+    /// PAL is the game palette the embedded palette is compared with.
+    pub(super) fn repair_fa_textures(&mut self) -> Result<()> {
+        use hangar_core::picture::PaletteCheck;
+        self.finish_stroke();
+        let game = self.palette_loaded.then_some(&*self.base_palette);
+        let mut index = hangar_core::dependencies::Index::default();
+        let repair = hangar_core::validation::repair_textures(&self.doc.archive, &mut index, game)?;
+        let refused = repair
+            .refused
+            .iter()
+            .map(|(n, why)| format!("{n}: {why}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        if repair.entries.is_empty() {
+            self.status = if refused.is_empty() {
+                "Every texture SH faces draw is already in the FA layout. Nothing changed.".into()
+            } else {
+                format!("Nothing repaired. {refused}")
+            };
+            return Ok(());
+        }
+        let selected = self.name().to_string();
+        let context = self.context_name();
+        self.doc.transaction(repair.entries, &[])?;
+        self.reselect(&selected, context);
+        let mut notes = Vec::new();
+        let remapped: Vec<_> = repair
+            .repaired
+            .iter()
+            .filter_map(|(n, c)| matches!(c, PaletteCheck::Remapped(_)).then_some(n.as_str()))
+            .collect();
+        if !remapped.is_empty() {
+            notes.push(format!(
+                "Embedded palette differed from the base PAL in {}; colors mapped to the nearest base color",
+                remapped.join(", ")
+            ));
+        }
+        if repair
+            .repaired
+            .iter()
+            .any(|(_, c)| *c == PaletteCheck::Unverified)
+        {
+            notes.push("No base PAL loaded: palette indices kept unverified".into());
+        }
+        if !repair.originals.is_empty() {
+            notes.push(format!("{} converted too", repair.originals.join(", ")));
+        }
+        if !refused.is_empty() {
+            notes.push(format!("Not repaired: {refused}"));
+        }
+        let n = repair.repaired.len();
+        self.status = format!(
+            "Repaired {} for FA: 256 wide, row table, no palette; no SH changed. One undo step.{}",
+            view::count(n, "texture", "textures"),
+            notes.iter().map(|s| format!(" {s}.")).collect::<String>()
+        );
+        if self.validation.is_some() {
+            self.validation = Some(self.package_report());
+            self.validation_scroll = 0;
+        }
+        Ok(())
+    }
+    /// `--texture-repair-check`: Repair textures for FA on a real LIB keeps
+    /// every SH byte and the textured viewport pixels of `shape`, leaves no
+    /// texture-layout error, and undoes and redoes as one step.
+    #[cfg(not(windows))]
+    pub fn check_texture_repair(&mut self, shape: &str, palette: Option<&str>) -> Result<String> {
+        if let Some(path) = palette {
+            self.perform_file(FileAction::Palette, path)?;
+        }
+        let at = self.doc.archive.find(shape).ok_or("SH not found")?;
+        self.select_entry(at);
+        self.mode = Mode::Model;
+        self.textured = true;
+        self.perspective = false;
+        let images = |app: &App| {
+            app.draw()
+                .commands
+                .into_iter()
+                .filter_map(|d| match d {
+                    Draw::Bitmap(_, _, _, _, p) => Some(p),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let before = self.doc.archive.bytes()?;
+        let shapes: Vec<_> = self
+            .doc
+            .archive
+            .entries
+            .iter()
+            .filter(|e| e.name.ends_with(".SH"))
+            .map(|e| (e.name.clone(), e.read()))
+            .collect();
+        let pixels = images(self);
+        self.validation = Some(self.package_report());
+        let errors = self.texture_layout_errors();
+        let mut out = format!("{errors} texture-layout errors before repair\n");
+        self.repair_fa_textures()?;
+        out.push_str(&format!("{}\n", self.status));
+        if !self.doc.dirty() {
+            return Err("Repair changed nothing".into());
+        }
+        for (name, bytes) in &shapes {
+            let at = self.doc.archive.find(name).ok_or("SH missing")?;
+            if self.doc.archive.entries[at].read() != *bytes {
+                return Err(format!("Repair changed {name}"));
+            }
+        }
+        if self.texture_layout_errors() != 0 {
+            return Err("Texture-layout errors remain after repair".into());
+        }
+        let after = images(self);
+        if after.is_empty() || after != pixels {
+            return Err("Repair changed textured viewport pixels".into());
+        }
+        out.push_str("PASS textured viewport pixels unchanged; every SH byte unchanged\n");
+        let repaired = self.doc.archive.bytes()?;
+        self.act(Action::Undo);
+        if self.doc.archive.bytes()? != before {
+            return Err("Undo did not restore the archive".into());
+        }
+        self.act(Action::Redo);
+        if self.doc.archive.bytes()? != repaired {
+            return Err("Redo differs".into());
+        }
+        out.push_str("PASS one undo step restores the archive; redo restores the repair\n");
+        Ok(out)
+    }
 
     pub(super) fn reference_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
@@ -580,6 +724,10 @@ impl App {
         {
             buttons.insert(0, ("Remove stored originals", Action::RemoveOriginals));
         }
+        // Shown while the last checks found textures FA's mapper would crash on.
+        if self.texture_layout_errors() > 0 {
+            buttons.insert(0, ("Repair textures for FA", Action::RepairTextures));
+        }
         let pitch = m::BUTTON_H + space::SPACE_1;
         let package_y = bottom - space::SPACE_2 - m::BUTTON_H;
         let mut by = package_y - space::SPACE_3 - buttons.len() as i32 * pitch;
@@ -596,6 +744,104 @@ impl App {
 }
 
 impl App {
+    /// Package checks flag the demo's legacy DEMO.PIC (32 wide, palette, no
+    /// row table) as a texture FA would crash on; the Repair textures for FA
+    /// button rewrites it with the textured viewport and every SH unchanged,
+    /// as one undo step.
+    pub fn smoke_texture_repair(&mut self) {
+        let press = |a: &mut App, want: fn(&Action) -> bool| {
+            let hit = a
+                .layout()
+                .hits
+                .into_iter()
+                .find(|h| want(&h.action))
+                .expect("Package control missing");
+            a.click(hit.rect[0] + 4, hit.rect[1] + 4, 1, true);
+        };
+        self.libraries.clear();
+        self.demo();
+        let at = self.doc.archive.find("DEMO.PIC").unwrap();
+        let legacy = self.doc.archive.entries[at].read().unwrap();
+        // The base PAL is the palette the legacy sheet embedded.
+        let game = Pic::parse(&legacy).unwrap().colors(&[[0; 3]; 256]);
+        self.palette_override = Some(Box::new(game));
+        let shape = self.doc.archive.find("DEMO.SH").unwrap();
+        self.select_entry(shape);
+        self.mode = Mode::Model;
+        self.textured = true;
+        self.perspective = false;
+        let images = |app: &App| {
+            app.draw()
+                .commands
+                .into_iter()
+                .filter_map(|d| match d {
+                    Draw::Bitmap(_, _, _, _, p) => Some(p),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let original = self.doc.archive.bytes().unwrap();
+        let sh = self.doc.archive.entries[shape].read().unwrap();
+        for (width, height) in [(800, 600), (1280, 800)] {
+            self.width = width;
+            self.height = height;
+            self.mode = Mode::Model;
+            let pixels = images(self);
+            assert!(!pixels.is_empty());
+            self.mode = Mode::Package;
+            self.validation = None;
+            assert!(!self
+                .layout()
+                .hits
+                .iter()
+                .any(|h| matches!(h.action, Action::RepairTextures)));
+            press(self, |a| matches!(a, Action::Validate));
+            assert_eq!(self.texture_layout_errors(), 1);
+            let report = self.validation.as_ref().unwrap();
+            let error = report
+                .checks
+                .iter()
+                .find(|c| {
+                    c.message
+                        .starts_with(hangar_core::validation::TEXTURE_LAYOUT_ERROR)
+                })
+                .unwrap();
+            assert_eq!(error.entry.as_deref(), Some("DEMO.PIC"));
+            assert!(error.message.contains("32 pixels wide, not 256"));
+            assert!(self
+                .validation_lines()
+                .iter()
+                .any(|r| r.entry == Some(at) && r.detail == "ERROR"));
+            for hit in self.layout().hits {
+                assert!(hit.rect[0] + hit.rect[2] <= width && hit.rect[1] + hit.rect[3] <= height);
+            }
+            press(self, |a| matches!(a, Action::RepairTextures));
+            assert!(
+                self.status.starts_with("Repaired 1 texture for FA"),
+                "{}",
+                self.status
+            );
+            assert_eq!(self.texture_layout_errors(), 0);
+            assert!(!self
+                .layout()
+                .hits
+                .iter()
+                .any(|h| matches!(h.action, Action::RepairTextures)));
+            let at = self.doc.archive.find("DEMO.PIC").unwrap();
+            let fixed = self.doc.archive.entries[at].read().unwrap();
+            assert!(picture::is_retail_texture(&fixed));
+            let shape = self.doc.archive.find("DEMO.SH").unwrap();
+            assert_eq!(self.doc.archive.entries[shape].read().unwrap(), sh);
+            self.mode = Mode::Model;
+            assert_eq!(images(self), pixels, "repair keeps the textured view");
+            self.act(Action::Undo);
+            assert_eq!(self.doc.archive.bytes().unwrap(), original);
+        }
+        self.palette_override = None;
+        self.width = 1280;
+        self.height = 800;
+        self.demo();
+    }
     pub(super) fn smoke_dependencies(&mut self) {
         self.libraries.clear();
         self.demo();

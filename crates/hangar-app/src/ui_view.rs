@@ -116,6 +116,8 @@ pub(super) enum Action {
     PickColor,
     RestoreTexture,
     RemoveOriginals,
+    /// Package: rewrite crashing SH textures in the retail layout.
+    RepairTextures,
     Brush(u8),
     Radius(usize),
     OpenTexture(usize),
@@ -352,6 +354,10 @@ impl App {
             Action::ReplacePickImage => self.replace_pick_image(),
             Action::RestoreTexture => {
                 let result = self.restore_texture();
+                self.result(result);
+            }
+            Action::RepairTextures => {
+                let result = self.repair_fa_textures();
                 self.result(result);
             }
             Action::RemoveOriginals => {
@@ -2993,7 +2999,10 @@ impl App {
         assert!(self.browser_entries().contains(&self.selected));
         click(self, |a| matches!(a, Action::Mode(Mode::Package)));
         click(self, |a| matches!(a, Action::Validate));
-        assert!(self.validation.as_ref().unwrap().errors == 0);
+        // The demo DEMO.PIC keeps its embedded palette: its texture-layout
+        // error is the only one.
+        assert_eq!(self.validation.as_ref().unwrap().errors, 1);
+        assert_eq!(self.texture_layout_errors(), 1);
         self.file_prompt(FileAction::Open);
         click(self, |a| matches!(a, Action::Cancel));
         assert!(self.prompt.is_none());

@@ -172,6 +172,164 @@ fn originals(doc: &Document, report: &mut Report) {
         );
     }
 }
+/// Message prefix of the Package error for a texture FA cannot map.
+pub const TEXTURE_LAYOUT_ERROR: &str = "Would crash FA's texture mapper";
+/// A local PIC that FA's polygon texture mapper would read, but that is not
+/// in the retail texture layout (`picture::is_texture_layout`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextureProblem {
+    pub pic: String,
+    /// The SH entries whose textured faces draw it.
+    pub shapes: Vec<String>,
+    pub reason: String,
+}
+/// Local PICs named by SH texture records (the dependency index confirms E2
+/// operands against the record inventory) that are not in the retail texture
+/// layout and that a textured face of that SH draws. A PIC named only by
+/// other records, such as MOON.SH's sprite, is not read by the texture
+/// mapper; when the SH does not decode, the texture record alone counts.
+/// `index` must be up to date for `archive`.
+pub fn texture_layout_problems(archive: &Archive, index: &Index) -> Vec<TextureProblem> {
+    let mut layouts: alloc::collections::BTreeMap<String, Option<String>> = Default::default();
+    let mut found: alloc::collections::BTreeMap<String, TextureProblem> = Default::default();
+    let mut decoded = 0usize;
+    for e in archive.entries.iter().filter(|e| e.name.ends_with(".SH")) {
+        let Some(scan) = index.get(&e.name) else {
+            continue;
+        };
+        let mut model: Option<Option<Vec<String>>> = None;
+        for link in scan.links.iter().filter(|l| l.evidence == "Texture record") {
+            let Some(at) = archive.find(&link.target) else {
+                continue;
+            };
+            if !link.target.ends_with(".PIC") {
+                continue;
+            }
+            let reason = layouts
+                .entry(link.target.clone())
+                .or_insert_with(|| {
+                    if decoded >= ARCHIVE_LIMIT {
+                        return None;
+                    }
+                    let bytes = archive.entries[at].read().ok()?;
+                    decoded = decoded.saturating_add(bytes.len());
+                    picture::retail_texture_check(&bytes).err()
+                })
+                .clone();
+            let Some(reason) = reason else {
+                continue;
+            };
+            let faces = model.get_or_insert_with(|| textured_faces(e));
+            let drawn = faces.as_ref().is_none_or(|names| {
+                names
+                    .iter()
+                    .any(|n| n.is_empty() || n.eq_ignore_ascii_case(&link.target))
+            });
+            if drawn {
+                found
+                    .entry(link.target.clone())
+                    .or_insert_with(|| TextureProblem {
+                        pic: link.target.clone(),
+                        shapes: Vec::new(),
+                        reason,
+                    })
+                    .shapes
+                    .push(e.name.clone());
+            }
+        }
+    }
+    found.into_values().collect()
+}
+/// Texture names of an SH's textured polygons. When the model reader cannot
+/// decode it, a textured FC record in the record inventory counts as an
+/// unnamed one (empty name: any texture record may feed it); `None` when
+/// neither reader understands the shape.
+fn textured_faces(e: &crate::archive::Entry) -> Option<Vec<String>> {
+    let bytes = e.read().ok()?;
+    if let Ok(m) = Model::parse(&bytes) {
+        return Some(
+            m.faces
+                .iter()
+                .filter(|f| f.sub & 4 != 0)
+                .map(|f| f.texture.clone())
+                .collect(),
+        );
+    }
+    let inventory = crate::shape_code::Inventory::parse(&bytes).ok()?;
+    let textured = inventory.records.iter().any(|r| {
+        r.kind == crate::shape_code::Kind::Sh(0xfc)
+            && bytes
+                .get(inventory.code_start + r.offset + 1)
+                .is_some_and(|sub| sub & 4 != 0)
+    });
+    Some(if textured {
+        vec![String::new()]
+    } else {
+        Vec::new()
+    })
+}
+/// Retail-layout replacements for every `texture_layout_problems` PIC, plus
+/// its stored original (`X.ORG`) when that is not in the layout either, so
+/// Restore texture and the Eraser never bring the crashing layout back. No SH
+/// changes: every texel keeps its (u, v).
+#[derive(Debug, Default)]
+pub struct TextureRepair {
+    pub entries: Vec<crate::archive::Entry>,
+    /// Repaired PICs and what happened to their embedded palette.
+    pub repaired: Vec<(String, picture::PaletteCheck)>,
+    /// Stored originals converted alongside their PIC.
+    pub originals: Vec<String>,
+    /// PICs that cannot keep their UVs in a retail texture, with the reason.
+    pub refused: Vec<(String, String)>,
+}
+pub fn repair_textures(
+    archive: &Archive,
+    index: &mut Index,
+    game: Option<&[[u8; 3]; 256]>,
+) -> Result<TextureRepair> {
+    index.update(archive);
+    let mut out = TextureRepair::default();
+    for problem in texture_layout_problems(archive, index) {
+        let at = archive
+            .find(&problem.pic)
+            .ok_or_else(|| format!("{} is missing", problem.pic))?;
+        let converted = match picture::to_retail_texture(&archive.entries[at].read()?, game) {
+            Ok(c) => c,
+            Err(e) => {
+                out.refused.push((problem.pic, e));
+                continue;
+            }
+        };
+        out.entries
+            .push(crate::archive::Entry::new(&problem.pic, converted.bytes)?);
+        if let Some(org) = crate::originals::backup(archive, &problem.pic) {
+            let bytes = org.read()?;
+            if picture::retail_texture_check(&bytes).is_err() {
+                if let Ok(c) = picture::to_retail_texture(&bytes, game) {
+                    out.entries
+                        .push(crate::archive::Entry::new(&org.name, c.bytes)?);
+                    out.originals.push(org.name.clone());
+                }
+            }
+        }
+        out.repaired.push((problem.pic, converted.palette));
+    }
+    Ok(out)
+}
+/// Package errors for `texture_layout_problems`.
+fn texture_layouts(doc: &Document, index: &Index, report: &mut Report) {
+    for p in texture_layout_problems(&doc.archive, index) {
+        report.add(
+            Level::Error,
+            Some(&p.pic),
+            format!(
+                "{TEXTURE_LAYOUT_ERROR}: {}. Drawn by {}. Repair textures for FA rewrites it as a retail texture (kind 0, 256 wide, row table, no palette); no SH changes",
+                p.reason,
+                p.shapes.join(", ")
+            ),
+        );
+    }
+}
 /// Updates the supplied index. Checks do not modify source data or prohibit
 /// packages which intentionally use external resources.
 pub fn inspect(doc: &Document, index: &mut Index) -> Report {
@@ -322,6 +480,7 @@ pub fn inspect_with(
         None,
         format!("{checked} changed payloads pass supported format checks"),
     );
+    texture_layouts(doc, index, &mut report);
     originals(doc, &mut report);
     report.add(
         Level::Info,
@@ -340,7 +499,7 @@ mod tests {
         let mut archive = Archive::empty();
         archive.entries = vec![
             Entry::new("BODY.SH", model::demo_textured()).unwrap(),
-            Entry::new("DEMO.PIC", picture::demo()).unwrap(),
+            Entry::new("DEMO.PIC", texture()).unwrap(),
         ];
         Document::new(archive)
     }
@@ -383,7 +542,8 @@ mod tests {
             ]
         );
         let report = inspect(&doc, &mut Index::default());
-        assert_eq!(report.errors, 1);
+        // The payload check and the texture mapper check both fail.
+        assert_eq!(report.errors, 2);
         assert!(report.warnings > 0);
         assert!(report
             .checks
@@ -450,6 +610,107 @@ mod tests {
         assert_eq!(report.errors, 2050);
         assert_eq!(report.checks.len(), 2048);
         assert!(report.omitted > 0);
+    }
+    /// DEMO.PIC in the retail texture layout.
+    fn texture() -> Vec<u8> {
+        picture::to_retail_texture(&picture::demo(), None)
+            .unwrap()
+            .bytes
+    }
+    /// An SH whose only texture record names SKY.PIC while every face stays
+    /// flat, like a sprite record's texture.
+    fn sprite_shape() -> Vec<u8> {
+        let original = model::demo_shape();
+        let mut code = vec![0xe2, 0];
+        code.extend(b"SKY.PIC\0\0\0\0\0\0\0");
+        code.extend(&original[256..]);
+        let mut out = original[..256].to_vec();
+        for at in [128, 136] {
+            out[at..at + 4].copy_from_slice(&(code.len() as u32).to_le_bytes());
+        }
+        out.extend(code);
+        out
+    }
+    #[test]
+    fn legacy_textures_are_errors_and_repair_keeps_every_shape() {
+        let legacy = picture::demo();
+        let mut archive = Archive::empty();
+        archive.entries = vec![
+            Entry::new("BODY.SH", model::demo_textured()).unwrap(),
+            Entry::new("DEMO.PIC", legacy.clone()).unwrap(),
+            Entry::new("DEMO.ORG", legacy.clone()).unwrap(),
+            Entry::new("SKY.SH", sprite_shape()).unwrap(),
+            Entry::new("SKY.PIC", legacy.clone()).unwrap(),
+        ];
+        let mut doc = Document::new(archive);
+        let before = doc.archive.bytes().unwrap();
+        let mut index = Index::default();
+        let report = inspect(&doc, &mut index);
+        assert_eq!(report.errors, 1, "{}", text(&doc, &report));
+        let check = report
+            .checks
+            .iter()
+            .find(|c| c.level == Level::Error)
+            .unwrap();
+        assert_eq!(check.entry.as_deref(), Some("DEMO.PIC"));
+        for part in [
+            "Would crash FA's texture mapper",
+            "32 pixels wide, not 256",
+            "no row-offset table",
+            "embedded 768-byte palette",
+            "Drawn by BODY.SH",
+        ] {
+            assert!(check.message.contains(part), "{}", check.message);
+        }
+        // The game palette is the one the legacy sheet embedded.
+        let game = Pic::parse(&legacy).unwrap().colors(&[[0; 3]; 256]);
+        let repair = repair_textures(&doc.archive, &mut index, Some(&game)).unwrap();
+        assert_eq!(
+            repair.repaired,
+            vec![("DEMO.PIC".into(), picture::PaletteCheck::Same)]
+        );
+        assert_eq!(repair.originals, vec![String::from("DEMO.ORG")]);
+        assert!(repair.refused.is_empty());
+        doc.transaction(repair.entries, &[]).unwrap();
+        let report = inspect(&doc, &mut index);
+        assert_eq!(report.errors, 0, "{}", text(&doc, &report));
+        // No SH changed; the texture keeps every texel at its UV.
+        let changed: Vec<_> = doc.changes().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(changed, ["DEMO.ORG", "DEMO.PIC"]);
+        let read = |doc: &Document, name: &str| {
+            doc.archive.entries[doc.archive.find(name).unwrap()]
+                .read()
+                .unwrap()
+        };
+        let pic = read(&doc, "DEMO.PIC");
+        assert!(picture::retail_texture_check(&pic).is_ok());
+        let (old, new) = (Pic::parse(&legacy).unwrap(), Pic::parse(&pic).unwrap());
+        for y in 0..32 {
+            assert_eq!(
+                &new.pixels[y * 256..y * 256 + 32],
+                &old.pixels[y * 32..y * 32 + 32]
+            );
+        }
+        assert!(new.same_layout(&Pic::parse(&read(&doc, "DEMO.ORG")).unwrap()));
+        assert_eq!(read(&doc, "SKY.PIC"), legacy);
+        // Nothing left to repair; one undo restores the archive.
+        let again = repair_textures(&doc.archive, &mut index, Some(&game)).unwrap();
+        assert!(again.entries.is_empty() && again.repaired.is_empty());
+        doc.undo();
+        assert_eq!(doc.archive.bytes().unwrap(), before);
+        // Without a game palette indices are kept and flagged; a PIC wider
+        // than 256 cannot keep its UVs and is refused.
+        let repair = repair_textures(&doc.archive, &mut index, None).unwrap();
+        assert_eq!(repair.repaired[0].1, picture::PaletteCheck::Unverified);
+        let mut wide = vec![0; 64 + 300 * 2];
+        for (at, n) in [(2, 300u32), (6, 2), (10, 64), (14, 600)] {
+            wide[at..at + 4].copy_from_slice(&n.to_le_bytes());
+        }
+        doc.transaction(vec![Entry::new("DEMO.PIC", wide).unwrap()], &[])
+            .unwrap();
+        let repair = repair_textures(&doc.archive, &mut index, None).unwrap();
+        assert!(repair.entries.is_empty());
+        assert!(repair.refused[0].1.contains("300 pixels wide"));
     }
 }
 

@@ -704,6 +704,9 @@ impl App {
             a.entries
                 .push(Entry::new(&format!("DEMO_{suffix}.SH"), model::demo_shape()).unwrap());
         }
+        // A small PIC with an embedded palette, for the palette and paint
+        // fixtures. Not an FA texture: Package checks flag it, and Repair
+        // textures for FA converts it.
         a.entries
             .push(Entry::new("DEMO.PIC", picture::demo()).unwrap());
         let sound: Vec<u8> = (0..5512)
