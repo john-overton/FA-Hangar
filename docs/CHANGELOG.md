@@ -7,6 +7,24 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- The window chrome follows the Gunmetal design system: flat workspace tabs
+  with the active one joined to its editor, menus with keycap shortcuts and no
+  drop shadow, the active LIB with a round dirty dot and a lock for protected
+  names, and a status bar with key hints, `ENTRY · LIB`, the unsaved edit count
+  or saved/validated state.
+- Viewport header: a mode select (Object Mode, Edit Mesh, Hardpoints, Parts,
+  Texture Paint), a View menu, the hardpoint marker toggle and a Wireframe /
+  Solid / Textured control. **Solid** is new: flat face colors lit by their
+  angle to the view. Controls fold into a menu instead of disappearing at
+  800 x 600.
+- The viewport has a floating tool strip, a navigation gizmo that follows the
+  camera (click a cap to view along that axis), an origin-aligned grid with
+  brighter major lines, full-length axis lines and an origin dot.
+- Text uses the design's styles (sizes and weights for labels, titles, hints,
+  values and badges) on Windows, X11 and SVG snapshots; long labels truncate
+  by measured width with an ellipsis. Icons come from the design icon set.
+- Dock tabs are one segmented control in a 28px header; sounds badge as 11K.
+- Clicking outside an open menu closes it without acting on the control below.
 - The first paint, decal, PIC palette edit or Replace entry on an existing
   `X.PIC` keeps its previous entry as `X.ORG` in the same LIB and undo step,
   with exact bytes and compression flag. Not retroactive. See

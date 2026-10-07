@@ -58,11 +58,38 @@ destination for assembling resources.
 
 ### Workspaces
 
-The UI follows the supplied concept: one menu/workspace bar, categorized
-outliner with type icons, linked aircraft/shape selection, grouped source-value
-properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields
-show saved values beside current values, with amber edits and reset controls.
-Windows uses Tahoma for interface labels and Lucida Console for resource data.
+The UI follows the Gunmetal design system in `tore-hangar-design`: one menu
+bar with flat workspace tabs, a categorized outliner with type icons, linked
+aircraft/shape selection, grouped source-value properties, and
+Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields show saved values
+beside current values, with amber edits and reset controls. Windows uses Tahoma
+for interface labels and Lucida Console for resource data, at the design's
+sizes and weights.
+
+- **Menu bar.** File, Edit, Lib, Entry, View, Tools and Help menus list their
+  shortcuts as keycaps. The active workspace tab is filled and joins the editor
+  below. The active LIB name sits at the right with an amber dot while it has
+  unsaved edits and a lock when it is a protected retail name. While a menu is
+  open, clicking outside it only closes it.
+- **Status bar.** Key hints for the current workspace and mode (or the last
+  message), then `ENTRY · LIB` and the save state: the dirty dot with the
+  number of unsaved edits, **Saved**, **Validated** after a passing package
+  check, or the validation error count.
+- **Viewport header.** The mode select switches between **Object Mode**,
+  **Edit Mesh**, **Hardpoints**, **Parts** and **Texture Paint**. **View**
+  holds Frame all, Front, Side, Top and Toggle projection. At the right, the
+  hardpoint marker toggle and the shading control: **Wireframe**, **Solid**
+  (face colors lit by their angle to the view, no textures) and **Textured**.
+  In a narrow viewport the right group folds into one menu button.
+- **Viewport.** The tool strip (Select, Move, Rotate, Scale, Frame, Texture
+  Paint) floats at the top left. The navigation gizmo at the top right follows
+  the camera; click an axis cap to view along it. The grid is aligned to the
+  origin with every fifth line brighter, the X and Y axes run the full grid and
+  the origin is an amber dot.
+- **Number fields** (adopted by editors in a later pass): drag to scrub, Shift
+  for fine steps, Ctrl to snap to ten steps, the hover arrows step once,
+  double-click to type a value, Backspace over the field resets it to the value
+  in the file on disk, Esc during a drag cancels it. A drag is one undo step.
 
 | Workspace | Use |
 | --- | --- |
@@ -524,6 +551,8 @@ resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 | Undo / redo | Ctrl+Z / Ctrl+Shift+Z or Ctrl+Y |
 | Orbit / pan | Middle-drag / Shift+middle-drag |
 | Zoom / frame | Wheel over viewport / Home or period |
+| Shading | Viewport header: Wireframe / Solid / Textured, or View menu |
+| View along an axis | Click an axis cap on the navigation gizmo |
 | Front / side / top / projection | 1 / 3 / 7 / 5, including numpad |
 | Vertex edit mode | Tab; click vertex, Shift+click adds/removes, A all/none, G/R/S on the selection, orthographic drag (X/Y/Z locks an axis) |
 | Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |

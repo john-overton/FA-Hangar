@@ -353,7 +353,7 @@ impl App {
                     view::count(n, "unsaved edit", "unsaved edits")
                 },
                 None,
-                c::INK,
+                c::INK_MUTED,
             )
         } else if let Some(report) = &self.validation {
             if report.errors > 0 {
@@ -932,4 +932,220 @@ pub(super) fn shade(color: u32, light: i32) -> u32 {
     let l = light.clamp(0, 256) as u32;
     let ch = |shift: u32| ((color >> shift & 255) * l / 256) << shift;
     ch(16) | ch(8) | ch(0)
+}
+
+// ---------------------------------------------------------------- smoke test
+
+/// Chrome actions whose hit regions must match what they draw.
+fn chrome_action(a: Action) -> bool {
+    matches!(
+        a,
+        Action::Menu(_)
+            | Action::Mode(_)
+            | Action::Demo
+            | Action::Dock(_)
+            | Action::Shading(_)
+            | Action::HardpointVisibility
+            | Action::SelectTool
+            | Action::Transform(_)
+            | Action::ModelPaint
+            | Action::View(_)
+    )
+}
+impl App {
+    fn chrome_hit(&self, predicate: &dyn Fn(Action) -> bool) -> Option<[i32; 4]> {
+        self.layout()
+            .hits
+            .into_iter()
+            .rev()
+            .find(|h| predicate(h.action))
+            .map(|h| h.rect)
+    }
+    fn chrome_click(&mut self, rect: [i32; 4]) {
+        let (x, y) = (rect[0] + rect[2] / 2, rect[1] + rect[3] / 2);
+        self.motion(x, y, false);
+        self.pointer(x, y, 1, true, false);
+        self.pointer(x, y, 1, false, false);
+    }
+    /// Every chrome hit region is covered by what the control draws when
+    /// hovered (1px notch tolerance), and stays inside the window.
+    fn smoke_chrome_hits(&mut self) {
+        let hits: Vec<[i32; 4]> = self
+            .layout()
+            .hits
+            .into_iter()
+            .filter(|h| chrome_action(h.action) && h.rect[1] < self.dock_y() + m::EDITOR_HEADER_H)
+            .map(|h| h.rect)
+            .collect();
+        assert!(hits.len() > 20, "Chrome controls missing");
+        for [x, y, w, h] in hits {
+            assert!(
+                x >= 0 && y >= 0 && x + w <= self.width && y + h <= self.height,
+                "Chrome control outside the window"
+            );
+            self.mouse = [x + w / 2, y + h / 2];
+            let mut union = [i32::MAX, i32::MAX, i32::MIN, i32::MIN];
+            for d in self.draw().commands {
+                let r = match d {
+                    Draw::Rect(rx, ry, rw, rh, _) => [rx, ry, rx + rw, ry + rh],
+                    _ => continue,
+                };
+                if r[0] >= x - 1 && r[1] >= y - 1 && r[2] <= x + w + 1 && r[3] <= y + h + 1 {
+                    union = [
+                        union[0].min(r[0]),
+                        union[1].min(r[1]),
+                        union[2].max(r[2]),
+                        union[3].max(r[3]),
+                    ];
+                }
+            }
+            assert!(
+                union[0] <= x + 1
+                    && union[1] <= y + 1
+                    && union[2] >= x + w - 1
+                    && union[3] >= y + h - 1,
+                "Hit region {:?} exceeds its drawn control {union:?}",
+                [x, y, w, h]
+            );
+        }
+        self.mouse = [0, 0];
+    }
+    /// Text drawn in the menu bar, editor headers and status bar is never
+    /// cut short at 1280 x 800.
+    fn smoke_chrome_labels(&self) {
+        let l = self.left();
+        let r = self.right();
+        for d in self.draw().commands {
+            if let Draw::Text(x, y, s, _, _) = d {
+                let chrome = y < m::MENUBAR_H
+                    || y > self.height - m::STATUSBAR_H
+                    || (x > l && x < r && y < m::MENUBAR_H + m::EDITOR_HEADER_H)
+                    || (x > l
+                        && x < r
+                        && y > self.dock_y()
+                        && y < self.dock_y() + m::EDITOR_HEADER_H);
+                assert!(
+                    !(chrome && s.contains('\u{2026}')),
+                    "Truncated chrome label {s}"
+                );
+            }
+        }
+    }
+    /// Drive the chrome through its hit regions at 1280 x 800 and 800 x 600.
+    pub fn smoke_chrome(&mut self) {
+        for (w, h) in [(1280, 800), (800, 600)] {
+            self.demo();
+            self.width = w;
+            self.height = h;
+            self.mode = Mode::Model;
+            self.select_entry(0);
+            self.smoke_chrome_hits();
+            if w == 1280 {
+                self.smoke_chrome_labels();
+            }
+            // Menus open from their names, sit inside the window, close on an
+            // outside click without touching what is underneath.
+            for menu in 0..7 {
+                let name = self
+                    .chrome_hit(&|a| matches!(a, Action::Menu(n) if n == menu))
+                    .unwrap();
+                self.chrome_click(name);
+                assert_eq!(self.menu, Some(menu));
+                let [mx, my, mw, mh] = self.open_menu_rect().unwrap();
+                assert!(
+                    mx >= 0 && my >= 0 && mx + mw <= w && my + mh <= h,
+                    "Menu {menu} off screen"
+                );
+                let (yaw, pitch, mode) = (self.yaw, self.pitch, self.mode);
+                self.chrome_click([self.right() - 40, self.dock_y() - 40, 2, 2]);
+                assert!(self.menu.is_none(), "Outside click closes menu {menu}");
+                assert!(self.yaw == yaw && self.pitch == pitch && self.mode == mode);
+            }
+            // Workspace tabs switch workspaces.
+            for (_, mode) in TABS {
+                let tab = self
+                    .chrome_hit(&|a| matches!(a, Action::Mode(m) if m == mode))
+                    .unwrap();
+                self.chrome_click(tab);
+                assert!(self.mode == mode || mode == Mode::Media, "Workspace tab");
+            }
+            self.select_entry(0);
+            self.mode = Mode::Model;
+            // Mode Select: Edit Mesh and back to Object Mode through the dropdown.
+            for (n, edit) in [(1u8, true), (0, false)] {
+                let select = self
+                    .chrome_hit(&|a| matches!(a, Action::Menu(MENU_MODE)))
+                    .unwrap();
+                self.chrome_click(select);
+                assert_eq!(self.menu, Some(MENU_MODE));
+                let item = self
+                    .chrome_hit(&|a| matches!(a, Action::ViewportMode(m) if m == n))
+                    .unwrap();
+                self.chrome_click(item);
+                assert_eq!(self.mesh_edit, edit, "Mode select");
+                assert!(self.menu.is_none());
+            }
+            let label = VIEWPORT_MODES[0].0;
+            assert!(self
+                .draw()
+                .commands
+                .iter()
+                .any(|d| matches!(d, Draw::Text(_, _, s, _, _) if s == label)));
+            // Shading: segmented control, or its overflow menu when narrow.
+            for (n, textured, flat) in [(1u8, true, true), (2, true, false), (0, false, false)] {
+                if self.viewport_header_slots().overflow.is_some() {
+                    let more = self
+                        .chrome_hit(&|a| matches!(a, Action::Menu(MENU_SHADING)))
+                        .unwrap();
+                    self.chrome_click(more);
+                }
+                let seg = self
+                    .chrome_hit(&|a| matches!(a, Action::Shading(m) if m == n))
+                    .unwrap();
+                self.chrome_click(seg);
+                assert_eq!((self.textured, self.flat), (textured, flat), "Shading {n}");
+            }
+            // The header View menu and the gizmo both change the view.
+            let view = self
+                .chrome_hit(&|a| matches!(a, Action::Menu(MENU_VIEW)))
+                .unwrap();
+            self.chrome_click(view);
+            let front = self.chrome_hit(&|a| matches!(a, Action::View(1))).unwrap();
+            self.chrome_click(front);
+            assert_eq!((self.yaw, self.pitch), (0, 0));
+            let top = self.chrome_hit(&|a| matches!(a, Action::View(7))).unwrap();
+            self.chrome_click(top);
+            assert_eq!(self.pitch, 90, "Gizmo Z cap views from the top");
+            // Dock tabs.
+            let hex = self.chrome_hit(&|a| matches!(a, Action::Dock(1))).unwrap();
+            self.chrome_click(hex);
+            assert_eq!(self.dock, 1);
+            // Status bar: keycap hints, then ENTRY · LIB and the save state.
+            let status = |app: &App| -> Vec<String> {
+                app.draw()
+                    .commands
+                    .into_iter()
+                    .filter_map(|d| match d {
+                        Draw::Text(_, y, s, _, _) if y > app.height - m::STATUSBAR_H => Some(s),
+                        _ => None,
+                    })
+                    .collect()
+            };
+            self.status.clear();
+            let text = status(self);
+            assert!(text.iter().any(|s| s == "G") && text.iter().any(|s| s == "Move"));
+            assert!(
+                text.iter().any(|s| s == "DEMO.SH \u{b7} DEMO.LIB"),
+                "{text:?}"
+            );
+            self.doc
+                .replace(0, hangar_core::model::demo_shape())
+                .unwrap();
+            assert!(status(self).iter().any(|s| s == "1 unsaved edit"));
+            self.doc.undo();
+            self.refresh();
+        }
+        self.width = 1280;
+        self.height = 800;
+    }
 }

@@ -2199,6 +2199,7 @@ impl App {
             );
         }
         self.smoke_widgets();
+        self.smoke_chrome();
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();

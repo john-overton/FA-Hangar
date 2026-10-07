@@ -79,8 +79,8 @@ impl Style {
 /// Estimated advance of one character in `style`, in px. Proportional styles
 /// use Arial/Tahoma-class advances (Tahoma Bold runs about 8% wider than
 /// Arial Bold); mono styles use Lucida Console's 0.6 em cell. The Windows
-/// fonts are the reference; the Linux `fixed` fallback and the SVG snapshot
-/// fonts are equal or narrower, so text that fits here fits there.
+/// fonts are the reference and the SVG snapshot fonts match them; the Linux
+/// development fallback (`fixed`, 6px cells) can run up to ~10% wider.
 pub fn char_width(ch: char, style: Style) -> i32 {
     let t = style.spec();
     if t.family == Family::Mono {

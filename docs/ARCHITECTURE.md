@@ -159,13 +159,42 @@ be silently flattened or discarded.
 
 ## UI differences from the design reference
 
-The 0.2 pass follows the supplied four-page concept with fixed
-Browse/Model/Flight/Graft/Package workspaces, a compact menu bar, grouped
-outliner, type icons, linked PT/SH selection, categorized properties, and a
-Raw fields/Hex/Details dock. `ui_view.rs` emits drawing commands and hit regions
-from the same layout. Minimum-size hit regions are checked in the shared smoke.
-Windows uses Tahoma labels and Lucida Console data; Linux keeps its available
-X11 fixed font. Both backends remain native, with no added dependencies.
+The UI follows `tore-hangar-design` (tokens, component READMEs, screens).
+`ui_view.rs` and the feature slices emit drawing commands and hit regions from
+the same layout; the shared smoke checks minimum-size hit regions, that chrome
+hit regions stay inside what they draw, and that chrome labels are not
+truncated at 1280 x 800.
+
+- **Tokens.** `tokens/tokens.json` is the source of truth;
+  `tools/gen/theme.py` generates `theme.rs` (integer only: the label column is
+  `PROP_LABEL_PCT`, letter spacing is `tracking` in 1/100 em) and `tokens.css`.
+- **Text.** `Draw::Text` carries a `Style` from `theme::text`. Windows caches
+  one `CreateFontA` per style (Tahoma for UI, Lucida Console for data) instead
+  of pre-rasterized Barlow/JetBrains bitmap fonts, so glyph shapes differ from
+  the mockups and Win98 maps weight 500 to regular. Linux loads the closest X
+  core font per style and falls back to `fixed` (double-struck for bold); the
+  fallback can run up to about 10% wider than the estimate. Section
+  letter-spacing is not drawn (GDI has no cheap tracking in the allow-list).
+  Truncation uses per-character advances generated from Liberation Sans
+  (Arial metrics, close to Tahoma).
+- **Icons.** `tools/gen/glyphs.py` rasterizes `icons/*.svg` once into 16px and
+  12px two-level coverage masks (`ui_glyphs.rs`); edge pixels are the icon
+  color mixed into the known ground, so every pixel is still a solid fill.
+- **Shape.** Corners use a 1px notch for `radius-sm`/`radius-md`/`radius-xs`;
+  there is no anti-aliased rounding. The lip is a 1px `color::LIP` line.
+- **Components** (`ui_widgets.rs`): buttons, icon buttons, segmented controls,
+  checkbox, select and dropdown menu, NumberField with scrub/step/type/reset,
+  type badges, notices, panel headers with property rows, keycaps, dirty dot
+  and focus ring. Chrome (`ui_chrome.rs`) uses them; the outliner,
+  inspectors, property panels and editors adopt them in a later pass, so some
+  editor bodies still show the earlier boxed buttons and left-aligned labels.
+- **Not implemented from the mockups:** LOD select, header Select/Mesh menus,
+  the vertical property tab strip, the animation timeline, outliner type
+  filter buttons, editor-type switching per header, draggable splitters and
+  collapsing side editors to tab strips at 800 x 600. These are not shown as
+  inert controls.
+- **Solid shading** draws the CPU raster without textures: palette face
+  colors (textured panels in `ink-muted`) scaled by the camera-space normal.
 
 Saved entry snapshots share source buffers. Changed field values and resources
 are marked amber; the raw table can restore a saved operand. Source units are
@@ -179,8 +208,8 @@ envelope blocks only after kind/count validation. `ui_graft.rs` exposes semantic
 field groups, donor snapshots, explicit conflicts and target-to-donor previews.
 Grouped numeric grafts match labels, kinds and scaling; they preserve identity,
 resource pointers and all unselected operands, applying in one document undo
-transaction. Record-size changes and geometric grafting are separate work. Typed path dialogs, fixed panel splits and a wireframe viewport
-remain; vertex Edit mode and bitmap fonts are future work. File selection now uses an
+transaction. Record-size changes and geometric grafting are separate work.
+Typed path dialogs and fixed panel splits remain. File selection uses an
 in-app directory/drive browser with recent LIBs.
 
 ## Material editing boundary
