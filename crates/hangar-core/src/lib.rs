@@ -16,6 +16,7 @@ pub mod decal;
 pub mod definition;
 pub mod dependencies;
 pub mod document;
+pub mod gizmo;
 pub mod hardpoints;
 pub mod identity;
 pub mod material;
