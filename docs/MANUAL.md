@@ -40,11 +40,24 @@ the game. No game data ships.
 - [Edit shapes](#edit-shapes)
 - [Moving parts](#moving-parts)
 - [Controls](#controls)
-- [Limits](#limits)
+- [Limits and why](#limits-and-why)
+  - [Why does Hangar refuse this?](#why-does-hangar-refuse-this)
+  - [Textures Hangar creates](#textures-hangar-creates)
+  - [Palette](#palette)
+  - [Compression and LIB size](#compression-and-lib-size)
+  - [Names](#names)
+  - [FA loader limits](#fa-loader-limits)
+  - [Retail LIB names](#retail-lib-names)
+  - [Archive and resource sizes](#archive-and-resource-sizes)
+  - [Shape geometry](#shape-geometry)
+  - [Moving part settings](#moving-part-settings)
+  - [Damage family](#damage-family)
+  - [Stored originals](#stored-originals)
   - [Source values](#source-values)
   - [References and package checks](#references-and-package-checks)
-  - [Models and loader](#models-and-loader)
-  - [Textures](#textures)
+  - [Missions and other LIBs](#missions-and-other-libs)
+  - [Runtime markings](#runtime-markings)
+  - [Verification status](#verification-status)
 
 ## Getting started
 
@@ -1273,18 +1286,208 @@ In Object mode transforms pivot on the shape origin; in Edit Mesh they act
 only on the selection and pivot on its median point, or with **Pivot:
 Individual** on each group of selected faces.
 
-## Limits
+## Limits and why
 
-Features not yet available are listed under
-[Scope still ahead](../README.md#scope-still-ahead). Windows file paths are
-ASCII in this first version.
+Every constraint Hangar imposes, why it exists and what to do instead. The
+evidence behind each reason is in
+[ARCHITECTURE.md](ARCHITECTURE.md) and [VALIDATION.md](VALIDATION.md);
+where no reason is recorded, the entry says **reason unverified**. Features
+not yet available are listed under
+[Scope still ahead](../README.md#scope-still-ahead).
+
+An operation Hangar cannot prove safe changes nothing and says why. Hangar
+cannot see inside the game, so its rules come from three sources: what
+FA.EXE is known to do (from its disassembly), what every retail file has in
+common (censuses of the retail LIBs), and what Hangar can prove about the
+bytes it rewrites.
+
+### Why does Hangar refuse this?
+
+Messages are quoted as Hangar prints them; `{…}` stands for a name or
+number.
+
+| Message | Entry |
+| --- | --- |
+| "{name} is a protected retail LIB. Open/extract is allowed; save with a different LIB name." | [Retail LIB names](#retail-lib-names) |
+| "Choose a LIB name with .LIB only at its end: FA loads every file whose name contains .LIB" | [FA loader limits](#fa-loader-limits) |
+| "{n} LIB files would load from this folder; FA keeps at most 20." | [FA loader limits](#fa-loader-limits) |
+| "{n} resources ({n} in LIBs + {n} loose files); FA's resource table holds 9,950." | [FA loader limits](#fa-loader-limits) |
+| "{name} is {n} characters; FA's LIB name slot holds 13." | [FA loader limits](#fa-loader-limits) |
+| "FA loads {name} as a LIB; move it out of the game folder." | [FA loader limits](#fa-loader-limits) |
+| "Would crash FA's texture mapper" (Package checks) | [Textures Hangar creates](#textures-hangar-creates) |
+| "{name} is not an FA texture ({why}); FA would crash drawing it." | [Textures Hangar creates](#textures-hangar-creates) |
+| "Load the base PAL before generating a panel texture" | [Palette](#palette) |
+| "Load the base .PAL before painting this partial-palette PIC" | [Palette](#palette) |
+| "Use 1..6 letters, digits or underscore; suffixes reserve two characters" | [Names](#names) |
+| "{name}: {new} exceeds a compiled filename slot ({n} bytes)" | [Names](#names) |
+| "{old} has a short compiled name slot; use a shorter object ID" | [Names](#names) |
+| "{name} -> {new} is longer than an 8.3 name" | [Names](#names) |
+| "Missions and other LIBs that refer to {name} by name will not find the renamed aircraft." | [Missions and other LIBs](#missions-and-other-libs) |
+| "Archive exceeds 128 MiB limit", "File exceeds 128 MiB limit" | [Archive and resource sizes](#archive-and-resource-sizes) |
+| "{label} contains a pointer or relocation field at CODE+{offset}" | [Shape geometry](#shape-geometry) |
+| "native code addresses {label} at CODE+{offset}" | [Shape geometry](#shape-geometry) |
+| "Vertex at {offset} is not current at the host face: slot {n} shows another vertex" | [Shape geometry](#shape-geometry) |
+| "Face at {offset}: its texture state cannot be proved: {why}" | [Shape geometry](#shape-geometry) |
+| "Face at {offset}: a part stub resumes drawing at this face, so it cannot be moved" | [Shape geometry](#shape-geometry) |
+| "A selected vertex is in a rotated part; reset its pose or edit it in local coordinates" | [Shape geometry](#shape-geometry) |
+| "Per-vertex shaded faces need F6 vertex records; choose a flat or textured style" | [Shape geometry](#shape-geometry) |
+| "CODE has no virtual-address room for this continuation; relocation support is required" | [Shape geometry](#shape-geometry) |
+| "Relocation table has no room for the moved import tail" | [Shape geometry](#shape-geometry) |
+| "Panel continuation exceeds the 16-bit SH jump reach" | [Shape geometry](#shape-geometry) |
+| "No {n} free vertex slots below the retail ceiling of 640" | [Shape geometry](#shape-geometry) |
+| "Appending geometry needs the native end marker and import tail" | [Shape geometry](#shape-geometry) |
+| "A face centre exceeds its byte width; the record would have to grow" | [Shape geometry](#shape-geometry) |
+| "Face at {offset} is nearly edge-on to the view; turn the view to face the panel" | [Textures Hangar creates](#textures-hangar-creates) |
+| "Face at {offset} draws runtime markings (no named texture); it cannot be remapped" | [Runtime markings](#runtime-markings) |
+| "The stub's code is outside the reviewed subset at CODE+{offset} ({why}); it is never edited" | [Moving part settings](#moving-part-settings) |
+| "NEG with shift {n} needs 7 bytes and this law slot has 6; set shift 1 first" | [Moving part settings](#moving-part-settings) |
+| **Not seen in retail** (badge) | [Moving part settings](#moving-part-settings) |
+| "No stored original for {name}" | [Stored originals](#stored-originals) |
+
+### Textures Hangar creates
+
+Generated panel sheets, **Remap selected panels from view…** and **Repair
+textures for FA** all write one layout. Clones, exports and **Assign
+texture…** do not create pixels: they copy or point at existing PICs.
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Every texture Hangar creates is kind 0 (raw raster), exactly 256 pixels wide, has a row-offset table and no embedded palette | All 1,070 textures retail shapes draw on textured faces have this layout. FA.EXE reads the row table while setting up a textured polygon (`mov ecx,[ecx+ebp*4]` at 0x4CAF0D); a 64 × 64 generated sheet without one crashed FA in the external view. Other widths are unverified in the game. | Nothing to choose. To give a panel a different shape, see the next rows. |
+| At most 1,280 rows | FA bounds the texture row by 0x500 (1,280) at the same address. | Remap fewer panels at once; larger extents shrink to fit. |
+| A generated panel sheet holds its panel in a sub-rectangle at the left edge, as tall as the panel area; the rest repeats the panel color | The panel takes its own proportions at square texels, but the sheet must still be 256 wide (row above). The panel's UVs address that sub-rectangle. | Paint inside the panel area; the padding is never drawn. |
+| Panel area size comes from the aircraft's texel density, each side 8 to 256 pixels, both scaled together | Density is the texels per unit the shape's textured faces already use (2.2 on the A-10, 3.1 on the F-18, 9.4 on the F-14; 3 when it has none), so new texels match their neighbours. 256 is the sheet width; the 8-pixel minimum is **reason unverified**. | None; the density follows the shape. |
+| Remap from view fits the panels into 252 × 1,276 with a 2-pixel margin, one scale for both axes | One scale keeps texels square; 252 and 1,276 leave the margin inside 256 × 1,280. The margin repeats the nearest panel texel; the 2-pixel width is **reason unverified**. | Remap smaller groups for more texels each. |
+| Remap refuses panels more than about 75° from the view, or seen from behind | Under a quarter of its true area in the view, the face would get the stretched texels Remap exists to fix; a back face is one the renderer culls. | Orbit until the panels face you, or remap them in groups by direction. |
+| **Assign texture…** can point faces at any PIC; it warns when FA cannot map it | Assign creates no PIC, so it cannot fix one; Package checks list it as an error. | Run **Repair textures for FA**. |
+| Sheets made by earlier Hangar versions (64 × 64 or panel-sized, with a palette, no row table) crash FA | Same row-table read as above; this is the TopGun.LIB crash. | Package checks flag them; **Repair textures for FA** widens each to 256 with every pixel at the same UV, adds the row table, drops the palette, and changes no SH. See [SH textures](#sh-textures). |
+| Repair does not change a PIC wider than 256 | Its UVs cannot all be kept in 256 columns. | Assign the faces a PIC at most 256 wide (Scale or Project), or remap them. |
+
+### Palette
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| PIC pixels are indices into the game palette; Hangar writes no embedded palette in textures | Retail SH textures carry none (palette size 0 in all 1,070), so the layout above has none. Whether FA would use an embedded palette on an SH texture is unverified. | Pick colors from the game palette. |
+| Painting a generated sheet, or any PIC without a full palette of its own, needs the base `PALETTE.PAL` | The PIC holds only indices; without the base palette Hangar cannot show or match colors, so it shows grayscale and blocks painting. | Keep `PALETTE.PAL` in the LIB, or load a 768-byte PAL or a LIB containing it (FA_2.LIB has one). |
+| A cloned aircraft's `<ID>.PAL` is an editor preview palette | FA's palette lookup is global; Hangar does not override it. | Judge a livery against the game palette. |
+| Repair maps colors to the nearest base color only where the old embedded palette differs | Indices are kept when the embedded palette equals the base PAL (as in TopGun.LIB); otherwise the status says colors were mapped. Without a base PAL, indices are kept and reported as unverified. | Load the base PAL before repairing. |
+
+### Compression and LIB size
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| A painted, decal-baked, palette-edited, replaced, repaired or newly created entry is stored uncompressed (flag 0); **Export object** writes its copies uncompressed | Hangar has a DCL decoder but no compressor (not implemented). | Expect the LIB to grow. Untouched entries, `.ORG` originals, texture clones within a LIB and an exact Restore texture keep their stored bytes and compression flag. Remove stored originals before distributing. |
+
+### Names
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| LIB entry names are ASCII 8.3 (DOS punctuation such as `$`, `#` and `^` is allowed) | The LIB directory stores each name in a 13-byte field. | Choose names of at most 8 characters plus extension. |
+| Reference ID is 1 to 6 letters, digits or underscore | Private names add up to two characters to the ID (`F14_C.SH`, `_F14_A.PIC`, a clone's `T1`) and must still be 8.3. | Use a shorter ID. |
+| Prefixes `~ _ $ & # ^` are kept; rename replaces the ID after them | Retail names use them and Hangar keeps naming conventions intact: `$AIM9.PIC` is the store icon of `AIM9`, `_F18.PIC` the F-18's texture, and the damage family is `F18_A.SH` to `F18_D.SH`. What `~`, `&`, `#` and `^` mean to the game is **reason unverified**; Hangar only preserves them. | Keep the prefix when naming by hand. |
+| A rename is refused when the new name does not fit a compiled slot | Compiled modules store names in fixed slots: 14 bytes in an SH texture record (E2), 13 bytes in a HUD picture field, and the original length elsewhere. Hangar never moves bytes in a module or enlarges a section. | Choose a name no longer than the one it replaces. |
+| **Rename resource** is refused for names the game finds by convention (damage family, default HUD, store icon, palette) and for users in other open LIBs | Renaming one member would break the family the game derives from the name. | Use [Rename reference ID](#rename-reference-id) for an aircraft and its private files. |
+| Generated names: a panel sheet is the SH stem's first six characters and two hex digits (`F1800.PIC`); a clone is the first six letters and `T1` | Both stay 8.3. | Type another name in the dialog where offered. |
+
+### FA loader limits
+
+FA reads every file in its folder at startup and crashes, rather than
+reporting an error, when the folder breaks one of these. Addresses are in
+[ARCHITECTURE.md](ARCHITECTURE.md#fa-loader-limits-and-the-sh-texture-layout);
+the save-time check is described under [The game folder](#the-game-folder).
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| At most 20 LIB files | FA stores 20 LIB handles (at 0x54A648) before the LIB count; a 21st overruns them. | Merge mods or move unused LIBs out. |
+| At most 9,950 resources: every LIB entry plus every other file in the folder | The resource table is allocated for 9,950 35-byte records (0x5505A bytes); FA crashed writing it (0x478F69) with Hangar backups present. The installed retail LIBs use about 7,520. | Keep backups, `.ORG` originals and loose files few. |
+| LIB filenames at most 13 characters | The name is copied into a 14-byte slot without a length check; `TOPGUN.LIB.BAK` (14) overflows it. | Short LIB names. |
+| Any file whose upper-cased name contains `.LIB` anywhere, with an `EALIB` header, loads as a LIB | FA tests the name with `strstr` for `.LIB`, case-insensitively after upper-casing. | Hangar's backups are `<STEM>.BAK`, then `.B01` to `.B99`, and the stage `<STEM>.TMP`, never `X.LIB.bak`; destinations with `.LIB` before the end are refused. Move old `X.LIB.bak` files out of the game folder. |
+
+Saving into a folder with `FA.EXE` or a retail LIB counts what FA would load
+after the save and shows it in the status; a save past a limit asks for
+**Save anyway** in the GUI and is refused by the CLI.
+
+### Retail LIB names
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Hangar never writes a file named like a retail LIB (`FA_1.LIB` … `_SETUP.LIB`, the list in [Protected LIBs and saving](#protected-libs-and-saving)), in any folder or letter case; there is no unlock switch | Overwriting an installed game LIB would destroy the user's game files. The list is the exact set from the installer and discs, not a `FA_*.LIB` pattern, so `SWPATCH.LIB` (a mod archive) stays writable. | Open, edit and save under another name; Ctrl+S suggests `HANGAR.LIB`. |
+
+### Archive and resource sizes
+
+These are Hangar's own bounds, not FA limits. They keep every read and scan
+bounded so a huge or malformed file fails with a message; the exact figures
+are **reason unverified**.
+
+| Limit | Value | Instead |
+| --- | --- | --- |
+| LIB opened as a document (loaded whole into memory) | 128 MiB; FA_7, FA_10, FA_10B, FA_11 and FA_11B exceed it | Add them as source catalogs, or copy what you need into a smaller mod LIB. |
+| Source LIB catalogs (**Add source LIB catalog**, object export) | up to 2 GiB each, 64 LIBs, 131,072 names; directory and range reads only | |
+| Entries in one LIB | 1 to 65,535 | |
+| Decoded resource / BRF text / decal PNG | 16 MiB / 1 MiB / 16 MiB and 2048 × 2048 | |
+| Copy, export and rename graphs | 4,096 resources, 128 MiB decoded | Split the work. |
+| Undo history | 64 operations, payload history trimmed above 32 MiB | Save between large batches. |
+
+### Shape geometry
+
+Hangar edits an SH by rewriting only bytes it can prove nothing else depends
+on. It is not a complete SH writer: it never recomputes BSP order,
+visibility planes, bounds or collision records, because it has no writer for
+them yet. See [Refusals and limits](#refusals-and-limits) for how refusals
+appear.
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| A face with a pointer or relocation inside it, a pointer target inside it, or native code addressing it cannot be rewritten, deleted, flipped or used as a host | Other code jumps into or reads those bytes; changing them would break it. | Edit a neighbouring face, or move its vertices if they are writable. |
+| A vertex is refused when its slot shows a different vertex on another path | SH faces name vertex slots, not vertices. Hangar proves which vertex a slot holds at each face by walking every path that reaches it (up to 128 levels); a slot rewritten on another path has no single answer. | Select the vertex where it is drawn alone. |
+| A face whose texture state cannot be proved is refused for texture and layout operations | One E2 record selects the texture for every later face; Hangar must prove which selector reaches the face over every path. | For new geometry, name a texture; otherwise none. |
+| A face a part stub resumes drawing at cannot be moved | The stub's native code jumps to that record; moving it would change where the part draws. | Leave it in place; edit the faces after it. |
+| Model-space moves of a part the preview pose rotates are refused | Hangar converts model-space moves to stored coordinates only through unrotated part frames. | **Reset pose** in **Parts** (or gear down, where legs rest), or edit in local coordinates. |
+| Faces never drawn are read-only | No path reaches them, so nothing can be proved about them. | |
+| New faces cannot be per-vertex shaded | New slots carry no F6 vertex records. | Flat (0x63) or textured faces. |
+| Appended geometry needs CODE virtual-address room and relocation-table room | New records go before the shape's end marker; the import tail moves and its relocations move with it. | Edit in place (move, flip, delete), which needs no room. |
+| The host face must be within ±32 KiB of the continuation | The SH `48` jump has a 16-bit reach. | Edit in place. |
+| New vertices take slots below 640 | 640 is the largest slot count of any retail FA_2.LIB shape (CITY2.SH); more is untested in the game. | Reuse existing vertices. |
+| A shape without the native end marker and import tail cannot take appended geometry | A trailing end object would absorb the continuation and no whole-CODE reader would see it. | |
+| Appended faces draw in the order of their host face | BSP placement of new faces is not recomputed. | Choose a host drawn where the new faces should appear. |
+| Records never grow in place; a byte face centre that would overflow is refused | Growing a record would move every later byte. | Smaller moves, or delete and add the face. |
+| Same-size in-place edits (move, flip, delete as a same-size stub, scale of a writable face) | Have none of the appending limits above. | |
+
+The model view is a static-pose projection, not the game's full drawing
+interpreter. Resource code is never executed. OBJ exports drop materials and
+animation and cannot be imported back as a lossless SH edit.
+
+### Moving part settings
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Only the settings a part's stub already has can change, each in place at the same size | After each change Hangar re-reads the stub and requires every instruction outside the changed field at the same address with the same kind and the binding to report the new value; a same-size change keeps that provable. | Use the settings table under [Change settings](#change-settings). |
+| A gear direction or range that does not fit the stub's bytes is not offered | NEG with shift 2 or 3 needs 7 bytes; a 3-byte `sar ax, 1` has room for nothing else. | Reverse the direction first or set shift 1, as the message says. |
+| **Not seen in retail** forms are allowed but badged | No retail shape contains them; the evaluator proves the law but the game has not run them. | Test in FA; returning to the census form restores the original bytes. |
+| Locked parts (radars, turrets, insect wings, ejection logic; `_PLstate`, `_PLdead`, `_currentTicks`) | Their code is outside the reviewed subset or their variables are not reviewed aircraft parts. | None yet. |
+| No new parts, stubs, imports or different laws | A new part needs new x86 stub code, a new import for the game variable it reads, and relocation entries; Hangar authors none of these. | Edit existing parts' settings. |
+| Ailerons, elevators and the canopy cannot be animated | The FA_2.LIB part census found stubs for gear, flaps, rudder, brakes, hook, bays, afterburner, canards and swing wings, and none for ailerons, elevators or a canopy: they are static geometry in the retail shapes read. | |
+
+### Damage family
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Per-face operations (Clone texture for selected faces, Assign texture, Remap) do not carry over to `_A` to `_D` | In FA_2.LIB no face of the F-18, F-16, A-10, F-22, F-14, MiG-29 or Su-27 main shape has a record with the same bytes at the same offset in any damage shape, so faces cannot be matched safely. | Repeat the operation on each damage shape, or use **Clone texture for whole shape** / the family texture clone in Materials, which follows stored texture references. |
+
+### Stored originals
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| `X.ORG` is kept only from the first edit made with this version | Earlier versions kept none, and Hangar cannot recover what was overwritten. | Restore from the source LIB or a backup. |
+| Each `X.ORG` is a full copy of the texture | It keeps the stored bytes exactly; it is also one more LIB entry, which counts toward FA's 9,950 resources. | **Package > Remove stored originals** just before a distribution build. |
+| An existing `X.ORG` that is not a PIC is never used, overwritten or removed | Hangar never adopts data it did not write. | Rename that entry. |
+| FA should ignore `.ORG` entries | FA looks resources up by name; not yet confirmed in the game. | See [Verification status](#verification-status). |
 
 ### Source values
 
-This version uses numeric **source storage values**, not invented conversions
-to knots, pounds or Mach. A `^` marker is retained, not silently reinterpreted.
-Changing a field is not a guarantee of how the original game consumes it.
-Opaque binary definitions can be exported or replaced but are not guessed.
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Values are shown and edited in source storage units, not knots, pounds or Mach | No gameplay unit conversion has evidence behind it. A `^` marker is retained, not reinterpreted. Changing a field does not guarantee how the game uses it. | Compare against retail values. The gear swing is shown in degrees and gearPos in percent assuming OpenFA's 0 to -8192 range. |
+| Opaque binary definitions can be exported or replaced but are not edited | Unknown data is preserved, not guessed. | |
 
 ### References and package checks
 
@@ -1293,11 +1496,11 @@ literals, including names outside the displayed pose. It also identifies the
 reviewed PT damage family, same-name default HUD and available store icons.
 Each link names its evidence: BRF string, texture record (an SH E2 record
 confirmed against the shape's record inventory), HUD texture name, module
-filename or a naming convention.
-Use **Package > Add source LIB catalog** to locate dependencies in other LIBs;
-these catalogs are directory-only and do not load their payloads. Multiple
-external providers are reported as ambiguous. **Export report** writes the
-change list and all retained check results to a new text file.
+filename or a naming convention. Use **Package > Add source LIB catalog** to
+locate dependencies in other LIBs; these catalogs are directory-only and do
+not load their payloads. Multiple external providers are reported as
+ambiguous. **Export report** writes the change list and all retained check
+results to a new text file.
 
 Self-name literals are excluded from navigation. Counts cover observed users
 in the current LIB, not every possible runtime lookup. External catalog matches
@@ -1309,24 +1512,41 @@ unknown encodings and incomplete scans remain unverified. Opening a saved LIB
 establishes a new baseline, so CLI `validate` checks its archive and references
 without treating every existing payload as newly edited.
 
-### Models and loader
+### Missions and other LIBs
 
-The loader never executes code from a resource. Unsupported records produce
-an explicit diagnostic. The current model reader is a static-pose projection,
-not the original game's full drawing interpreter. OBJ exports discard
-materials and animation and cannot be imported back as a lossless SH edit.
+| Limit | Why | Instead |
+| --- | --- | --- |
+| **Rename reference ID** does not update missions | Missions find an aircraft by its file name (`F14.PT`); Hangar does not parse mission text, and other LIBs are not searched. The review counts the missions in this LIB that name the aircraft. | Keep the ID of an aircraft missions use, or **Duplicate aircraft** to add a new ID beside it. |
+| Same-stem files with no stored link (`F14.PTS`, `F14.HUD`) keep their names | Nothing in the aircraft refers to them, so Hangar has no evidence the game pairs them. | Rename them by hand if needed. |
 
-### Textures
+### Runtime markings
 
-Hangar has no DCL compressor. A painted, decal-baked, palette-edited or
-replaced PIC is written uncompressed (flag 0), so it is larger than a
-compressed retail texture. Untouched entries, stored originals (`.ORG`),
-texture clones within a LIB and an exact Restore texture keep their stored
-bytes and compression flag. **Export object** writes its copies uncompressed.
+Some faces draw no named texture: the game fills them with markings at run
+time. Hangar shows them blank in the preview and refuses to remap them. How
+they work is a working model, **not yet verified**:
 
-Every texture a retail FA_2.LIB shape uses is 256 pixels wide (heights vary
-from 11 to 1,037), with a row table and no palette; see
-[SH textures](#sh-textures). Generated panel sheets and textures made by
-**Remap selected panels from view…** or **Repair textures for FA** always
-have that layout. Assigned textures can be any PIC in the LIB; Package checks
-flag one FA cannot map.
+- the shape decides whether a face carries a marking, where, and which
+  marking slot (0 to 4) it uses;
+- the game picks the image for each slot at run time, believed to be by
+  nation or unit.
+
+Tools for runtime markings are planned. Until then, bake markings into a
+texture with [Decals](#hardpoints-materials-and-decals).
+
+### Verification status
+
+Hangar is tested on Linux (core tests, the shared-UI smoke test, CLI checks
+against the user's retail LIBs) and in Windows CI (headless smoke test on
+current 64-bit Windows, for both executables). See
+[COMPATIBILITY.md](COMPATIBILITY.md) and [VALIDATION.md](VALIDATION.md).
+
+| Area | Status |
+| --- | --- |
+| Windows 98/ME | Not yet run. The 32-bit build's imports are audited against an allow-list of Windows 98 APIs; that cannot prove it runs there. |
+| Windows file paths | ASCII only: Hangar uses the ANSI Win32 API with no Unicode layer, so it runs on Windows 98. |
+| Hangar output in the original game | Not yet confirmed. Three user reports from the game drove fixes: generated panels that vanished (A10_V2.LIB), the TopGun.LIB texture crash and the `.LIB.bak` startup crash. The fixes have not been retested in FA. |
+| Edited shapes, part settings and **Not seen in retail** forms, `.ORG` entries, repaired textures, new sheet sizes, Replace, rename and duplicate | Pass Hangar's checks; not yet loaded in FA. |
+
+Acceptance steps for each are in [WINDOWS-TEST.md](WINDOWS-TEST.md). Record
+game results separately from a successful save: a valid LIB is not proof the
+game accepts it.

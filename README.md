@@ -131,8 +131,8 @@ topology-aware UV unwrapping, animation playback, complete runtime dependency
 closure, geometric grafting, verified gameplay-unit conversions,
 resizable editor splits and bitmap fonts.
 There are no inactive timeline controls pretending these features work.
-Current limits of the shipped tools are listed in the
-[manual](docs/MANUAL.md#limits).
+Current limits of the shipped tools, and the reason for each, are listed in
+the [manual](docs/MANUAL.md#limits-and-why).
 
 ## Structure and provenance
 
