@@ -570,6 +570,12 @@ impl Geometry {
     /// the slot (directly or in a called block) before the writer or a
     /// barrier, and every pointer entering that span from outside it must
     /// resolve to the same writer.
+    ///
+    /// Recursion is capped at 128 entries deep. Measured over all 1,275
+    /// FA_2.LIB shapes (x86_64 release): the deepest proof is 48 levels and
+    /// uses 21 KiB, about 450 bytes a level, so the cap bounds it near
+    /// 57 KiB, far inside Win98's 1 MiB default main-thread stack. It stays
+    /// recursive for that reason.
     fn resolve(&self, slot: usize, x: usize, depth: usize) -> Resolved {
         if let Some(known) = self.memo.borrow().get(&(slot, x)) {
             return known
