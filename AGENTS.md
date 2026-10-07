@@ -3,8 +3,8 @@
 A guide for coding agents working on T.O.R.E Hangar: a small, standalone Rust
 editor for Fighters Anthology (FA) LIB archives and the resources inside them
 (PT/NT/JT/OT/SEE/ECM definitions, SH shapes, PIC textures, PCM audio).
-Read `README.md` for features, `docs/ARCHITECTURE.md` for format and writer
-decisions, and `tore-hangar-design/BRAND.md` before touching UI.
+Read `README.md` for an overview, `docs/MANUAL.md` for user-facing features,
+`docs/ARCHITECTURE.md` for format and writer decisions, and `tore-hangar-design/BRAND.md` before touching UI.
 
 ## Layout
 
@@ -22,7 +22,8 @@ crates/hangar-app/    Binary `tore-hangar`: shared UI, CLI, platform backends.
   src/saving.rs       Shared staged-save/backup protocol.
 tore-hangar-design/   Design system. tokens/theme.rs is compiled into the app
                       via #[path]; components/*/README.md specify each widget.
-docs/                 ARCHITECTURE, VALIDATION, COMPATIBILITY, WINDOWS-TEST.
+docs/                 MANUAL, CHANGELOG, ARCHITECTURE, VALIDATION,
+                      COMPATIBILITY, WINDOWS-TEST.
 tools/check_pe.py     Audits Windows executables' headers and import list.
 ```
 
@@ -141,9 +142,10 @@ hard-code their locations in code or docs.
   (`hangar_core::Result<T>` is `Result<T, String>`).
 - Prefer extending an existing `ui_*.rs` or core module over new abstractions;
   add a new module when a feature has its own data model.
-- Keep docs current: update the README feature list and version notes for
-  user-visible changes and `docs/ARCHITECTURE.md` for format/writer decisions.
-  The workspace version lives in the root `Cargo.toml`.
+- Keep docs current: user-visible changes go in `docs/MANUAL.md` and
+  `docs/CHANGELOG.md` (and the README highlights if notable); format/writer
+  decisions go in `docs/ARCHITECTURE.md`. The workspace version lives in the
+  root `Cargo.toml`; keep the README version badge in step with it.
 
 ## Commits
 

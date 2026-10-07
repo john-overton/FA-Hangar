@@ -56,7 +56,7 @@ jobs:
           New-Item -ItemType Directory -Force package | Out-Null
           Copy-Item target/${{ matrix.target }}/release/tore-hangar.exe package/
           Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md package/
-          Copy-Item docs/COMPATIBILITY.md,docs/WINDOWS-TEST.md package/
+          Copy-Item docs/MANUAL.md,docs/COMPATIBILITY.md,docs/WINDOWS-TEST.md package/
           Get-FileHash package/tore-hangar.exe -Algorithm SHA256 | Format-List | Out-File package/SHA256.txt
       - uses: actions/upload-artifact@v4
         with:
