@@ -92,6 +92,15 @@ pub struct Hidden {
     /// CODE offsets of the stored original records, in site order.
     pub originals: Vec<usize>,
 }
+/// A set built by insertion: collecting into a `BTreeSet` sorts with the
+/// stable sort, whose stack buffer the CRT-free x86_64 build cannot link.
+fn set(items: impl Iterator<Item = usize>) -> BTreeSet<usize> {
+    let mut out = BTreeSet::new();
+    for x in items {
+        out.insert(x);
+    }
+    out
+}
 /// Slot word of an E0 selector's bytes.
 fn slot_of(bytes: &[u8]) -> Option<u16> {
     (bytes.first() == Some(&0xe0) && bytes.len() == 4)
@@ -184,10 +193,7 @@ pub(crate) fn markings_of(g: &Geometry) -> Vec<Marking> {
         return Vec::new();
     }
     let found = assignments(g);
-    let copies: BTreeSet<usize> = found
-        .iter()
-        .flat_map(|a| a.copies.iter().copied())
-        .collect();
+    let copies = set(found.iter().flat_map(|a| a.copies.iter().copied()));
     for a in &found {
         if let Some(s) = slot_of(&g.code[a.restore.0..a.restore.1]) {
             for c in &a.copies {
@@ -333,7 +339,7 @@ fn rebuild(
         Some(m) => tail_blocks(g, blocks, m),
         None => (g.code.len(), BTreeSet::new()),
     };
-    let shown: BTreeSet<usize> = puts.iter().map(|p| p.0 .0).collect();
+    let shown = set(puts.iter().map(|p| p.0 .0));
     for k in tail.difference(touched) {
         for (j, site) in blocks[*k].sites.iter().enumerate() {
             let o = blocks[*k].originals[j];
@@ -358,8 +364,8 @@ fn rebuild(
             return Err(invalid("Two faces of this edit share bytes"));
         }
     }
-    let stubs: BTreeSet<usize> = dissolved.iter().map(|b| b.sites[0].0 + 2).collect();
-    let backs: BTreeSet<usize> = dissolved.iter().map(|b| b.start + 2).collect();
+    let stubs = set(dissolved.iter().map(|b| b.sites[0].0 + 2));
+    let backs = set(dissolved.iter().map(|b| b.start + 2));
     for (a, e) in &taken {
         for (t, field) in &g.targets {
             if (a..e).contains(&t) && !stubs.contains(field) && !(a..e).contains(&field) {
@@ -451,12 +457,11 @@ fn rebuild(
     // Records whose bytes moved or went: the dissolved blocks' originals and
     // whatever stood after `from`.
     let cs = g.inventory.code_start;
-    let moved = g
+    let moved = set(g
         .faces
         .iter()
         .map(|f| f.offset - cs)
-        .filter(|at| *at >= from || dissolved.iter().any(|b| (b.start..b.end).contains(at)))
-        .collect();
+        .filter(|at| *at >= from || dissolved.iter().any(|b| (b.start..b.end).contains(at))));
     Ok((out, sites, moved))
 }
 type Key = (
@@ -578,7 +583,7 @@ pub fn hide_faces(source: &[u8], faces: &[usize]) -> Result<Vec<u8>> {
             original: g.code[site.0..site.1].to_vec(),
         });
     }
-    let gone: BTreeSet<usize> = hide.iter().map(|h| h.site.0).collect();
+    let gone = set(hide.iter().map(|h| h.site.0));
     let blocks = hidden_blocks(&g);
     let (out, runs, mut changed) = rebuild(source, &g, &blocks, &BTreeSet::new(), hide, &[])?;
     changed.extend(&gone);
@@ -632,7 +637,7 @@ pub fn show_faces(source: &[u8], sites: &[usize]) -> Result<Vec<u8>> {
             }
         }
     }
-    let keys: BTreeSet<usize> = touched.keys().copied().collect();
+    let keys = set(touched.keys().copied());
     let (out, runs, changed) = rebuild(source, &g, &blocks, &keys, hide, &puts)?;
     let after = verify(source, &g, &out, &runs, &changed, &BTreeSet::new(), &back)?;
     for (site, bytes) in &puts {
@@ -919,12 +924,7 @@ fn compact(source: &[u8], from: usize) -> Result<Vec<u8>> {
     let out = replace_continuation(source, g.code.clone(), from, Vec::new())?;
     let after = verify_structure(&g, source, &out)?;
     let cs = g.inventory.code_start;
-    let kept: BTreeSet<usize> = g
-        .faces
-        .iter()
-        .map(|f| f.offset - cs)
-        .filter(|a| *a >= from)
-        .collect();
+    let kept = set(g.faces.iter().map(|f| f.offset - cs).filter(|a| *a >= from));
     others_unchanged(&g, &after, &kept)?;
     if let (Ok(a), Ok(b)) = (Model::parse(source), Model::parse(&out)) {
         if keys(&a, cs, &BTreeSet::new()) != keys(&b, after.inventory.code_start, &BTreeSet::new())

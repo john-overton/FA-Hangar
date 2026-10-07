@@ -71,6 +71,8 @@ pub(super) struct EditState {
     pub texture_refusal: Option<String>,
     /// Faces drawn from Hangar texture assignments in the shown shape.
     pub assigned: super::texture_ui::AssignedCache,
+    /// The Runtime markings panel.
+    pub markings: super::markings_ui::State,
 }
 /// Pixels a press must travel before it becomes a box.
 const BOX_THRESHOLD: i32 = 4;
@@ -1186,6 +1188,7 @@ impl App {
         }
         o.panel_end(&mut s);
         self.face_texture_pane(o, &mut s, false);
+        self.markings_pane(o, &mut s);
         if let Some(why) = &self.ed.mesh_refusal {
             o.stack_notice(&mut s, Tone::Warn, why);
         } else if !model.writable {
@@ -1257,7 +1260,7 @@ impl App {
         }
         panic!("Control missing")
     }
-    fn smoke_keys(&mut self, keys: &str) {
+    pub(super) fn smoke_keys(&mut self, keys: &str) {
         for ch in keys.chars() {
             self.key(Key::Char(ch), false, ch.is_ascii_uppercase());
         }

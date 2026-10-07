@@ -513,7 +513,11 @@ impl App {
     }
     /// Changed entries that fit in the build list.
     pub(super) fn changes_visible(&self) -> usize {
-        ((self.height - theme::metric::STATUSBAR_H - PACKAGE_LIST_TOP - 3 * theme::metric::ROW_H)
+        let markings = i32::from(self.package_markings().is_some());
+        ((self.height
+            - theme::metric::STATUSBAR_H
+            - PACKAGE_LIST_TOP
+            - (3 + markings) * theme::metric::ROW_H)
             / theme::metric::ROW_H)
             .max(1) as usize
     }
@@ -609,6 +613,15 @@ impl App {
             );
         }
         let my = bottom - 2 * m::ROW_H - space::SPACE_2;
+        if let Some(line) = self.package_markings() {
+            d.styled(
+                space::SPACE_3,
+                baseline(my - m::ROW_H, m::ROW_H, Style::Label),
+                &fit(&line, l - 24, Style::Label),
+                c::INK_MUTED,
+                Style::Label,
+            );
+        }
         subhead(d, space::SPACE_3, my, l - 24, "Output mode");
         d.styled(
             space::SPACE_3,

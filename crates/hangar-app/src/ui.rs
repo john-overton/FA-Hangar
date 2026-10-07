@@ -2972,5 +2972,8 @@ mod texture_ui;
 #[path = "ui_replace.rs"]
 mod replace_ui;
 
+#[path = "ui_markings.rs"]
+mod markings_ui;
+
 #[path = "ui_palette.rs"]
 mod palette_ui;

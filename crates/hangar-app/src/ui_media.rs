@@ -465,6 +465,28 @@ impl App {
                     .or_else(|| self.textures.get(name))
             })
     }
+    /// A model point in the raster of `render_model`: 1/16-pixel x and y
+    /// and the fixed-point camera depth.
+    pub(super) fn raster_point(
+        &self,
+        point: [i32; 3],
+        [w, h]: [usize; 2],
+        center: [i32; 3],
+        span: i32,
+    ) -> [i32; 3] {
+        let p = self.camera_point(core::array::from_fn(|i| (point[i] - center[i]) * 256));
+        [
+            w as i32 * 8
+                + (p[0] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
+                    / (span as i64 * 400 * 256)) as i32
+                + self.pan[0] * 16 * w as i32 / (self.right() - self.left()),
+            h as i32 * 8
+                - (p[1] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
+                    / (span as i64 * 400 * 256)) as i32
+                + self.pan[1] * 16 * h as i32 / (self.dock_y() - 54),
+            p[2],
+        ]
+    }
     fn render_model(&self, w: usize, h: usize) -> Frame {
         let mut frame = Frame {
             w,
@@ -483,21 +505,7 @@ impl App {
         let points: Vec<[i32; 3]> = m
             .vertices
             .iter()
-            .map(|v| {
-                // Fixed-point camera/depth plus 1/16-pixel raster positions.
-                let p = self.camera_point(core::array::from_fn(|i| (v.point[i] - center[i]) * 256));
-                [
-                    w as i32 * 8
-                        + (p[0] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
-                            / (span as i64 * 400 * 256)) as i32
-                        + self.pan[0] * 16 * w as i32 / (self.right() - self.left()),
-                    h as i32 * 8
-                        - (p[1] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
-                            / (span as i64 * 400 * 256)) as i32
-                        + self.pan[1] * 16 * h as i32 / (self.dock_y() - 54),
-                    p[2],
-                ]
-            })
+            .map(|v| self.raster_point(v.point, [w, h], center, span))
             .collect();
         let mut depth = vec![i64::MIN; w * h];
         let edge = |a: [i32; 3], b: [i32; 3], x: i32, y: i32| {
@@ -690,6 +698,7 @@ impl App {
                 frame.pixels = out;
             }
         }
+        self.markings_overlay(&mut frame.pixels, [w, h], m, center, span);
         if let Some(selected) = self.selected_face {
             for y in 1..h - 1 {
                 for x in 1..w - 1 {
@@ -746,6 +755,14 @@ impl App {
             .iter()
             .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8, 255])
             .collect()
+    }
+    /// Pixels of `color` in a 320 x 200 viewport raster, for smoke checks.
+    pub(super) fn raster_count(&self, color: u32) -> usize {
+        self.render_model(320, 200)
+            .pixels
+            .iter()
+            .filter(|p| **p == color)
+            .count()
     }
     /// The colour the main viewport draws at `(x, y)`, for smoke checks.
     pub(super) fn model_pixel(&self, x: i32, y: i32) -> Option<u32> {
@@ -1334,6 +1351,7 @@ impl App {
         }
         if self.model_for_paint().is_some() {
             self.face_texture_pane(o, &mut s, true);
+            self.markings_pane(o, &mut s);
         }
         if self.context_model.is_some() && self.dock != 3 {
             if self.pane(o, &mut s, pane::PREVIEW, "Model preview", Icon::Shape) {

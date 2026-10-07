@@ -22,6 +22,8 @@ pub(super) const MENU_MESH: usize = 12;
 pub(super) const MENU_PART: usize = 13;
 /// The outliner context menu (`App::context`).
 pub(super) const MENU_CONTEXT: usize = 14;
+/// The slot Select of a Runtime markings row (`markings_ui::State`).
+pub(super) const MENU_SLOT: usize = 15;
 const TABS: [(&str, Mode); 6] = [
     ("Browse", Mode::Browse),
     ("Model", Mode::Model),
@@ -373,6 +375,14 @@ impl App {
                 .collect();
             return f(&items);
         }
+        if menu == MENU_SLOT {
+            let options = self.slot_menu_items();
+            let items: Vec<Item> = options
+                .iter()
+                .map(|(label, action, on)| Item::new(label, *action).on(*on))
+                .collect();
+            return f(&items);
+        }
         if menu != MENU_SHAPE {
             return f(&self.menu_items(menu));
         }
@@ -437,6 +447,10 @@ impl App {
             }
             MENU_PART => {
                 let rect = self.ed.part_menu.map_or([0; 4], |(_, r)| r);
+                (rect[0], rect[1] + rect[3] + 1)
+            }
+            MENU_SLOT => {
+                let rect = self.ed.markings.slot_menu.map_or([0; 4], |(_, r)| r);
                 (rect[0], rect[1] + rect[3] + 1)
             }
             MENU_CONTEXT => (self.context.at[0], self.context.at[1]),

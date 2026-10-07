@@ -140,6 +140,12 @@ pub(super) enum Action {
     Isolate,
     /// Per-face texture action `texture_ui::TEX_*`.
     FaceTexture(u8),
+    /// Runtime markings row action `markings_ui::MK_*` on a slot.
+    Marking(u16, u8),
+    /// Open a Runtime markings row's slot Select.
+    MarkingMenu(u16),
+    /// Slot Select item: reassign the row's slot (from, to).
+    MarkingSlot(u16, u16),
     /// Assign texture dialog: pick PIC `i` (index into the dialog's list).
     AssignPick(usize),
     /// Assign texture dialog: UV mode Keep (0), Scale (1), Project (2).
@@ -403,6 +409,9 @@ impl App {
                 });
             }
             Action::FaceTexture(op) => self.face_texture_action(op),
+            Action::Marking(slot, op) => self.marking_action(slot, op),
+            Action::MarkingMenu(slot) => self.open_slot_menu(slot),
+            Action::MarkingSlot(from, to) => self.marking_slot(from, to),
             Action::AssignPick(i) => self.assign_pick(i),
             Action::AssignMode(mode) => self.assign_mode(mode),
             Action::AssignPlane(plane) => self.ed.assign.plane = plane.min(3),
@@ -1100,6 +1109,9 @@ impl App {
         }
         if name == "assign-texture" {
             return self.snapshot_assign();
+        }
+        if name.starts_with("markings") {
+            return self.snapshot_markings(name);
         }
         if name.starts_with("replace") {
             return self.snapshot_replace(name);
@@ -2422,6 +2434,7 @@ impl App {
                 }
                 o.panel_end(&mut s);
             }
+            self.markings_pane(o, &mut s);
         }
         if !self.doc.archive.entries.is_empty() {
             if self.pane(o, &mut s, pane::ENTRY_ACTIONS, "Entry", Icon::Lib) {
@@ -3021,6 +3034,7 @@ impl App {
         self.smoke_edit_mode();
         self.smoke_parts_panel();
         self.smoke_face_textures();
+        self.smoke_markings();
         self.smoke_texture_refusals();
         self.smoke_panels();
         self.smoke_replace();

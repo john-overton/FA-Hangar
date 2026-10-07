@@ -814,7 +814,7 @@ fn density_text(q16: u32) -> String {
 impl App {
     /// The pose the shown model is drawn in: the preview pose in the Model
     /// workspace, neutral for a Paint workspace context model.
-    fn shown_pose(&self) -> model::Pose {
+    pub(super) fn shown_pose(&self) -> model::Pose {
         if self.model.is_some() {
             self.ed.pose.clone()
         } else {
@@ -1972,7 +1972,7 @@ impl App {
         let at = self.doc.archive.find(name).unwrap();
         Pic::parse(&self.doc.archive.entries[at].read().unwrap()).unwrap()
     }
-    fn smoke_tap(&mut self, action: &dyn Fn(Action) -> bool) {
+    pub(super) fn smoke_tap(&mut self, action: &dyn Fn(Action) -> bool) {
         let r = self.smoke_find(action);
         self.chrome_click(r);
     }
