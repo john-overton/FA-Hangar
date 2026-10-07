@@ -740,6 +740,15 @@ impl App {
         app.refresh();
         assert!(app.model.is_some());
         assert_eq!(app.external_model, Some((source_id, 0)));
+        // Edit mode on another LIB's shape explains itself instead of ignoring the press.
+        app.mode = Mode::Model;
+        app.mesh_edit = true;
+        app.mesh_press(0, false);
+        assert!(app.mesh_drag.is_none());
+        assert!(app.status.contains("switch to that LIB"), "{}", app.status);
+        app.key(Key::Char('g'), false, false);
+        assert!(app.prompt.is_none());
+        app.mesh_edit = false;
         assert!(app
             .package_report()
             .checks
