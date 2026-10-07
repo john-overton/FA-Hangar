@@ -1844,6 +1844,20 @@ impl App {
         assert!(a.status.starts_with("Cloned SAME.PIC"), "{}", a.status);
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // The viewport header's mode Select shows Texture Paint whole.
+        a.act(Action::MeshMode);
+        a.act(Action::ModelPaint);
+        assert!(a.model_paint);
+        for (w, h) in [(800, 600), (1280, 800)] {
+            a.width = w;
+            a.height = h;
+            assert!(a
+                .layout()
+                .canvas
+                .commands
+                .iter()
+                .any(|d| matches!(d, Draw::Text(_, _, s, _, _) if s == "Texture Paint")));
+        }
     }
     /// Root faces the raster picks at their own centres, below the header.
     fn smoke_visible(&self, textured: bool) -> Vec<(usize, [i32; 2])> {

@@ -753,12 +753,13 @@ impl Layout {
         self.hit(rect, action);
     }
     /// Natural width of a Select showing `value`.
+    /// Width that shows `value` whole: the insets `select` draws with.
     pub(super) fn select_width(icon: bool, value: &str) -> i32 {
         6 + if icon { m::ICON_SM + space::SPACE_1 } else { 0 }
             + text_width(value, Style::Label)
             + space::SPACE_1
             + m::ICON_SM
-            + 4
+            + 6
     }
     /// Dropdown menu at (x, y), clamped inside the window. The whole surface
     /// is hit-tested as `pad` so clicks on padding never fall through.
