@@ -1032,3 +1032,110 @@ fn gear_forms(out: &mut String, bytes: &[u8], name: &str, out_dir: &str) -> Resu
     }
     Ok(failed)
 }
+/// Texture-state and vertex-slot proofs for every face the neutral model of
+/// each decodable SH draws: a summary, and one line per face and proof so a
+/// later run can be compared with this one (`baseline`, an earlier list).
+pub fn proof_census(lib: &str, baseline: Option<&str>) -> Result<(String, String)> {
+    use hangar_core::{model::Model, shape_geometry::Geometry};
+    let archive = Archive::parse(crate::platform::read(lib)?)?;
+    let mut lines = String::new();
+    let (mut shapes, mut decodable, mut faces, mut complete) = (0, 0, 0, 0);
+    let (mut material, mut slots, mut slot_total) = (0, 0, 0);
+    let mut reasons = BTreeMap::<String, usize>::new();
+    for e in archive.entries.iter().filter(|e| e.name.ends_with(".SH")) {
+        shapes += 1;
+        let bytes = e.read()?;
+        let (Ok(g), Ok(m)) = (Geometry::parse(&bytes), Model::parse(&bytes)) else {
+            continue;
+        };
+        decodable += 1;
+        let drawn: BTreeSet<usize> = m.faces.iter().filter_map(|f| g.face_at(f.offset)).collect();
+        let mut all = true;
+        for i in drawn {
+            faces += 1;
+            let at = g.faces[i].offset - g.inventory.code_start;
+            let line = match g.material(i) {
+                Ok(s) => {
+                    material += 1;
+                    let hex: String = g.selector(s).iter().map(|b| format!("{b:02X}")).collect();
+                    format!("OK {hex}")
+                }
+                Err(r) => {
+                    all = false;
+                    let key: String = r
+                        .split(' ')
+                        .map(|w| if w.contains("CODE+") { "CODE+#" } else { w })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    *reasons.entry(key).or_default() += 1;
+                    format!("ERR {r}")
+                }
+            };
+            let _ = writeln!(lines, "{} {at:05X} material {line}", e.name);
+            for s in &g.faces[i].slots {
+                slot_total += 1;
+                let line = match g.writer(i, *s) {
+                    Ok(b) => {
+                        slots += 1;
+                        format!("OK {:05X}", g.buffers[b].offset - g.inventory.code_start)
+                    }
+                    Err(r) => format!("ERR {r}"),
+                };
+                let _ = writeln!(lines, "{} {at:05X} slot{s} {line}", e.name);
+            }
+        }
+        complete += all as usize;
+    }
+    let mut out = format!(
+        "{shapes} SH, {decodable} decodable; texture state proved for {material} of {faces} drawn faces (every face in {complete} shapes); vertex slots proved {slots} of {slot_total}\n"
+    );
+    let mut sorted: Vec<_> = reasons.into_iter().collect();
+    sorted.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    for (r, n) in sorted.iter().take(12) {
+        let _ = writeln!(out, "  {n:6} {r}");
+    }
+    if let Some(path) = baseline {
+        let old = String::from_utf8(crate::platform::read(path)?).map_err(|e| e.to_string())?;
+        let parse = |text: &str| -> BTreeMap<String, String> {
+            text.lines()
+                .filter_map(|l| {
+                    let mut p = l.splitn(4, ' ');
+                    let key = format!("{} {} {}", p.next()?, p.next()?, p.next()?);
+                    Some((key, p.next()?.to_string()))
+                })
+                .collect()
+        };
+        let (old, new) = (parse(&old), parse(&lines));
+        for what in ["material", "slot"] {
+            let (mut before, mut after, mut gained, mut differ, mut missing) = (0, 0, 0, 0, 0);
+            let mut examples = Vec::new();
+            for (k, v) in &new {
+                if !k.split(' ').nth(2).is_some_and(|w| w.starts_with(what)) {
+                    continue;
+                }
+                after += v.starts_with("OK") as usize;
+                match old.get(k) {
+                    Some(w) if w.starts_with("OK") => {
+                        before += 1;
+                        if w != v {
+                            differ += 1;
+                            if examples.len() < 8 {
+                                examples.push(format!("{k}: {w} -> {v}"));
+                            }
+                        }
+                    }
+                    Some(_) => gained += v.starts_with("OK") as usize,
+                    None => missing += 1,
+                }
+            }
+            let _ = writeln!(
+                out,
+                "{what}: old proved {before}, new proves {after} (+{gained} newly proved), {differ} disagreements, {missing} not in the baseline"
+            );
+            for x in examples {
+                let _ = writeln!(out, "  {x}");
+            }
+        }
+    }
+    Ok((out, lines))
+}
