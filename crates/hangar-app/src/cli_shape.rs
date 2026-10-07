@@ -1139,3 +1139,154 @@ pub fn proof_census(lib: &str, baseline: Option<&str>) -> Result<(String, String
     }
     Ok((out, lines))
 }
+/// `--decal-census`: which shapes select which runtime texture slots (E0
+/// records), how many textured faces each slot draws, and which aircraft
+/// (PT) use the shape.
+pub fn decal_census(lib: &str) -> Result<String> {
+    use hangar_core::{
+        dependencies::Index,
+        shape_markings::{markings, slot_name},
+    };
+    let archive = Archive::parse(crate::platform::read(lib)?)?;
+    let mut index = Index::default();
+    index.update(&archive);
+    let mut out = String::new();
+    let (mut shapes, mut with, mut aircraft, mut failed) = (0, 0, 0, 0);
+    let mut per_slot = BTreeMap::<u16, (usize, usize, usize, usize)>::new();
+    let mut odd = Vec::new();
+    let mut lines = String::new();
+    for e in archive.entries.iter().filter(|e| e.name.ends_with(".SH")) {
+        shapes += 1;
+        let bytes = e.read()?;
+        let rows = match markings(&bytes) {
+            Ok(r) => r,
+            Err(why) => {
+                failed += 1;
+                let _ = writeln!(lines, "{} not analysed: {why}", e.name);
+                continue;
+            }
+        };
+        if rows.is_empty() {
+            continue;
+        }
+        with += 1;
+        let users = index.aircraft_users(&e.name);
+        aircraft += usize::from(!users.is_empty());
+        let mut parts = Vec::new();
+        for r in &rows {
+            let t = per_slot.entry(r.slot).or_default();
+            t.0 += 1;
+            t.1 += r.faces.len();
+            t.2 += r.contested.len();
+            t.3 += r.records.len();
+            if r.slot > 4 {
+                odd.push(format!("{} selects slot {}", e.name, r.slot));
+            }
+            let mut p = format!(
+                "slot {} {}x E0 {} face{}",
+                r.slot,
+                r.records.len(),
+                r.faces.len(),
+                if r.faces.len() == 1 { "" } else { "s" }
+            );
+            if !r.contested.is_empty() {
+                p += &format!(" ({} contested)", r.contested.len());
+            }
+            if !r.hidden.is_empty() || !r.painted.is_empty() {
+                p += &format!(
+                    " ({} hidden, {} paintable)",
+                    r.hidden.len(),
+                    r.painted.len()
+                );
+            }
+            parts.push(p);
+        }
+        let who = if users.is_empty() {
+            "-".to_string()
+        } else {
+            users.join(",")
+        };
+        let _ = writeln!(lines, "{} [{who}]: {}", e.name, parts.join("; "));
+    }
+    let _ = writeln!(
+        out,
+        "{lib}: {shapes} SH, {with} select runtime slots ({aircraft} of them used by a PT), {failed} not analysed"
+    );
+    for (slot, (n, faces, contested, records)) in &per_slot {
+        let _ = writeln!(
+            out,
+            "  slot {slot} {:<18} {n:4} shapes, {records:4} E0 records, {faces:5} faces, {contested} contested",
+            slot_name(*slot)
+        );
+    }
+    for o in &odd {
+        let _ = writeln!(out, "  note: {o}");
+    }
+    out.push_str(&lines);
+    Ok(out)
+}
+/// `--markings-check` core pass: every runtime-marking operation on every
+/// shape that selects a slot, each reversed and compared byte for byte.
+pub fn markings_round_trip(lib: &str) -> Result<String> {
+    use hangar_core::shape_markings::{
+        hide_slot, make_paintable, markings, reassign_slot, restore_slot, show_slot,
+    };
+    let archive = Archive::parse(crate::platform::read(lib)?)?;
+    let (mut shapes, mut passed, mut ops) = (0, 0, 0);
+    let mut failures = Vec::new();
+    for e in archive.entries.iter().filter(|e| e.name.ends_with(".SH")) {
+        let src = e.read()?;
+        let Ok(rows) = markings(&src) else { continue };
+        if rows.is_empty() {
+            continue;
+        }
+        shapes += 1;
+        let mut trials: Vec<(String, Result<Vec<u8>>)> = Vec::new();
+        let used: Vec<u16> = rows.iter().map(|r| r.slot).collect();
+        for r in &rows {
+            let s = r.slot;
+            trials.push((
+                format!("hide/show slot {s}"),
+                hide_slot(&src, s).and_then(|h| show_slot(&h, s)),
+            ));
+            if let Some(to) = (0..5).find(|t| !used.contains(t)) {
+                trials.push((
+                    format!("reassign slot {s} to {to} and back"),
+                    reassign_slot(&src, s, to).and_then(|m| reassign_slot(&m, to, s)),
+                ));
+            }
+            trials.push((
+                format!("make paintable/restore slot {s}"),
+                make_paintable(&src, s, "ZZPAINT.PIC", None, None)
+                    .and_then(|p| restore_slot(&p.shape, s).map(|r| r.0)),
+            ));
+        }
+        let mut all = Ok(src.clone());
+        for r in &rows {
+            all = all.and_then(|b| hide_slot(&b, r.slot));
+        }
+        for r in rows.iter().rev() {
+            all = all.and_then(|b| show_slot(&b, r.slot));
+        }
+        trials.push(("hide every slot, show every slot".into(), all));
+        let mut ok = true;
+        for (what, r) in trials {
+            ops += 1;
+            let why = match r {
+                Ok(b) if b == src => continue,
+                Ok(b) => format!("not byte-identical ({} vs {} bytes)", b.len(), src.len()),
+                Err(why) => why,
+            };
+            ok = false;
+            failures.push(format!("{} {what}: {why}", e.name));
+        }
+        passed += ok as usize;
+    }
+    let mut out = format!(
+        "{lib}: {shapes} shapes select runtime slots; {passed} pass all of their operations byte for byte ({ops} operations)\n"
+    );
+    for f in &failures {
+        let _ = writeln!(out, "  FAIL {f}");
+    }
+    Ok(out)
+}
