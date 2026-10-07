@@ -2360,12 +2360,12 @@ impl App {
         }
         if self.mode == Mode::Package {
             if self.mouse[0] < self.left() {
-                let rows = ((self.height - 220) / 24).max(1) as usize;
+                let rows = self.changes_visible();
                 self.changes_scroll = (self.changes_scroll as i32 - delta * 3)
                     .clamp(0, self.doc.changes().len().saturating_sub(rows) as i32)
                     as usize;
             } else if self.mouse[0] < self.right() {
-                let rows = ((self.height - 192) / 20).max(1) as usize;
+                let rows = self.validation_visible();
                 self.validation_scroll = (self.validation_scroll as i32 - delta * 3)
                     .clamp(0, self.validation_lines().len().saturating_sub(rows) as i32)
                     as usize;

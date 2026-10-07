@@ -1,7 +1,6 @@
 //! Resource relationships are available beside the model, not only in packaging.
-use super::view::{icon, label_fit, text_fit, Action, Icon, Layout};
+use super::view::{count, Action, Icon, Layout};
 use super::*;
-use hangar_core::validation::Level;
 
 /// What a reference or validation row shows.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -21,18 +20,14 @@ pub(super) struct Row {
     /// Evidence or explanation after the name, `ink-muted`.
     detail: String,
     kind: Kind,
-    color: Rgb,
     entry: Option<usize>,
     library: Option<u64>,
 }
-fn color(level: Level) -> Rgb {
-    match level {
-        Level::Pass => c::OK,
-        Level::Warning => c::AMBER,
-        Level::Error => c::DANGER,
-        Level::Info => c::INK_MUTED,
-    }
-}
+/// Package columns: top of the content below the 28px headers.
+const PACKAGE_TOP: i32 =
+    theme::metric::MENUBAR_H + theme::metric::EDITOR_HEADER_H + theme::space::SPACE_2;
+/// Build list rows start below the LIB name and the Changes sub-head.
+const PACKAGE_LIST_TOP: i32 = PACKAGE_TOP + 2 * theme::metric::ROW_H + theme::space::SPACE_2;
 pub(super) fn wrap(text: &str, columns: usize) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
@@ -101,7 +96,6 @@ impl App {
                 text,
                 detail,
                 kind,
-                color: c::INK,
                 entry,
                 library,
             });
@@ -174,7 +168,6 @@ impl App {
                             .unwrap_or(&library.path)
                     ),
                     kind: Kind::Link,
-                    color: c::INK,
                     entry: library.doc.archive.find(source),
                     library: Some(library.id),
                 });
@@ -300,48 +293,36 @@ impl App {
             o.canvas.rect(x + w - 5, ty, 3, thumb, c::GM_600);
         }
     }
+
+    /// Validation report rows: one head row per check (badge, entry) and its
+    /// wrapped message.
     pub(super) fn validation_lines(&self) -> Vec<Row> {
         let mut lines = Vec::new();
-        let columns = ((self.right() - self.left() - 30) / 7).max(16) as usize;
+        let width = self.right() - self.left() - 1 - 2 * theme::space::SPACE_3;
         if let Some(report) = &self.validation {
             for check in &report.checks {
                 lines.push(Row {
-                    text: format!(
-                        "{} {}",
-                        check.level.label(),
-                        check.entry.as_deref().unwrap_or("Package")
-                    ),
-                    detail: String::new(),
-                    kind: Kind::Text,
+                    text: check.entry.as_deref().unwrap_or("Package").into(),
+                    detail: check.level.label().into(),
+                    kind: Kind::Head,
                     library: None,
-                    color: color(check.level),
                     entry: check.entry.as_ref().and_then(|n| self.doc.archive.find(n)),
                 });
-                for text in wrap(&check.message, columns) {
+                for text in widgets::wrap(&check.message, width, Style::Label) {
                     lines.push(Row {
                         text,
                         detail: String::new(),
                         kind: Kind::Text,
-                        color: c::INK_MUTED,
                         entry: None,
                         library: None,
                     });
                 }
-                lines.push(Row {
-                    text: String::new(),
-                    detail: String::new(),
-                    kind: Kind::Text,
-                    color: c::INK_MUTED,
-                    entry: None,
-                    library: None,
-                });
             }
             if report.omitted > 0 {
                 lines.push(Row {
                     text: format!("{} further results omitted", report.omitted),
                     detail: String::new(),
-                    kind: Kind::Text,
-                    color: c::AMBER,
+                    kind: Kind::Note,
                     entry: None,
                     library: None,
                 });
@@ -349,156 +330,246 @@ impl App {
         }
         lines
     }
+    /// The package checks summary Notice.
+    pub(super) fn package_summary(&self) -> (widgets::Tone, String) {
+        use widgets::Tone;
+        match &self.validation {
+            None => (
+                Tone::Neutral,
+                "Checks have not been run. They cover this LIB; external resources may be required.".into(),
+            ),
+            Some(r) if r.errors > 0 => (
+                Tone::Danger,
+                format!(
+                    "{} and {}. Fix errors before packaging.",
+                    count(r.errors, "error", "errors"),
+                    count(r.warnings, "warning", "warnings")
+                ),
+            ),
+            Some(r) if r.warnings > 0 => (
+                Tone::Warn,
+                format!("No errors, {}. Review them before packaging.", count(r.warnings, "warning", "warnings")),
+            ),
+            Some(_) => (Tone::Ok, "Available checks passed: no errors or warnings.".into()),
+        }
+    }
+    /// Top of the validation results, below the summary Notice.
+    fn validation_top(&self) -> i32 {
+        let cw = self.right() - self.left() - 1 - 2 * theme::space::SPACE_3;
+        PACKAGE_TOP + widgets::notice_height(cw, &self.package_summary().1) + theme::space::SPACE_2
+    }
+    /// Validation rows that fit below the summary.
+    pub(super) fn validation_visible(&self) -> usize {
+        ((self.height - theme::metric::STATUSBAR_H - self.validation_top() - theme::space::SPACE_2)
+            / theme::metric::ROW_H)
+            .max(1) as usize
+    }
+    /// Changed entries that fit in the build list.
+    pub(super) fn changes_visible(&self) -> usize {
+        ((self.height - theme::metric::STATUSBAR_H - PACKAGE_LIST_TOP - 3 * theme::metric::ROW_H)
+            / theme::metric::ROW_H)
+            .max(1) as usize
+    }
+    /// Package workspace: build list, package checks and output columns.
     pub(super) fn package_layout(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, dot, notice, subhead, type_badge, Btn, Tone};
         let (l, r, w, h) = (self.left(), self.right(), self.width, self.height);
-        let mid = r - l;
+        let top = m::MENUBAR_H;
+        let bottom = h - m::STATUSBAR_H;
         let d = &mut o.canvas;
-        d.rect(0, 26, l, h - 48, c::GM_800);
-        d.rect(l + 1, 26, mid - 2, h - 48, c::GM_900);
-        d.rect(r + 1, 26, w - r - 1, h - 48, c::GM_800);
-        d.label(12, 44, "Build list", c::INK);
-        d.label(l + 12, 44, "Package checks", c::INK);
-        d.label(r + 12, 44, "Output", c::INK);
-        text_fit(
-            d,
-            12,
-            77,
-            l - 24,
-            self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path),
+        d.rect(0, top, w, bottom - top, c::GM_800);
+        for (x, title) in [
+            (0, "Build list"),
+            (l + 1, "Package checks"),
+            (r + 1, "Output"),
+        ] {
+            d.rect(x, top + m::EDITOR_HEADER_H - 1, w, 1, c::GM_1000);
+            d.styled(
+                x + space::SPACE_3,
+                baseline(top, m::EDITOR_HEADER_H, Style::Strong),
+                title,
+                c::INK,
+                Style::Strong,
+            );
+        }
+        d.rect(l, top, 1, bottom - top, c::GM_1000);
+        d.rect(r, top, 1, bottom - top, c::GM_1000);
+        // Build list: the LIB and its changed entries.
+        let lib = self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path);
+        let ly = top + m::EDITOR_HEADER_H + space::SPACE_2;
+        d.icon(space::SPACE_3, ly + 2, Icon::Lib, c::INK_MUTED, c::GM_800);
+        d.styled(
+            space::SPACE_3 + m::ICON + space::SPACE_1,
+            baseline(ly, m::ROW_H, Style::Value),
+            &fit(lib, l - 2 * space::SPACE_3 - m::ICON, Style::Value),
             c::INK,
+            Style::Value,
         );
         let changes = self.doc.changes();
-        let visible = ((h - 220) / 24).max(1) as usize;
+        subhead(
+            d,
+            space::SPACE_3,
+            PACKAGE_LIST_TOP - m::ROW_H,
+            l - 24,
+            &format!("Changes \u{b7} {}", changes.len()),
+        );
         if changes.is_empty() {
-            d.label(14, 110, "No changed entries", c::INK_MUTED);
+            d.styled(
+                space::SPACE_3,
+                baseline(PACKAGE_LIST_TOP, m::ROW_H, Style::Label),
+                "No changed entries",
+                c::INK_MUTED,
+                Style::Label,
+            );
         }
         for (i, (name, kind)) in changes
             .iter()
             .skip(self.changes_scroll)
-            .take(visible)
+            .take(self.changes_visible())
             .enumerate()
         {
-            let y = 100 + i as i32 * 24;
-            text_fit(d, 14, y + 15, l - 94, name, c::AMBER);
-            d.label(l - 80, y + 15, kind.label(), c::INK_MUTED);
-        }
-        label_fit(
-            d,
-            14,
-            h - 107,
-            l - 28,
-            &format!("{} changes / wheel scroll", changes.len()),
-            c::INK_MUTED,
-        );
-        d.label(14, h - 80, "OUTPUT MODE", c::INK_FAINT);
-        label_fit(
-            d,
-            14,
-            h - 54,
-            l - 28,
-            if hangar_core::save::protected_name(&self.path).is_some() {
-                "Protected / save a copy"
-            } else {
-                "Custom / save with backup"
-            },
-            c::INK_MUTED,
-        );
-        let summary = self
-            .validation
-            .as_ref()
-            .map(|r| r.summary())
-            .unwrap_or_else(|| "Checks have not been run".into());
-        label_fit(
-            d,
-            l + 12,
-            76,
-            mid - 24,
-            &summary,
-            if self.validation.as_ref().is_some_and(|r| r.errors > 0) {
-                c::DANGER
-            } else {
-                c::INK
-            },
-        );
-        o.button(
-            [l + 12, 88, mid - 24, 24],
-            "Re-run package checks",
-            Action::Validate,
-            false,
-        );
-        let d = &mut o.canvas;
-        label_fit(
-            d,
-            l + 12,
-            133,
-            mid - 24,
-            "Current LIB / external resources may be required",
-            c::INK_FAINT,
-        );
-        if self
-            .validation
-            .as_ref()
-            .is_some_and(|report| report.errors == 0 && report.warnings == 0)
-        {
-            icon(&mut o.canvas, r + 18, 380, Icon::Check, c::OK);
-            label_fit(
-                &mut o.canvas,
-                r + 42,
-                395,
-                w - r - 54,
-                "Available checks passed",
-                c::OK,
+            let y = PACKAGE_LIST_TOP + i as i32 * m::ROW_H;
+            d.rect(
+                1,
+                y,
+                l - 2,
+                m::ROW_H,
+                if i % 2 == 0 { c::GM_800 } else { c::GM_900 },
+            );
+            dot(
+                d,
+                space::SPACE_3,
+                y + (m::ROW_H - m::DIRTY_DOT) / 2,
+                c::AMBER,
+            );
+            let label = kind.label();
+            let kx = l - space::SPACE_3 - text_width(label, Style::Label);
+            d.styled(
+                kx,
+                baseline(y, m::ROW_H, Style::Label),
+                label,
+                c::INK_MUTED,
+                Style::Label,
+            );
+            let tx = space::SPACE_3 + m::DIRTY_DOT + space::SPACE_2;
+            d.styled(
+                tx,
+                baseline(y, m::ROW_H, Style::Value),
+                &fit(name, kx - space::SPACE_2 - tx, Style::Value),
+                c::INK,
+                Style::Value,
             );
         }
+        let my = bottom - 2 * m::ROW_H - space::SPACE_2;
+        subhead(d, space::SPACE_3, my, l - 24, "Output mode");
+        d.styled(
+            space::SPACE_3,
+            baseline(my + m::ROW_H, m::ROW_H, Style::Label),
+            &fit(
+                if hangar_core::save::protected_name(&self.path).is_some() {
+                    "Protected name: save a copy"
+                } else {
+                    "Custom LIB: saved with a backup"
+                },
+                l - 24,
+                Style::Label,
+            ),
+            c::INK,
+            Style::Label,
+        );
+        // Package checks: summary Notice, Run checks, then each result.
+        let (cx, cw) = (l + 1 + space::SPACE_3, r - l - 1 - 2 * space::SPACE_3);
+        let run = Btn::new("Run checks").with_icon(Icon::Check);
+        let rw = run.width();
+        o.button_ex(
+            [
+                r - space::SPACE_1 - rw,
+                top + (m::EDITOR_HEADER_H - m::BUTTON_H) / 2,
+                rw,
+                m::BUTTON_H,
+            ],
+            run,
+            Action::Validate,
+        );
+        let (tone, summary) = self.package_summary();
+        let ny = PACKAGE_TOP;
+        notice(&mut o.canvas, cx, ny, cw, tone, &summary);
         let lines = self.validation_lines();
-        let visible = ((h - 192) / 20).max(1) as usize;
+        let list = self.validation_top();
         for (i, row) in lines
             .iter()
             .skip(self.validation_scroll)
-            .take(visible)
+            .take(self.validation_visible())
             .enumerate()
         {
-            let y = 146 + i as i32 * 20;
-            text_fit(
-                &mut o.canvas,
-                l + 12,
-                y + 15,
-                mid - 24,
-                &row.text,
-                row.color,
-            );
+            let y = list + i as i32 * m::ROW_H;
+            let rect = [cx - 4, y, cw + 8, m::ROW_H];
+            let hover = row.entry.is_some() && o.over(rect);
+            let d = &mut o.canvas;
+            if hover {
+                d.rect(rect[0], y, rect[2], m::ROW_H, c::GM_700);
+            }
+            match row.kind {
+                Kind::Head => {
+                    let tone = match row.detail.as_str() {
+                        "PASS" => Tone::Ok,
+                        "WARN" => Tone::Warn,
+                        "ERROR" => Tone::Danger,
+                        _ => Tone::Neutral,
+                    };
+                    let bw = type_badge(d, cx, y + (m::ROW_H - m::BADGE_H) / 2, &row.detail, tone);
+                    d.styled(
+                        cx + bw + space::SPACE_2,
+                        baseline(y, m::ROW_H, Style::Value),
+                        &fit(&row.text, cw - bw - space::SPACE_2, Style::Value),
+                        if row.entry.is_some() {
+                            c::STEEL
+                        } else {
+                            c::INK
+                        },
+                        Style::Value,
+                    );
+                }
+                _ => d.styled(
+                    cx,
+                    baseline(y, m::ROW_H, Style::Label),
+                    &fit(&row.text, cw, Style::Label),
+                    c::INK_MUTED,
+                    Style::Label,
+                ),
+            }
             if let Some(entry) = row.entry {
-                o.hit([l + 8, y, mid - 16, 19], Action::Related(entry));
+                o.hit(rect, Action::Related(entry));
             }
         }
-        label_fit(
+        // Output: what packaging writes, catalogs and the primary action.
+        let (ox, ow) = (r + 1 + space::SPACE_3, w - r - 1 - 2 * space::SPACE_3);
+        let mut y = top + m::EDITOR_HEADER_H + space::SPACE_2;
+        y += notice(
             &mut o.canvas,
-            l + 12,
-            h - 29,
-            mid - 24,
-            "Wheel scroll / click entry to inspect",
-            c::INK_FAINT,
+            ox,
+            y,
+            ow,
+            Tone::Neutral,
+            "Package writes a new custom LIB. Retail names stay protected and custom saves keep backups.",
+        ) + space::SPACE_2;
+        notice(
+            &mut o.canvas,
+            ox,
+            y,
+            ow,
+            Tone::Neutral,
+            "Checks are advisory. Other game LIBs can supply outside references; runtime names and implicit families are not fully checked. Test in Fighters Anthology.",
         );
-        let d = &mut o.canvas;
-        d.label(r + 18, 80, "Destination", c::INK);
-        d.label(r + 18, 108, "Choose a custom LIB filename.", c::INK_MUTED);
-        d.label(r + 18, 143, "Retail names stay protected.", c::INK_MUTED);
-        d.label(r + 18, 169, "Custom saves keep backups.", c::INK_MUTED);
-        d.label(r + 18, 216, "Checks are advisory.", c::INK);
-        for (i, line) in wrap("References outside this LIB can be supplied by other game libraries. Runtime-generated names and implicit families are not fully checked. Test the result in Fighters Anthology.", ((w - r - 36) / 7) as usize).iter().enumerate() {
-            text_fit(d, r + 18, 242 + i as i32 * 20, w - r - 36, line, c::INK_MUTED);
-        }
-        for (offset, title, action) in [
+        let mut buttons = vec![
             (
-                161,
                 "Add source LIB catalog",
                 Action::File(FileAction::ReferenceSource),
             ),
-            (131, "Clear source catalogs", Action::ClearSources),
-            (101, "Export report", Action::File(FileAction::Report)),
-        ] {
-            o.button([r + 12, h - offset, w - r - 24, 24], title, action, false);
-        }
+            ("Clear source catalogs", Action::ClearSources),
+            ("Export report", Action::File(FileAction::Report)),
+        ];
         // Editor backups for painted textures; distribution builds usually drop them.
         if self
             .doc
@@ -507,18 +578,19 @@ impl App {
             .iter()
             .any(|e| hangar_core::originals::texture_of(&e.name).is_some())
         {
-            o.button(
-                [r + 12, h - 191, w - r - 24, 24],
-                "Remove stored originals",
-                Action::RemoveOriginals,
-                false,
-            );
+            buttons.insert(0, ("Remove stored originals", Action::RemoveOriginals));
         }
-        o.button(
-            [r + 12, h - 63, w - r - 24, 28],
-            "Package LIB",
+        let pitch = m::BUTTON_H + space::SPACE_1;
+        let package_y = bottom - space::SPACE_2 - m::BUTTON_H;
+        let mut by = package_y - space::SPACE_3 - buttons.len() as i32 * pitch;
+        for (title, action) in buttons {
+            o.button_ex([ox, by, ow, m::BUTTON_H], Btn::new(title), action);
+            by += pitch;
+        }
+        o.button_ex(
+            [ox, package_y, ow, m::BUTTON_H],
+            Btn::new("Package LIB").with_icon(Icon::Package).primary(),
             Action::File(FileAction::Save),
-            true,
         );
     }
 }
@@ -572,9 +644,22 @@ impl App {
             .iter()
             .any(|(name, kind)| name == "DEMO.PIC"
                 && *kind == hangar_core::document::ChangeKind::Removed));
+        // A long report scrolls; results open their entry through the row.
+        let report = self.validation.as_mut().unwrap();
+        for n in 0..12 {
+            report.add(
+                hangar_core::validation::Level::Info,
+                Some("DEMO.SH"),
+                format!("Synthetic note {n} for the scroll check"),
+            );
+        }
         self.mouse = [self.left() + 40, 200];
         self.wheel(-100);
         assert!(self.validation_scroll > 0);
+        assert_eq!(
+            self.validation_scroll,
+            self.validation_lines().len() - self.validation_visible()
+        );
         self.act(Action::Undo);
         assert!(self.validation.is_none());
         self.act(Action::Validate);

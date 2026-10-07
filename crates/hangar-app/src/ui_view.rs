@@ -551,8 +551,8 @@ impl App {
             Action::Validate => {
                 self.finish_stroke();
                 let report = self.package_report();
-                self.status = report.summary();
                 self.validation = Some(report);
+                self.status = format!("Package checks: {}", self.package_summary().1);
                 self.validation_scroll = 0;
                 self.mode = Mode::Package;
             }
