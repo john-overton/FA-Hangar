@@ -102,7 +102,8 @@ These protect users' game files. Follow them in any new feature.
   conversions or gameplay semantics without evidence.
 - **Retail LIB names are protected** (`hangar-core/src/save.rs`). Do not
   weaken the list or add an unlock switch. Custom saves go through
-  `saving.rs` (stage, numbered `.bak`, install). Exports are create-new.
+  `saving.rs` (stage `<STEM>.TMP`, numbered `<STEM>.BAK`/`.B01`..`.B99`,
+  install). Companion names must never contain `.LIB`. Exports are create-new.
 - **Undo is entry-granular** (`hangar-core/src/document.rs`). A user action
   that touches several entries (a stroke, a graft, a clone) is one undo step;
   use `Document::transaction` to validate and apply it atomically.

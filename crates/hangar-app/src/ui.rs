@@ -1087,8 +1087,9 @@ impl App {
             "{}/HGUI.LIB",
             crate::platform::current_dir().trim_end_matches(['/', '\\'])
         );
-        let backup = format!("{path}.bak");
-        for p in [&path, &backup, &format!("{path}.tmp")] {
+        let backup = hangar_core::save::companion(&path, 'B', 0);
+        assert!(backup.ends_with("/HGUI.BAK"));
+        for p in [&path, &backup, &hangar_core::save::companion(&path, 'T', 0)] {
             assert!(!crate::platform::save_exists(p).unwrap());
         }
         self.perform_file(FileAction::Save, &path).unwrap();

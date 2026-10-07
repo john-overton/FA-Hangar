@@ -81,6 +81,9 @@ pub fn validate_destination(path: &str) -> Result<()> {
     {
         return Err("Choose an ASCII .LIB filename without trailing dots/spaces or special Windows path syntax".into());
     }
+    if leaf[..leaf.len() - 4].to_ascii_uppercase().contains(".LIB") {
+        return Err("Choose a LIB name with .LIB only at its end: FA loads every file whose name contains .LIB".into());
+    }
     Ok(())
 }
 
@@ -93,18 +96,37 @@ pub trait Storage {
     fn remove(&mut self, path: &str) -> Result<()>;
 }
 
-fn unused(fs: &mut impl Storage, path: &str, suffix: &str) -> Result<String> {
-    for i in 0..1000 {
-        let candidate = if i == 0 {
-            format!("{path}.{suffix}")
-        } else {
-            format!("{path}.{suffix}.{i}")
-        };
+/// Most numbered backups (`.B01` to `.B99`) or stages beside one LIB.
+pub const NUMBERED: usize = 99;
+/// Companion names for `path` (which ends in `.LIB`): `<STEM>.BAK` then
+/// `<STEM>.B01` .. `<STEM>.B99` for backups, `<STEM>.TMP` then `.T01` ..
+/// for the stage. They never contain ".LIB": FA.EXE treats every file whose
+/// upper-cased name contains ".LIB" and that starts with EALIB as another
+/// LIB, so the old `X.LIB.bak` backups were loaded as duplicate LIBs.
+pub fn companion(path: &str, letter: char, n: usize) -> String {
+    let stem = &path[..path.len().saturating_sub(4)];
+    match (letter, n) {
+        ('B', 0) => format!("{stem}.BAK"),
+        ('T', 0) => format!("{stem}.TMP"),
+        _ => format!("{stem}.{letter}{n:02}"),
+    }
+}
+fn unused(fs: &mut impl Storage, path: &str, letter: char) -> Result<String> {
+    for i in 0..=NUMBERED {
+        let candidate = companion(path, letter, i);
         if !fs.exists(&candidate)? {
             return Ok(candidate);
         }
     }
-    Err(format!("No unused {suffix} filename beside {path}"))
+    Err(format!(
+        "No unused {} name beside {path}; move old {} files away",
+        if letter == 'B' { "backup" } else { "staging" },
+        if letter == 'B' {
+            ".BAK/.B01-.B99"
+        } else {
+            ".TMP/.T01-.T99"
+        }
+    ))
 }
 
 /// Stage and flush first, preserve the old file under a fresh backup name, then
@@ -113,11 +135,11 @@ fn unused(fs: &mut impl Storage, path: &str, suffix: &str) -> Result<String> {
 pub fn library(fs: &mut impl Storage, path: &str, bytes: &[u8]) -> Result<Option<String>> {
     validate_destination(path)?;
     let backup = if fs.exists(path)? {
-        Some(unused(fs, path, "bak")?)
+        Some(unused(fs, path, 'B')?)
     } else {
         None
     };
-    let stage = unused(fs, path, "tmp")?;
+    let stage = unused(fs, path, 'T')?;
     fs.write_new(&stage, bytes)?;
     if let Some(old) = &backup {
         if let Err(e) = fs.move_new(path, old) {
@@ -225,20 +247,25 @@ mod tests {
     #[test]
     fn repeated_save_preserves_every_backup_and_existing_stage() {
         let mut d = disk();
-        d.files.insert("MOD.LIB.tmp".into(), b"unrelated".to_vec());
+        d.files.insert("MOD.TMP".into(), b"unrelated".to_vec());
         assert_eq!(
             library(&mut d, "MOD.LIB", b"new").unwrap().as_deref(),
-            Some("MOD.LIB.bak")
+            Some("MOD.BAK")
         );
         assert_eq!(
             library(&mut d, "MOD.LIB", b"third").unwrap().as_deref(),
-            Some("MOD.LIB.bak.1")
+            Some("MOD.B01")
         );
-        assert_eq!(d.files["MOD.LIB.bak"], b"old");
-        assert_eq!(d.files["MOD.LIB.bak.1"], b"new");
+        assert_eq!(d.files["MOD.BAK"], b"old");
+        assert_eq!(d.files["MOD.B01"], b"new");
         assert_eq!(d.files["MOD.LIB"], b"third");
-        assert_eq!(d.files["MOD.LIB.tmp"], b"unrelated");
-        assert!(!d.files.contains_key("MOD.LIB.tmp.1"));
+        assert_eq!(d.files["MOD.TMP"], b"unrelated");
+        assert!(!d.files.contains_key("MOD.T01"));
+        // No companion name contains .LIB in any case.
+        assert!(d
+            .files
+            .keys()
+            .all(|n| n == "MOD.LIB" || !n.to_ascii_uppercase().contains(".LIB")));
     }
     #[test]
     fn failures_keep_old_lib_and_report_recovery_paths() {
@@ -256,9 +283,9 @@ mod tests {
         let mut d = disk();
         d.fail_moves = vec![2, 3];
         let e = library(&mut d, "MOD.LIB", b"new").unwrap_err();
-        assert!(e.contains("MOD.LIB.bak") && e.contains("MOD.LIB.tmp"));
-        assert_eq!(d.files["MOD.LIB.bak"], b"old");
-        assert_eq!(d.files["MOD.LIB.tmp"], b"new");
+        assert!(e.contains("MOD.BAK") && e.contains("MOD.TMP"));
+        assert_eq!(d.files["MOD.BAK"], b"old");
+        assert_eq!(d.files["MOD.TMP"], b"new");
     }
     #[test]
     fn new_lib_needs_no_backup() {
@@ -271,16 +298,38 @@ mod tests {
     fn files_appearing_during_save_are_never_clobbered() {
         let mut d = disk();
         d.arrivals
-            .insert(1, ("MOD.LIB.bak".into(), b"other backup".to_vec()));
+            .insert(1, ("MOD.BAK".into(), b"other backup".to_vec()));
         assert!(library(&mut d, "MOD.LIB", b"new").is_err());
         assert_eq!(d.files["MOD.LIB"], b"old");
-        assert_eq!(d.files["MOD.LIB.bak"], b"other backup");
+        assert_eq!(d.files["MOD.BAK"], b"other backup");
         let mut d = disk();
         d.arrivals
             .insert(2, ("MOD.LIB".into(), b"other save".to_vec()));
         assert!(library(&mut d, "MOD.LIB", b"new").is_err());
         assert_eq!(d.files["MOD.LIB"], b"other save");
-        assert_eq!(d.files["MOD.LIB.bak"], b"old");
-        assert_eq!(d.files["MOD.LIB.tmp"], b"new");
+        assert_eq!(d.files["MOD.BAK"], b"old");
+        assert_eq!(d.files["MOD.TMP"], b"new");
+    }
+    #[test]
+    fn backups_are_numbered_8_3_names_without_lib() {
+        assert_eq!(
+            companion("C:\\FA\\TopGun.LIB", 'B', 0),
+            "C:\\FA\\TopGun.BAK"
+        );
+        assert_eq!(companion("mod.lib", 'B', 7), "mod.B07");
+        assert_eq!(companion("MOD.LIB", 'T', 99), "MOD.T99");
+        let mut d = disk();
+        d.files.insert("MOD.BAK".into(), Vec::new());
+        for n in 1..=NUMBERED {
+            d.files.insert(companion("MOD.LIB", 'B', n), Vec::new());
+        }
+        let e = library(&mut d, "MOD.LIB", b"new").unwrap_err();
+        assert!(e.contains("No unused backup name"), "{e}");
+        assert_eq!(d.files["MOD.LIB"], b"old");
+        for p in ["X.LIB.LIB", "C:\\FA\\a.lib.LIB", "B.Lib.lib"] {
+            assert!(validate_destination(p)
+                .unwrap_err()
+                .contains(".LIB only at its end"));
+        }
     }
 }

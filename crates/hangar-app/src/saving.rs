@@ -27,7 +27,7 @@ pub fn library(path: &str, bytes: &[u8]) -> Result<Option<String>> {
 pub fn smoke() {
     let name = "HGSAVE.LIB";
     // Refuse to touch a pre-existing scratch path, including prior backups.
-    for p in [name, "HGSAVE.LIB.bak", "HGSAVE.LIB.bak.1", "HGSAVE.LIB.tmp"] {
+    for p in [name, "HGSAVE.BAK", "HGSAVE.B01", "HGSAVE.TMP"] {
         assert!(
             !crate::platform::save_exists(p).unwrap(),
             "Save smoke scratch path exists"
@@ -43,9 +43,11 @@ pub fn smoke() {
     let after = a.bytes().unwrap();
     assert_eq!(library(name, &before).unwrap(), None);
     let backup = library(name, &after).unwrap().unwrap();
+    assert_eq!(backup, "HGSAVE.BAK");
     assert_eq!(crate::platform::read(&backup).unwrap(), before);
     assert_eq!(crate::platform::read(name).unwrap(), after);
     let backup2 = library(name, &before).unwrap().unwrap();
+    assert_eq!(backup2, "HGSAVE.B01");
     assert_eq!(crate::platform::read(&backup2).unwrap(), after);
     assert_eq!(crate::platform::read(&backup).unwrap(), before);
     assert_eq!(crate::platform::read(name).unwrap(), before);

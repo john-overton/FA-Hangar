@@ -264,7 +264,7 @@ impl App {
             if hangar_core::save::protected_name(&p.value).is_some() {
                 "Retail LIB names are protected. Choose a different file name."
             } else {
-                "Saves a custom LIB; an existing file is kept as a numbered .bak."
+                "Saves a custom LIB; an existing file is kept as a numbered .BAK."
             }
         } else {
             "Click a folder to open it; select a file, then confirm."

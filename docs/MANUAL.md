@@ -225,8 +225,13 @@ content fingerprint. Renaming a retail copy to a custom name makes that copy
 writable. The reserved names cannot be used for new output files either.
 
 Saving an existing custom `MYMOD.LIB` keeps the previous file as
-`MYMOD.LIB.bak`, then `.bak.1`, `.bak.2`, and so on without replacing earlier
-backups. The new file is written and flushed before the old file is moved.
+`MYMOD.BAK`, then `MYMOD.B01`, `MYMOD.B02`, and so on up to `MYMOD.B99`,
+without replacing earlier backups; the new file is staged as `MYMOD.TMP` (or
+`.T01`..`.T99`). These names never contain `.LIB`: Fighters Anthology loads
+every file in its folder whose name contains `.LIB` as another LIB, so older
+Hangar backups named `MYMOD.LIB.bak` were loaded as duplicate LIBs (see Game
+limits). Move such old backups out of the game folder. The new file is
+written and flushed before the old file is moved.
 If installation of the new file fails, Hangar tries to restore the old name;
 if restoration fails, the error identifies the backup and staged file. A power
 loss between moves can require restoring the backup manually. Backups are kept

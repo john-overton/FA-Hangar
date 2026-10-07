@@ -15,8 +15,9 @@ The EXE is portable; the other files are documentation and licensing.
 4. Select DEMO.PT, click Flight, edit a numeric field. Ctrl+A clears the
    value before typing. Verify amber highlighting, saved values and undo/redo.
 5. Ctrl+S, save as `MYMOD.LIB`, then edit and save again to the same path.
-   Confirm the new edits reopen and `MYMOD.LIB.bak` contains the previous
-   version. A third save should keep `.bak` and add `.bak.1`.
+   Confirm the new edits reopen and `MYMOD.BAK` contains the previous
+   version. A third save should keep `MYMOD.BAK` and add `MYMOD.B01`; no
+   file name beside it may contain `.LIB` except `MYMOD.LIB` itself.
 6. Close with unsaved edits. Esc should return; clicking Discard changes should close.
 
 The synthetic demo is only an editor test; do not install it in the game.

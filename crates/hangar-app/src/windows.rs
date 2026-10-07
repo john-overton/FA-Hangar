@@ -239,7 +239,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe {
         MessageBoxA(
             ptr::null_mut(),
-            c"Hangar stopped after an internal error. If saving, check the LIB and its .bak/.tmp files.".as_ptr(),
+            c"Hangar stopped after an internal error. If saving, check the LIB and its .BAK/.TMP files.".as_ptr(),
             c"TORE Hangar".as_ptr(),
             0x10,
         );

@@ -42,8 +42,10 @@ compiler-generated instructions or runtime behavior work on Windows 98.
   for input, edited resources, and packaging output; on small machines, edit a
   smaller mod LIB rather than a whole retail library.
 - Retail LIB filenames are reserved across directories and letter case. Custom
-  LIBs are staged and flushed, then the old file is moved to an unused numbered
-  `.bak` name before installing the replacement. Failed installation attempts
+  LIBs are staged (`<STEM>.TMP`) and flushed, then the old file is moved to an
+  unused numbered `<STEM>.BAK`/`.B01`..`.B99` name before installing the
+  replacement. No backup or stage name contains `.LIB`, which FA would load
+  as another LIB. Failed installation attempts
   restore the backup; a failed restore reports both recovery paths. Abrupt power
   failure between moves can require manually restoring the backup. Raw resource
   exports remain create-new. Read-only files and symlink/reparse outputs are
