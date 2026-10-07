@@ -698,10 +698,15 @@ impl App {
     }
 }
 
+#[inline(never)]
+fn material_app() -> Box<App> {
+    Box::new(App::new())
+}
 impl App {
     #[inline(never)]
     pub(super) fn smoke_material_tools(&mut self) {
-        let mut a = App::new();
+        // Heap-allocate the editor so this frame stays below the 4 KiB probe limit.
+        let mut a = material_app();
         a.demo();
         let original = a.doc.archive.bytes().unwrap();
         a.select_entry(1);
