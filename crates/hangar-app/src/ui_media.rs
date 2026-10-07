@@ -1661,7 +1661,7 @@ fn press(a: &mut App, predicate: impl Fn(Action) -> bool) {
 }
 fn shows(a: &mut App, text: &str) -> bool {
     a.layout().canvas.commands.iter().any(|d| match d {
-        Draw::Label(_, _, s, _) | Draw::Text(_, _, s, _) => s.contains(text),
+        Draw::Text(_, _, s, _, _) => s.contains(text),
         _ => false,
     })
 }

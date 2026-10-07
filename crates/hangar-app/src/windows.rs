@@ -1,6 +1,6 @@
 //! ANSI Win32/GDI only. No CRT, standard library, Unicode shim, GPU or installer.
 #![allow(non_snake_case)]
-use crate::ui::{App, Draw, Key};
+use crate::ui::{App, Draw, Key, Style};
 use alloc::{boxed::Box, ffi::CString, format, string::String, vec, vec::Vec};
 use core::{
     alloc::{GlobalAlloc, Layout},
@@ -393,6 +393,50 @@ struct BitmapInfo {
     used: u32,
     important: u32,
 }
+/// One cached GDI font per text style, created on first paint and kept for
+/// the life of the process: Tahoma for UI styles, Lucida Console for data.
+/// Negative heights select the em size from `theme::text`; Win9x maps weight
+/// 500 to regular and 600 to bold.
+static mut FONTS: [Handle; 9] = [ptr::null_mut(); 9];
+unsafe fn fonts() -> [Handle; 9] {
+    let fonts = &mut *ptr::addr_of_mut!(FONTS);
+    for style in Style::ALL {
+        if fonts[style.index()].is_null() {
+            let spec = style.spec();
+            fonts[style.index()] = CreateFontA(
+                -spec.size,
+                0,
+                0,
+                0,
+                spec.weight as i32,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                u32::from(style.mono()),
+                if style.mono() {
+                    c"Lucida Console".as_ptr()
+                } else {
+                    c"Tahoma".as_ptr()
+                },
+            );
+        }
+    }
+    *fonts
+}
+/// Baseline offset from the TextOutA cell top: Tahoma's ascent is one em,
+/// Lucida Console's is 1616/2048 em.
+fn ascent(style: Style) -> i32 {
+    let size = style.spec().size;
+    if style.mono() {
+        (size * 1616 + 1024) / 2048
+    } else {
+        size
+    }
+}
 unsafe fn paint(hwnd: Handle) {
     let mut ps: Paint = core::mem::zeroed();
     let dc = BeginPaint(hwnd, &mut ps);
@@ -411,39 +455,8 @@ unsafe fn paint(hwnd: Handle) {
         return;
     }
     let oldbitmap = SelectObject(back, bitmap);
-    let font = CreateFontA(
-        -12,
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        c"Lucida Console".as_ptr(),
-    );
-    let ui_font = CreateFontA(
-        -12,
-        0,
-        0,
-        0,
-        400,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        c"Tahoma".as_ptr(),
-    );
-    let oldfont = SelectObject(back, font);
+    let fonts = fonts();
+    let oldfont = SelectObject(back, fonts[0]);
     SetBkMode(back, 1);
     for cmd in app.draw().commands {
         match cmd {
@@ -469,10 +482,17 @@ unsafe fn paint(hwnd: Handle) {
                 SelectObject(back, old);
                 DeleteObject(pen);
             }
-            Draw::Text(x, y, s, c) => {
-                SelectObject(back, font);
+            Draw::Text(x, y, s, c, style) => {
+                let bytes = crate::ui::native_text(&s, true);
+                SelectObject(back, fonts[style.index()]);
                 SetTextColor(back, color(c));
-                TextOutA(back, x, y - 12, s.as_ptr().cast(), s.len() as i32);
+                TextOutA(
+                    back,
+                    x,
+                    y - ascent(style),
+                    bytes.as_ptr().cast(),
+                    bytes.len() as i32,
+                );
             }
             Draw::Bitmap(x, y, w, h, pixels) => {
                 let info = BitmapInfo {
@@ -504,17 +524,10 @@ unsafe fn paint(hwnd: Handle) {
                     0x00cc0020,
                 );
             }
-            Draw::Label(x, y, s, c) => {
-                SelectObject(back, ui_font);
-                SetTextColor(back, color(c));
-                TextOutA(back, x, y - 12, s.as_ptr().cast(), s.len() as i32);
-            }
         }
     }
     BitBlt(dc, 0, 0, app.width, app.height, back, 0, 0, 0x00cc0020);
     SelectObject(back, oldfont);
-    DeleteObject(font);
-    DeleteObject(ui_font);
     SelectObject(back, oldbitmap);
     DeleteObject(bitmap);
     DeleteDC(back);

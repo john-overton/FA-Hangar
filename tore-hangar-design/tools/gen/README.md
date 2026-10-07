@@ -26,6 +26,31 @@ the new constant from `theme::`. Metric values must be integer px. The output
 is deterministic, so `git diff --exit-code` after a run checks that the
 committed files are current.
 
+## Icons and text advances (`glyphs.py`)
+
+```sh
+python3 tore-hangar-design/tools/gen/glyphs.py
+```
+
+Writes `crates/hangar-app/src/ui_glyphs.rs`, plain const data the app compiles
+in. Needs `rsvg-convert`, ImageMagick `magick` and the Liberation Sans TTFs.
+
+- **Icons.** Every `icons/*.svg` becomes a `Glyph` variant (file stem in
+  CamelCase). Each SVG is rasterized once by `rsvg-convert` at 16 x 16 and its
+  alpha (coverage) is thresholded into two run lists of `(row, x, len)`:
+  *full* pixels (coverage >= 166/255, about 65%) and *half* pixels (>= 77/255,
+  about 30%). The app draws full runs in the icon color and half runs in the
+  icon color mixed halfway into the background (`Rgb::mix`), so the 1.5px
+  strokes keep their weight while every pixel stays a solid GDI fill. Nothing
+  parses SVG at runtime. To add an icon, draw it on the 16px grid with a 1.5px
+  round stroke (see `icons/README.md`), save it as `icons/<name>.svg`, add the
+  path to `icons.py` for the previews, and rerun.
+- **Text advances.** Liberation Sans Regular and Bold advance widths for ASCII
+  32..126 in 1/64 em (`UI_ADVANCE`, `UI_ADVANCE_BOLD`). Liberation Sans is
+  metric-compatible with Arial, which is close to Tahoma; `ui::char_width`
+  uses them (bold +8% for Tahoma Bold) to estimate label widths for truncation
+  and layout. Mono styles use Lucida Console's fixed 0.6 em cell.
+
 ## Previews (`build.py`, `render.py`, `icons.py`)
 
 Reference only. `build.py OUT` writes the HTML component previews into

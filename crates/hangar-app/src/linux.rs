@@ -1,5 +1,5 @@
 //! Small Xlib backend for local Linux development. No toolkit or GPU dependency.
-use crate::ui::{App, Draw, Key};
+use crate::ui::{App, Draw, Key, Style};
 use hangar_core::Result;
 use std::{
     ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void, CString},
@@ -224,9 +224,71 @@ unsafe extern "C" {
     fn XFlush(d: *mut c_void) -> c_int;
     fn XDestroyWindow(d: *mut c_void, w: c_ulong) -> c_int;
     fn XCloseDisplay(d: *mut c_void) -> c_int;
-    fn XLoadFont(d: *mut c_void, name: *const c_char) -> c_ulong;
+    fn XLoadQueryFont(d: *mut c_void, name: *const c_char) -> *mut XFontStruct;
     fn XSetFont(d: *mut c_void, gc: *mut c_void, font: c_ulong) -> c_int;
-    fn XUnloadFont(d: *mut c_void, font: c_ulong) -> c_int;
+    fn XFreeFont(d: *mut c_void, font: *mut XFontStruct) -> c_int;
+}
+/// Leading fields of Xlib's XFontStruct; only `fid` is read.
+#[repr(C)]
+struct XFontStruct {
+    ext_data: *mut c_void,
+    fid: c_ulong,
+}
+/// One X core font per text style: the closest of a few common XLFD families
+/// by size and weight, falling back to `fixed`. `fake_bold` marks styles that
+/// want weight 600+ but got a medium font; they are drawn twice, 1px apart.
+struct Fonts {
+    loaded: Vec<*mut XFontStruct>,
+    fake_bold: Vec<bool>,
+}
+impl Fonts {
+    unsafe fn load(d: *mut c_void) -> Self {
+        let mut loaded = Vec::new();
+        let mut fake_bold = Vec::new();
+        for style in Style::ALL {
+            let spec = style.spec();
+            let bold = spec.weight >= 600;
+            let families: &[&str] = if style.mono() {
+                &["-*-lucidatypewriter", "-*-courier", "-misc-fixed"]
+            } else {
+                &["-*-helvetica", "-*-lucida", "-*-dejavu sans", "-misc-fixed"]
+            };
+            let mut font = ptr::null_mut();
+            let mut got_bold = false;
+            let weights: &[&str] = if bold {
+                &["bold", "medium"]
+            } else {
+                &["medium"]
+            };
+            'search: for weight in weights {
+                for family in families {
+                    let name = CString::new(format!(
+                        "{family}-{weight}-r-*--{}-*-*-*-*-*-iso8859-1",
+                        spec.size
+                    ))
+                    .unwrap();
+                    font = XLoadQueryFont(d, name.as_ptr());
+                    if !font.is_null() {
+                        got_bold = *weight == "bold";
+                        break 'search;
+                    }
+                }
+            }
+            if font.is_null() {
+                font = XLoadQueryFont(d, c"fixed".as_ptr());
+            }
+            loaded.push(font);
+            fake_bold.push(bold && !got_bold);
+        }
+        Fonts { loaded, fake_bold }
+    }
+    unsafe fn free(&self, d: *mut c_void) {
+        for font in &self.loaded {
+            if !font.is_null() {
+                XFreeFont(d, *font);
+            }
+        }
+    }
 }
 unsafe extern "C" {
     fn malloc(size: usize) -> *mut c_void;
@@ -264,8 +326,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
         let mut delete = XInternAtom(d, c"WM_DELETE_WINDOW".as_ptr(), 0);
         XSetWMProtocols(d, w, &mut delete, 1);
         let gc = XCreateGC(d, w, 0, ptr::null_mut());
-        let font = XLoadFont(d, c"fixed".as_ptr());
-        XSetFont(d, gc, font);
+        let fonts = Fonts::load(d);
         if capture.is_none() {
             XMapWindow(d, w);
         }
@@ -391,10 +452,24 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                             }
                         }
                     }
-                    Draw::Text(x, y, s, color) | Draw::Label(x, y, s, color) => {
-                        let s = CString::new(s.replace('\0', "?")).unwrap();
+                    Draw::Text(x, y, s, color, style) => {
+                        let bytes = crate::ui::native_text(&s, false);
+                        let font = fonts.loaded[style.index()];
+                        if !font.is_null() {
+                            XSetFont(d, gc, (*font).fid);
+                        }
                         XSetForeground(d, gc, color as c_ulong);
-                        XDrawString(d, pix, gc, x, y, s.as_ptr(), s.as_bytes().len() as i32);
+                        for dx in 0..=i32::from(fonts.fake_bold[style.index()]) {
+                            XDrawString(
+                                d,
+                                pix,
+                                gc,
+                                x + dx,
+                                y,
+                                bytes.as_ptr().cast(),
+                                bytes.len() as i32,
+                            );
+                        }
                     }
                 }
             }
@@ -439,7 +514,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
             XFlush(d);
         }
         stop_audio();
-        XUnloadFont(d, font);
+        fonts.free(d);
         XFreeGC(d, gc);
         XDestroyWindow(d, w);
         XCloseDisplay(d);

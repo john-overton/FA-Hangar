@@ -20,13 +20,130 @@ use hangar_core::{
 #[allow(dead_code)]
 #[rustfmt::skip]
 pub mod theme;
-use theme::{color as c, Rgb};
+#[path = "ui_glyphs.rs"]
+#[allow(dead_code)]
+#[rustfmt::skip]
+pub mod glyphs;
+use theme::{color as c, Family, Rgb};
+/// A `theme::text` style. Backends pick the font, size and weight from it;
+/// `y` in a text command is the baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Style {
+    Title,
+    Body,
+    Label,
+    /// `label` at weight 600: panel headers, the active workspace tab, the app name.
+    Strong,
+    /// Uppercase sub-heads; callers pass uppercase text.
+    Section,
+    Hint,
+    Value,
+    ValueSm,
+    Badge,
+}
+impl Style {
+    pub const ALL: [Style; 9] = [
+        Style::Title,
+        Style::Body,
+        Style::Label,
+        Style::Strong,
+        Style::Section,
+        Style::Hint,
+        Style::Value,
+        Style::ValueSm,
+        Style::Badge,
+    ];
+    pub const fn spec(self) -> theme::TextStyle {
+        match self {
+            Style::Title => theme::text::TITLE,
+            Style::Body => theme::text::BODY,
+            Style::Label => theme::text::LABEL,
+            Style::Strong => theme::TextStyle {
+                weight: 600,
+                ..theme::text::LABEL
+            },
+            Style::Section => theme::text::SECTION,
+            Style::Hint => theme::text::HINT,
+            Style::Value => theme::text::VALUE,
+            Style::ValueSm => theme::text::VALUE_SM,
+            Style::Badge => theme::text::BADGE,
+        }
+    }
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+    pub const fn mono(self) -> bool {
+        matches!(self.spec().family, Family::Mono)
+    }
+}
+/// Estimated advance of one character in `style`, in px. Proportional styles
+/// use Arial/Tahoma-class advances (Tahoma Bold runs about 8% wider than
+/// Arial Bold); mono styles use Lucida Console's 0.6 em cell. The Windows
+/// fonts are the reference; the Linux `fixed` fallback and the SVG snapshot
+/// fonts are equal or narrower, so text that fits here fits there.
+pub fn char_width(ch: char, style: Style) -> i32 {
+    let t = style.spec();
+    if t.family == Family::Mono {
+        return (t.size * 1234 + 1024) / 2048;
+    }
+    let bold = t.weight >= 600;
+    let table = if bold {
+        &glyphs::UI_ADVANCE_BOLD
+    } else {
+        &glyphs::UI_ADVANCE
+    };
+    let units = match ch {
+        ' '..='~' => table[ch as usize - 32] as i32,
+        '\u{b7}' => 21,
+        '\u{2026}' => 64,
+        _ => 36,
+    } * if bold { 108 } else { 100 };
+    (units * t.size + 3200) / 6400
+}
+pub fn text_width(s: &str, style: Style) -> i32 {
+    s.chars().map(|ch| char_width(ch, style)).sum()
+}
+/// `s` cut to `width` px in `style` with a trailing ellipsis.
+pub fn fit(s: &str, width: i32, style: Style) -> String {
+    if text_width(s, style) <= width {
+        return s.into();
+    }
+    let room = width - char_width('\u{2026}', style);
+    let mut used = 0;
+    let mut out = String::new();
+    for ch in s.chars() {
+        used += char_width(ch, style);
+        if used > room {
+            break;
+        }
+        out.push(ch);
+    }
+    if room > 0 {
+        out.push('\u{2026}');
+    }
+    out
+}
+/// Single-byte text for the native ANSI/ISO-8859-1 font APIs: Latin-1 passes
+/// through, the ellipsis becomes cp1252 0x85 (or "..." where `ansi` is false).
+pub fn native_text(s: &str, ansi: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\u{2026}' if ansi => out.push(0x85),
+            '\u{2026}' => out.extend_from_slice(b"..."),
+            '\u{2013}' | '\u{2014}' | '\u{2212}' => out.push(b'-'),
+            '\u{20}'..='\u{7e}' | '\u{a0}'..='\u{ff}' => out.push(ch as u32 as u8),
+            _ => out.push(b'?'),
+        }
+    }
+    out
+}
 #[derive(Clone, Debug)]
 pub enum Draw {
     Rect(i32, i32, i32, i32, u32),
     Line(i32, i32, i32, i32, u32),
-    Text(i32, i32, String, u32),
-    Label(i32, i32, String, u32),
+    /// Baseline-positioned text in a theme style.
+    Text(i32, i32, String, u32, Style),
     Bitmap(i32, i32, usize, usize, Vec<u32>),
 }
 pub struct Canvas {
@@ -41,11 +158,76 @@ impl Canvas {
     pub fn line(&mut self, x: i32, y: i32, a: i32, b: i32, color: Rgb) {
         self.commands.push(Draw::Line(x, y, a, b, color.0));
     }
+    /// UI text in the default `label` style.
     pub fn label(&mut self, x: i32, y: i32, s: &str, color: Rgb) {
-        self.commands.push(Draw::Label(x, y, s.into(), color.0));
+        self.styled(x, y, s, color, Style::Label);
     }
+    /// Data text (numbers, names, offsets) in the default mono `value` style.
     pub fn text(&mut self, x: i32, y: i32, s: &str, color: Rgb) {
-        self.commands.push(Draw::Text(x, y, s.into(), color.0));
+        self.styled(x, y, s, color, Style::Value);
+    }
+    pub fn styled(&mut self, x: i32, y: i32, s: &str, color: Rgb, style: Style) {
+        self.commands
+            .push(Draw::Text(x, y, s.into(), color.0, style));
+    }
+    /// The commands as an SVG document, matching the native fonts by style.
+    #[cfg(not(windows))]
+    pub fn svg(&self, width: i32, height: i32) -> String {
+        fn escape(s: &str) -> String {
+            s.replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('"', "&quot;")
+        }
+        let mut s = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xml:space=\"preserve\" width=\"{width}\" height=\"{height}\" shape-rendering=\"crispEdges\">"
+        );
+        for d in &self.commands {
+            match d {
+                Draw::Bitmap(x, y, w, h, pixels) => {
+                    for yy in 0..*h {
+                        let mut xx = 0;
+                        while xx < *w {
+                            let color = pixels[yy * w + xx];
+                            let mut end = xx + 1;
+                            while end < *w && pixels[yy * w + end] == color {
+                                end += 1;
+                            }
+                            s.push_str(&format!(
+                                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"1\" fill=\"#{color:06x}\"/>",
+                                x + xx as i32,
+                                y + yy as i32,
+                                end - xx
+                            ));
+                            xx = end;
+                        }
+                    }
+                }
+                Draw::Rect(x, y, w, h, c) => s.push_str(&format!(
+                    "<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>"
+                )),
+                Draw::Line(x, y, a, b, c) => s.push_str(&format!(
+                    "<path d=\"M{}.5 {}.5 L{}.5 {}.5\" stroke=\"#{c:06x}\" stroke-linecap=\"square\"/>",
+                    x, y, a, b
+                )),
+                Draw::Text(x, y, t, c, style) => {
+                    let spec = style.spec();
+                    let family = if style.mono() {
+                        "'Lucida Console','Liberation Mono',monospace"
+                    } else {
+                        "Tahoma,'Liberation Sans',sans-serif"
+                    };
+                    s.push_str(&format!(
+                        "<text x=\"{x}\" y=\"{y}\" font-family=\"{family}\" font-size=\"{}\" font-weight=\"{}\" fill=\"#{c:06x}\">{}</text>",
+                        spec.size,
+                        if spec.weight >= 600 { 700 } else { 400 },
+                        escape(t)
+                    ))
+                }
+            }
+        }
+        s.push_str("</svg>");
+        s
     }
 }
 #[derive(Clone, Copy, PartialEq)]
@@ -281,14 +463,6 @@ pub struct App {
 }
 fn extension(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or("")
-}
-fn short(s: &str, n: usize) -> String {
-    let mut t: String = s.chars().take(n).collect();
-    if s.chars().count() > n && n > 3 {
-        t = t.chars().take(n - 3).collect();
-        t.push_str("...");
-    }
-    t
 }
 impl App {
     pub fn new() -> Self {

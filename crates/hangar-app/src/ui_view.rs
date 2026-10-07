@@ -334,10 +334,10 @@ pub(super) fn count(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 pub(super) fn text_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
-    d.text(x, y, &short(s, (w.max(0) / 7) as usize), color);
+    d.text(x, y, &fit(s, w, Style::Value), color);
 }
 pub(super) fn label_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
-    d.label(x, y, &short(s, (w.max(0) / 7) as usize), color);
+    d.label(x, y, &fit(s, w, Style::Label), color);
 }
 pub(super) fn badge(d: &mut Canvas, x: i32, y: i32, s: &str) {
     let w = s.len() as i32 * 7 + 8;
@@ -2745,7 +2745,7 @@ impl App {
             .draw()
             .commands
             .iter()
-            .any(|d| matches!(d,Draw::Text(_,_,s,color) if s=="12000"&&*color==c::AMBER.0)));
+            .any(|d| matches!(d,Draw::Text(_,_,s,color,_) if s=="12000"&&*color==c::AMBER.0)));
         click(self, |a| matches!(a, Action::Menu(1)));
         click(self, |a| matches!(a, Action::Undo));
         assert!(!self.doc.dirty());
@@ -2807,7 +2807,7 @@ impl App {
                 .commands
                 .into_iter()
                 .filter_map(|d| match d {
-                    Draw::Label(_, _, s, color) if s == "Textured" || s == "Wireframe" => {
+                    Draw::Text(_, _, s, color, _) if s == "Textured" || s == "Wireframe" => {
                         Some((s, color))
                     }
                     _ => None,

@@ -1,6 +1,6 @@
 use crate::{
     platform,
-    ui::{App, Draw, FileAction, Key},
+    ui::{App, FileAction, Key},
 };
 #[path = "cli_shape.rs"]
 mod shape;
@@ -95,9 +95,7 @@ pub fn run() -> Result<()> {
         Some("--snapshot")=>{if let Some(path)=args.get(2).filter(|p|p.as_str()!="-"){app.open(path)?;if let Some(name)=args.get(3){let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at);}}else{app.demo();}
             if let Some(workspace)=args.get(4){app.workspace(workspace)?;}
             if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
-            let mut s=format!("<svg xmlns=\"http://www.w3.org/2000/svg\" xml:space=\"preserve\" width=\"{}\" height=\"{}\">",app.width,app.height);
-            fn escape(s:&str)->String{s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;")}
-            for d in app.draw().commands{match d{Draw::Bitmap(x,y,w,h,pixels)=>{for yy in 0..h {let mut xx=0;while xx<w {let color=pixels[yy*w+xx];let mut end=xx+1;while end<w&&pixels[yy*w+end]==color{end+=1;}s.push_str(&format!("<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"1\" fill=\"#{color:06x}\"/>",x+xx as i32,y+yy as i32,end-xx));xx=end;}}},Draw::Rect(x,y,w,h,c)=>s.push_str(&format!("<rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"#{c:06x}\"/>")),Draw::Line(x,y,a,b,c)=>s.push_str(&format!("<path d=\"M{x} {y} L{a} {b}\" stroke=\"#{c:06x}\"/>")),Draw::Label(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"DejaVu Sans,sans-serif\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t))),Draw::Text(x,y,t,c)=>s.push_str(&format!("<text x=\"{x}\" y=\"{y}\" font-family=\"monospace\" font-size=\"12\" fill=\"#{c:06x}\">{}</text>",escape(&t)))}}s.push_str("</svg>");platform::write_new(argument(&args,1)?,s.as_bytes())?;
+            let s=app.draw().svg(app.width,app.height);platform::write_new(argument(&args,1)?,s.as_bytes())?;
         },
         Some("--clone-check")=>{app.open(argument(&args,1)?)?;app.clone_export_check(argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,argument(&args,5)?)?;println!("PASS selected-object wizard, automatic sources, review, named LIB export and reopen");},
         Some("clone-aircraft"|"export-object") => {
