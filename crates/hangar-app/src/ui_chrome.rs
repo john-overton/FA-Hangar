@@ -196,6 +196,7 @@ impl App {
     /// Items for dropdown `menu`. Labels are sentence-case verbs and nouns;
     /// shortcuts are keycaps.
     pub(super) fn menu_items(&self, menu: usize) -> Vec<Item<'static>> {
+        let faces = menu == MENU_MESH && !self.texture_faces().is_empty();
         match menu {
             0 => vec![
                 Item::new("Open LIB", Action::File(FileAction::Open)).key("Ctrl+O"),
@@ -322,6 +323,22 @@ impl App {
                     .on(self.ed.pivot_individual),
                 Item::sep(),
                 Item::new("New face colour", Action::MeshOp(edit_ui::OP_FACE_COLOR)),
+                Item::sep(),
+                Item::new(
+                    "Clone texture for selected faces",
+                    Action::FaceTexture(texture_ui::TEX_CLONE),
+                )
+                .enabled(faces),
+                Item::new(
+                    "Assign texture\u{2026}",
+                    Action::FaceTexture(texture_ui::TEX_ASSIGN),
+                )
+                .enabled(faces),
+                Item::new(
+                    "Use shape texture",
+                    Action::FaceTexture(texture_ui::TEX_RESTORE),
+                )
+                .enabled(faces),
             ],
             _ => vec![
                 Item::new("Controls", Action::Help).key("F1"),

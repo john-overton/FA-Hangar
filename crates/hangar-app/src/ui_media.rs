@@ -1131,9 +1131,6 @@ impl App {
         if self.model.is_some() {
             actions.push(("Remap untextured colors", Action::Recolor));
         }
-        if self.selected_face.is_some() {
-            actions.push(("Clone texture for this shape", Action::Isolate));
-        }
         if !actions.is_empty() {
             if self.pane(o, &mut s, pane::MEDIA_EXPORT, "Texture", Icon::Image) {
                 for (title, action) in actions {
@@ -1143,6 +1140,9 @@ impl App {
                 }
             }
             o.panel_end(&mut s);
+        }
+        if self.model_for_paint().is_some() {
+            self.face_texture_pane(o, &mut s, true);
         }
         if self.context_model.is_some() && self.dock != 3 {
             if self.pane(o, &mut s, pane::PREVIEW, "Model preview", Icon::Shape) {
@@ -1729,6 +1729,10 @@ fn press(a: &mut App, predicate: impl Fn(Action) -> bool) {
     let (x, y) = (rect[0] + rect[2] / 2, rect[1] + rect[3] / 2);
     a.click(x, y, 1, true);
     a.click(x, y, 1, false);
+}
+/// Whether the rendered layout draws a text containing `text`.
+pub(super) fn shows_text(a: &mut App, text: &str) -> bool {
+    shows(a, text)
 }
 fn shows(a: &mut App, text: &str) -> bool {
     a.layout().canvas.commands.iter().any(|d| match d {

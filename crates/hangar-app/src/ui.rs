@@ -318,6 +318,10 @@ enum PromptKind {
     /// Colour for new faces in Edit Mesh (the base colour dialog).
     FaceColor,
     Isolate,
+    /// New PIC name for "Clone texture for selected faces".
+    FaceClone,
+    /// The Assign texture dialog (`ed.assign`); the value filters PIC names.
+    AssignTexture,
     CloseLibrary,
     ResourceName(bool),
     StationValue(usize),
@@ -1694,6 +1698,8 @@ impl App {
                             self.review_resource_name(&p.value, duplicate)
                         }
                         PromptKind::TransferReview => self.apply_transfer(),
+                        PromptKind::FaceClone => self.clone_face_texture(&p.value),
+                        PromptKind::AssignTexture => self.apply_assign(),
                         PromptKind::Isolate => (|| {
                             let to = p.value.trim().to_ascii_uppercase();
                             let shape = self
@@ -2000,6 +2006,14 @@ impl App {
                 Key::Backspace => {
                     self.prompt.as_mut().unwrap().value.pop();
                     self.transform_preview();
+                }
+                Key::Up | Key::Down
+                    if self
+                        .prompt
+                        .as_ref()
+                        .is_some_and(|p| matches!(p.kind, PromptKind::AssignTexture)) =>
+                {
+                    self.assign_step(if matches!(key, Key::Up) { -1 } else { 1 });
                 }
                 Key::Char(ch) => {
                     let p = self.prompt.as_mut().unwrap();
@@ -2765,3 +2779,6 @@ mod identity_ui;
 
 #[path = "ui_edit.rs"]
 mod edit_ui;
+
+#[path = "ui_texture.rs"]
+mod texture_ui;

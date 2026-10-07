@@ -1190,6 +1190,7 @@ pub(super) mod pane {
     pub const POSE: u8 = 31;
     pub const PART_SETTINGS: u8 = 32;
     pub const IDENTITY: u8 = 33;
+    pub const MESH_TEXTURE: u8 = 34;
 }
 
 /// A panel between `panel_begin` and `panel_end`.

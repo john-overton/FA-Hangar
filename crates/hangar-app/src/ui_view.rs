@@ -120,6 +120,14 @@ pub(super) enum Action {
     ModelPaint,
     PaintLock,
     Isolate,
+    /// Per-face texture action `texture_ui::TEX_*`.
+    FaceTexture(u8),
+    /// Assign texture dialog: pick PIC `i` (index into the dialog's list).
+    AssignPick(usize),
+    /// Assign texture dialog: UV mode Keep (0), Scale (1), Project (2).
+    AssignMode(u8),
+    /// Assign texture dialog: projection plane Auto, Top, Side, Front.
+    AssignPlane(u8),
     Hardpoints,
     StationSlew(bool),
     HardpointVisibility,
@@ -358,6 +366,10 @@ impl App {
                     axis: 0,
                 });
             }
+            Action::FaceTexture(op) => self.face_texture_action(op),
+            Action::AssignPick(i) => self.assign_pick(i),
+            Action::AssignMode(mode) => self.assign_mode(mode),
+            Action::AssignPlane(plane) => self.ed.assign.plane = plane.min(3),
             Action::RepairPanels => {
                 let result = self.repair_panels();
                 self.result(result);
@@ -1468,6 +1480,12 @@ impl App {
                 .is_some_and(|p| matches!(p.kind, PromptKind::BaseColor(_) | PromptKind::FaceColor))
             {
                 self.color_dialog(&mut out);
+            } else if self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::AssignTexture))
+            {
+                self.assign_dialog(&mut out);
             } else {
                 self.prompt_layout(&mut out);
             }
@@ -2860,6 +2878,7 @@ impl App {
         self.smoke_object_tools();
         self.smoke_edit_mode();
         self.smoke_parts_panel();
+        self.smoke_face_textures();
         self.demo();
         self.width = 1280;
         self.height = 800;

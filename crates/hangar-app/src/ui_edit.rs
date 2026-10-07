@@ -62,6 +62,10 @@ pub(super) struct EditState {
     pub new_face_color: Option<u8>,
     /// Duplicate or extrude waiting for its move (Shift+D / E, then G).
     pub mesh_pending: Option<Pending>,
+    /// The Assign texture dialog.
+    pub assign: super::texture_ui::AssignDraft,
+    /// Faces drawn from Hangar texture assignments in the shown shape.
+    pub assigned: super::texture_ui::AssignedCache,
 }
 /// Pixels a press must travel before it becomes a box.
 const BOX_THRESHOLD: i32 = 4;
@@ -1168,6 +1172,7 @@ impl App {
             }
         }
         o.panel_end(&mut s);
+        self.face_texture_pane(o, &mut s, false);
         if let Some(why) = &self.ed.mesh_refusal {
             o.stack_notice(&mut s, Tone::Warn, why);
         } else if !model.writable {
