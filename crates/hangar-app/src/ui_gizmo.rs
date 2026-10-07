@@ -1049,6 +1049,8 @@ impl App {
                 .icon(Icon::Scale)
                 .on(self.gizmo.mode == G_SCALE),
             Item::sep(),
+            self.connect_item(),
+            Item::sep(),
             Item::new("Snap to vertices", Action::Magnet)
                 .icon(Icon::Magnet)
                 .on(self.gizmo.magnet),

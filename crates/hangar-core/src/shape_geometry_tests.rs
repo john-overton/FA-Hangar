@@ -1164,3 +1164,93 @@ fn split_refusals_are_explicit() {
     let e = split_faces(&shaded, &[at], [5, 5, 0]).unwrap_err();
     assert!(e.contains("per vertex"), "{e}");
 }
+
+/// A textured quad at z 0 and a concave arrow (a notch at corner 4) at z 5.
+fn connect_fixture() -> (Vec<u8>, usize, usize) {
+    let quad: [[i16; 3]; 4] = [[0, 0, 0], [40, 0, 0], [40, 20, 0], [0, 20, 0]];
+    let arrow: [[i16; 3]; 6] = [
+        [0, 0, 5],
+        [10, 0, 5],
+        [20, 0, 5],
+        [20, 20, 5],
+        [10, 5, 5],
+        [0, 20, 5],
+    ];
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x40, 0]);
+    a.b(&[0xf2, 0]).rel16("end", 2);
+    a.b(&[0xe2, 0]).b(b"BASE.PIC\0\0\0\0\0\0");
+    a.label("q").verts(0, &quad);
+    a.label("fq").face(
+        0x28,
+        60,
+        lit(&quad),
+        &[0, 1, 2, 3],
+        &[[0, 0], [80, 0], [80, 40], [0, 40]],
+    );
+    a.label("a").verts(4, &arrow);
+    a.label("fa")
+        .face(0x23, 61, lit(&arrow), &[4, 5, 6, 7, 8, 9], &[]);
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    let (fq, fa) = (CS + a.at("fq"), CS + a.at("fa"));
+    (a.finish(), fq, fa)
+}
+
+#[test]
+fn connect_cuts_a_face_along_its_diagonal() {
+    let (b, fq, _) = connect_fixture();
+    let before = Geometry::parse(&b).unwrap();
+    let original = before.faces[before.face_at(fq).unwrap()].clone();
+    let s = connect_corners(&b, &[(fq, [0, 2])]).unwrap();
+    assert_eq!((s.faces.len(), s.vertices.len()), (2, 0));
+    let g = Geometry::parse(&s.shape).unwrap();
+    assert!(g.inventory.contiguous() && g.inventory.opaque_bytes() == 0);
+    assert_eq!(g.inventory.bindings, before.inventory.bindings);
+    assert!(g.face_at(fq).is_none());
+    let quad = [[0, 0, 0], [40, 0, 0], [40, 20, 0], [0, 20, 0]];
+    let uv = [[0, 0], [80, 0], [80, 40], [0, 40]];
+    for (o, corners) in s.faces.iter().zip([[0, 1, 2], [2, 3, 0]]) {
+        let j = g.face_at(*o).unwrap();
+        let f = &g.faces[j];
+        let p = face_points(&g, j);
+        assert_eq!(p, corners.map(|k| quad[k]));
+        assert_eq!(f.uv, corners.map(|k| uv[k]));
+        assert_eq!((f.content, f.color), (original.content, original.color));
+        assert_eq!(f.normal, face_normal(&p));
+        assert_eq!(f.normal, original.normal, "same facing");
+        assert_eq!(f.centre, Some(average(&p)));
+    }
+    let m = Model::parse(&s.shape).unwrap();
+    for o in &s.faces {
+        let f = m.faces.iter().find(|f| f.offset == *o).unwrap();
+        assert_eq!(f.texture, "BASE.PIC");
+    }
+    assert_eq!(m.faces.len(), Model::parse(&b).unwrap().faces.len() + 1);
+}
+
+#[test]
+fn connect_refusals_are_explicit() {
+    let (b, fq, fa) = connect_fixture();
+    let e = connect_corners(&b, &[(fq, [1, 2])]).unwrap_err();
+    assert_eq!(e, format!("Already connected by an edge of face {fq:X}"));
+    let e = connect_corners(&b, &[(fq, [3, 0])]).unwrap_err();
+    assert!(e.starts_with("Already connected"), "{e}");
+    let e = connect_corners(&b, &[(fq, [0, 7])]).unwrap_err();
+    assert!(e.contains("two corners"), "{e}");
+    // Across the arrow's notch: corner 3 to 5 passes outside the face.
+    let e = connect_corners(&b, &[(fa, [3, 5])]).unwrap_err();
+    assert!(e.contains("concave"), "{e}");
+    // From the notch straight down the cut stays inside, both halves convex.
+    let s = connect_corners(&b, &[(fa, [4, 1])]).unwrap();
+    assert_eq!(s.faces.len(), 2);
+    // A doubled corner: the quad's corner 3 moved onto corner 2 leaves one
+    // half with no area.
+    let doubled = write_vertices(&b, &[(fq - 6, [40, 20, 0])]).unwrap();
+    let e = connect_corners(&doubled, &[(fq, [0, 2])]).unwrap_err();
+    assert!(e.contains("no area"), "{e}");
+    let (fb, lb) = fixture();
+    // The body quad fc, lit and untextured.
+    let quad = face(&lb, "fc");
+    assert!(connect_corners(&fb, &[(quad, [0, 2])]).is_ok());
+}

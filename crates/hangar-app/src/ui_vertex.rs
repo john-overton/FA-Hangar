@@ -319,6 +319,90 @@ impl App {
         let faces = self.split_faces_at(face, mid)?;
         self.split_run(&faces, mid, Some("Edge midpoint"))
     }
+    /// Exactly two vertex positions are selected in vertex select.
+    pub(super) fn connect_ready(&self) -> bool {
+        !self.ed.face_select && self.selected_points().len() == 2
+    }
+    /// The distinct points of the selected vertices.
+    fn selected_points(&self) -> Vec<[i32; 3]> {
+        let Some(model) = self.model.as_ref() else {
+            return Vec::new();
+        };
+        let mut p: Vec<[i32; 3]> = self
+            .mesh_vertices
+            .iter()
+            .filter_map(|i| model.vertices.get(*i).map(|v| v.point))
+            .collect();
+        p.sort_unstable();
+        p.dedup();
+        p
+    }
+    /// Connect vertices (J) as a menu item: disabled, with the reason as
+    /// its badge, unless exactly two vertices are selected.
+    pub(super) fn connect_item(&self) -> super::widgets::Item<'static> {
+        let item = super::widgets::Item::new(
+            "Connect vertices",
+            Action::MeshOp(super::edit_ui::OP_CONNECT),
+        )
+        .key("J");
+        if self.connect_ready() {
+            item
+        } else {
+            item.enabled(false).badge("Select 2 vertices")
+        }
+    }
+    /// J, Connect vertices: FA shapes have no free-standing edges, so two
+    /// selected vertices are joined by cutting every face that has both as
+    /// non-adjacent corners along that diagonal into two faces.
+    pub(super) fn connect_vertices(&mut self) -> Result<()> {
+        if self.ed.face_select {
+            return Err("Connect vertices works in vertex select (1): select two vertices".into());
+        }
+        let ends = self.selected_points();
+        let [a, b] = ends[..] else {
+            return Err(format!(
+                "Select exactly 2 vertices to connect ({} selected)",
+                ends.len()
+            ));
+        };
+        let model = self.model.as_ref().ok_or("No model")?;
+        let mut cuts: Vec<(usize, [usize; 2])> = Vec::new();
+        let mut edge = None;
+        for f in &model.faces {
+            let at = |p: [i32; 3]| f.indices.iter().position(|i| model.vertices[*i].point == p);
+            let (Some(ka), Some(kb)) = (at(a), at(b)) else {
+                continue;
+            };
+            let n = f.indices.len();
+            if (ka + 1) % n == kb || (kb + 1) % n == ka {
+                edge.get_or_insert(f.offset);
+            } else {
+                cuts.push((f.offset, [ka, kb]));
+            }
+        }
+        if cuts.is_empty() {
+            return Err(match edge {
+                Some(o) => format!("Already connected by an edge of face {o:X}"),
+                None => "No panel has both vertices as corners. Select 3 or more vertices and press F to make a face".into(),
+            });
+        }
+        let (entry, source) = self.edit_source()?;
+        let split = geo::connect_corners(&source, &cuts)?;
+        self.doc.replace(entry, split.shape)?;
+        self.ed.add_vertex = None;
+        self.refresh();
+        if let Some(model) = &self.model {
+            self.mesh_vertices = (0..model.vertices.len())
+                .filter(|i| [a, b].contains(&model.vertices[*i].point))
+                .collect();
+        }
+        self.status = format!(
+            "Connected 2 vertices: cut {} along the diagonal into {}. One undo step.",
+            view::count(cuts.len(), "face", "faces"),
+            view::count(split.faces.len(), "face", "faces")
+        );
+        Ok(())
+    }
     /// The preview: the hovered face outlined, the point marked (amber
     /// rings when snapped) with the snap kind, and for a split the fan.
     pub(super) fn add_vertex_overlay(&self, o: &mut Layout) {
@@ -394,6 +478,7 @@ impl App {
         for (w, h) in [(800, 600), (1280, 800)] {
             smoke_add_place(w, h);
             smoke_add_split(w, h);
+            smoke_connect(w, h);
         }
     }
 }
@@ -577,6 +662,157 @@ fn smoke_add_split(w: i32, h: i32) {
         a.act(Action::Undo);
     } else {
         assert!(a.status.starts_with("Error:"), "{}", a.status);
+    }
+    assert_eq!(a.doc.archive.bytes().unwrap(), original);
+}
+/// A root face with four or more corners whose corners 0 and 2 have their
+/// own shown handles: the face, the two points and their handle positions.
+/// A face, two of its corner points and their handle positions.
+type Quad = (usize, [[i32; 3]; 2], [[i32; 2]; 2]);
+fn quad_corners(a: &App) -> Option<Quad> {
+    let m = a.model.as_ref()?;
+    let handles = a.vertex_handles();
+    (0..m.faces.len()).find_map(|f| {
+        let face = &m.faces[f];
+        if face.group.is_some() || face.indices.len() < 4 {
+            return None;
+        }
+        let p = [0, 2].map(|k| m.vertices[face.indices[k]].point);
+        let at = [0, 1].map(|k| {
+            handles
+                .iter()
+                .find(|h| m.vertices[h.index].point == p[k])
+                .map(|h| h.at)
+        });
+        let at = [at[0]?, at[1]?];
+        let picks = (0..2).all(|k| {
+            a.pick_handle(at[k][0], at[k][1])
+                .is_some_and(|i| m.vertices[i].point == p[k])
+        });
+        (picks && a.in_viewport(at[0][0], at[0][1]) && a.in_viewport(at[1][0], at[1][1]))
+            .then_some((f, p, at))
+    })
+}
+/// Faces that have both points as non-adjacent corners.
+fn diagonal_faces(a: &App, p: [[i32; 3]; 2]) -> usize {
+    let m = a.model.as_ref().unwrap();
+    m.faces
+        .iter()
+        .filter(|f| {
+            let n = f.indices.len();
+            let at = |q: [i32; 3]| f.indices.iter().position(|i| m.vertices[*i].point == q);
+            matches!((at(p[0]), at(p[1])), (Some(x), Some(y))
+                if (x + 1) % n != y && (y + 1) % n != x)
+        })
+        .count()
+}
+/// Connect vertices: two corners picked through their handles, then J,
+/// the Mesh menu, the inspector button and the viewport menu; adjacent,
+/// lone and unshared selections refused; one undo step each.
+#[inline(never)]
+fn smoke_connect(w: i32, h: i32) {
+    let (mut a, ..) = vertex_app(w, h);
+    let original = a.doc.archive.bytes().unwrap();
+    let faces0 = a.model.as_ref().unwrap().faces.len();
+    let (f, p, at) = quad_corners(&a).expect("A quad with two shown opposite corners");
+    let cut = diagonal_faces(&a, p);
+    assert!(cut >= 1);
+    let select = |a: &mut App| {
+        let empty = [a.right() - 30, a.dock_y() - 30];
+        a.smoke_press(empty[0], empty[1], false);
+        a.smoke_press(at[0][0], at[0][1], false);
+        a.smoke_press(at[1][0], at[1][1], true);
+        assert!(a.connect_ready(), "{:?}", a.mesh_vertices);
+    };
+    let check = |a: &mut App, how: &str| {
+        let m = a.model.as_ref().unwrap();
+        assert_eq!(m.faces.len(), faces0 + cut, "{how}: {}", a.status);
+        assert!(a.status.starts_with("Connected 2 vertices"), "{}", a.status);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original, "{how}");
+    };
+    // J.
+    select(&mut a);
+    a.key(Key::Char('j'), false, false);
+    check(&mut a, "J");
+    // Mesh menu, keycap J.
+    select(&mut a);
+    let menu = a.smoke_find(&|x| matches!(x, Action::Menu(chrome::MENU_MESH)));
+    a.chrome_click(menu);
+    let item = a.smoke_find(&|x| matches!(x, Action::MeshOp(super::edit_ui::OP_CONNECT)));
+    a.chrome_click(item);
+    check(&mut a, "menu");
+    // Inspector button.
+    select(&mut a);
+    let button = a.smoke_find(&|x| matches!(x, Action::MeshOp(super::edit_ui::OP_CONNECT)));
+    a.chrome_click(button);
+    check(&mut a, "button");
+    // Viewport right-click menu.
+    select(&mut a);
+    let spot = [a.left() + 60, a.dock_y() - 20];
+    a.motion(spot[0], spot[1], false);
+    a.pointer(spot[0], spot[1], 3, true, false);
+    assert_eq!(a.menu, Some(gizmo_ui::MENU_GIZMO));
+    a.smoke_geometry("connect context menu");
+    let item = a.smoke_find(&|x| matches!(x, Action::MeshOp(super::edit_ui::OP_CONNECT)));
+    a.chrome_click(item);
+    check(&mut a, "context menu");
+    // Adjacent corners: already an edge, nothing changes.
+    let m = a.model.as_ref().unwrap();
+    let face = &m.faces[f];
+    let ends = [0, 1].map(|k| m.vertices[face.indices[k]].point);
+    a.mesh_vertices = (0..m.vertices.len())
+        .filter(|i| ends.contains(&m.vertices[*i].point))
+        .collect();
+    assert_eq!(diagonal_faces(&a, ends), 0);
+    a.key(Key::Char('j'), false, false);
+    assert!(
+        a.status
+            .starts_with("Error: Already connected by an edge of face"),
+        "{}",
+        a.status
+    );
+    assert_eq!(a.doc.archive.bytes().unwrap(), original);
+    // One vertex: disabled with the reason, J refuses.
+    a.mesh_vertices.truncate(1);
+    a.key(Key::Char('j'), false, false);
+    assert!(
+        a.status.contains("Select exactly 2 vertices"),
+        "{}",
+        a.status
+    );
+    let menu = a.smoke_find(&|x| matches!(x, Action::Menu(chrome::MENU_MESH)));
+    a.chrome_click(menu);
+    assert!(a
+        .layout()
+        .hits
+        .iter()
+        .all(|h| !matches!(h.action, Action::MeshOp(super::edit_ui::OP_CONNECT))));
+    assert!(a.draw().commands.iter().any(|d| matches!(d,
+        Draw::Text(_, _, s, ..) if s == "Select 2 vertices")));
+    a.key(Key::Escape, false, false);
+    // No shared face: two vertices of different, unconnected faces.
+    let m = a.model.as_ref().unwrap();
+    let lone = (0..m.vertices.len()).find(|&i| {
+        let q = m.vertices[i].point;
+        let shared = m.faces.iter().any(|f| {
+            let pts: Vec<[i32; 3]> = f.indices.iter().map(|k| m.vertices[*k].point).collect();
+            pts.contains(&q) && pts.contains(&p[0])
+        });
+        !shared && m.faces.iter().any(|f| f.indices.contains(&i))
+    });
+    if let Some(i) = lone {
+        let first = (0..m.vertices.len())
+            .find(|k| m.vertices[*k].point == p[0])
+            .unwrap();
+        a.mesh_vertices = vec![first, i];
+        a.key(Key::Char('j'), false, false);
+        assert!(
+            a.status
+                .starts_with("Error: No panel has both vertices as corners."),
+            "{}",
+            a.status
+        );
     }
     assert_eq!(a.doc.archive.bytes().unwrap(), original);
 }

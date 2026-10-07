@@ -21,6 +21,7 @@ pub(super) const OP_NEIGHBOUR: u8 = 9;
 pub(super) const OP_INVERT: u8 = 10;
 pub(super) const OP_SPLIT: u8 = 11;
 pub(super) const OP_SPLIT_EDGE: u8 = 12;
+pub(super) const OP_CONNECT: u8 = 13;
 /// A box select in progress, in window pixels.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct BoxSelect {
@@ -268,6 +269,7 @@ impl App {
             'D' => self.mesh_op(OP_DUPLICATE),
             'd' if shift => self.mesh_op(OP_DUPLICATE),
             'e' | 'E' => self.mesh_op(OP_EXTRUDE),
+            'j' | 'J' => self.mesh_op(OP_CONNECT),
             _ => return false,
         }
         true
@@ -699,6 +701,7 @@ impl App {
                 return Ok(());
             }
             OP_SPLIT_EDGE => return self.split_edge(),
+            OP_CONNECT => return self.connect_vertices(),
             OP_FACE_COLOR => {
                 let color = self.ed.new_face_color.unwrap_or(self.brush);
                 self.base_color_from = color;
@@ -1080,7 +1083,7 @@ impl App {
                 );
             }
             let tool = self.ed.add_vertex.as_ref().map(|t| t.split);
-            let edge = !self.ed.face_select && self.mesh_vertices.len() == 2;
+            let two = self.connect_ready();
             let ops: [(&str, u8, bool); 8] = [
                 ("Delete faces", OP_DELETE, faces),
                 ("Flip normals", OP_FLIP, faces),
@@ -1091,9 +1094,9 @@ impl App {
                     OP_FACE,
                     !self.ed.face_select && self.mesh_vertices.len() >= 3,
                 ),
+                ("Connect", OP_CONNECT, two),
                 ("Add vertex", OP_VERTEX, true),
                 ("Split face", OP_SPLIT, true),
-                ("Split edge", OP_SPLIT_EDGE, edge),
             ];
             for pair in ops.chunks(2) {
                 if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
@@ -1714,6 +1717,27 @@ impl App {
                 Ok(()) => restored(self, label, &mut out)?,
                 Err(e) => out.push_str(&format!("REFUSED {label}: {e}\n")),
             }
+        }
+        // Connect vertices: opposite corners of the first root face with
+        // four or more corners.
+        let quad = self.model.as_ref().and_then(|m| {
+            let f = m.faces.iter().find(|f| {
+                let mut p: Vec<[i32; 3]> = f.indices.iter().map(|i| m.vertices[*i].point).collect();
+                p.sort_unstable();
+                p.dedup();
+                f.group.is_none() && f.sub & 0x80 == 0 && p.len() >= 4
+            })?;
+            Some([0, 2].map(|k| f.indices[k]))
+        });
+        match quad {
+            Some(ends) => {
+                self.mesh_vertices = ends.to_vec();
+                match self.connect_vertices() {
+                    Ok(()) => restored(self, "connect vertices", &mut out)?,
+                    Err(e) => out.push_str(&format!("REFUSED connect vertices: {e}\n")),
+                }
+            }
+            None => out.push_str("SKIPPED connect vertices: no root face with 4 corners\n"),
         }
         // Part settings: every gear direction that flips in place, and back.
         self.act(Action::MeshMode);

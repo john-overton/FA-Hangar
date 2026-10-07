@@ -1844,9 +1844,10 @@ pub struct Split {
     /// Coordinate file offsets of the new vertex, one copy per split face.
     pub vertices: Vec<usize>,
 }
-/// The fan replacing face `i` around a new vertex at `point` (local to the
-/// face's frame): one triangle per edge the point is not on.
-fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
+/// A face that can be replaced by new faces with its own style: its corner
+/// coordinate offsets and local points, through its proved writers.
+type Corners = (Vec<usize>, Vec<[i32; 3]>);
+fn replaceable(g: &Geometry, i: usize) -> Result<Corners> {
     let f = &g.faces[i];
     let at = f.offset;
     if let Some(e) = g.face_refusal(i) {
@@ -1862,6 +1863,9 @@ fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
             "Face at {at:X} has a colour word that is not a palette index"
         ));
     }
+    if f.content & 4 != 0 && f.uv.len() != f.slots.len() {
+        return Err(format!("Face at {at:X} has no UV for every corner"));
+    }
     let mut offsets = Vec::new();
     let mut points = Vec::new();
     for s in &f.slots {
@@ -1872,6 +1876,27 @@ fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
         offsets.push(g.buffers[b].vertex(k));
         points.push(g.buffers[b].points[k]);
     }
+    Ok((offsets, points))
+}
+/// The face's style over some of its corners (positions), UVs copied.
+fn style_of(f: &FaceRecord, corners: &[usize], extra_uv: Option<[i32; 2]>) -> FaceStyle {
+    FaceStyle {
+        content: f.content,
+        color: f.color as u8,
+        texture: None,
+        uv: if f.content & 4 != 0 {
+            corners.iter().map(|k| f.uv[*k]).chain(extra_uv).collect()
+        } else {
+            Vec::new()
+        },
+    }
+}
+/// The fan replacing face `i` around a new vertex at `point` (local to the
+/// face's frame): one triangle per edge the point is not on.
+fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
+    let (offsets, points) = replaceable(g, i)?;
+    let f = &g.faces[i];
+    let at = f.offset;
     let n = points.len();
     if let Some(k) = points.iter().position(|p| *p == point) {
         return Err(format!(
@@ -1886,11 +1911,7 @@ fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
     let Some((located, _)) = located.filter(|_| off_plane <= 1) else {
         return Err(format!("The point is not on the face at {at:X}"));
     };
-    let textured = f.content & 4 != 0;
-    if textured && f.uv.len() != n {
-        return Err(format!("Face at {at:X} has no UV for every corner"));
-    }
-    let uv = if textured {
+    let uv = if f.content & 4 != 0 {
         Some(
             located
                 .mix(&f.uv)
@@ -1921,15 +1942,7 @@ fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
                 Corner::Vertex(offsets[j]),
                 Corner::New(0)
             ],
-            style: FaceStyle {
-                content: f.content,
-                color: f.color as u8,
-                texture: None,
-                uv: match uv {
-                    Some(p) => alloc::vec![f.uv[k], f.uv[j], p],
-                    None => Vec::new(),
-                },
-            },
+            style: style_of(f, &[k, j], uv),
         });
     }
     if fan.len() < 2 {
@@ -1937,22 +1950,81 @@ fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
     }
     Ok(fan)
 }
-/// Split faces at one point (local to their frame, on each face): every
-/// face (file offset) is replaced by a fan of triangles from its edges to a
-/// new vertex at `point`, skipping the edge the point lies on, so a point
-/// on an edge shared by two faces splits both without a crack. Triangles
-/// keep the face's content, colour and material (the continuation draws
-/// where the face was); the point's UVs come from integer barycentrics over
-/// the face's fan; lit triangles store their own normal and centre, as
-/// retail faces do. Each face is detoured to its own continuation and its
-/// record becomes a same-size jump stub (`Base::Remove`), face after face,
-/// in one result. Refused: faces of different frames, per-vertex shading,
-/// a point off a face or at a corner, and every `face_refusal`.
-pub fn split_faces(source: &[u8], faces: &[usize], point: [i32; 3]) -> Result<Split> {
-    if faces.is_empty() || faces.len() > 8 {
-        return Err(invalid("Split one to eight faces at a time"));
+/// Twice the signed area of the polygon in the plane of axes `keep`.
+fn shoelace(points: &[[i32; 3]], keep: [usize; 2]) -> i128 {
+    let n = points.len();
+    (0..n)
+        .map(|k| {
+            let (p, q) = (points[k], points[(k + 1) % n]);
+            p[keep[0]] as i128 * q[keep[1]] as i128 - p[keep[1]] as i128 * q[keep[0]] as i128
+        })
+        .sum()
+}
+/// Whether the polygon turns only towards `sign` (+1 or -1) in the plane
+/// of axes `keep`: convex, wound as the face; collinear corners allowed.
+fn convex(points: &[[i32; 3]], keep: [usize; 2], sign: i128) -> bool {
+    let p: Vec<[i128; 2]> = points.iter().map(|q| keep.map(|k| q[k] as i128)).collect();
+    let n = p.len();
+    (0..n).all(|i| {
+        let (a, b, c) = (p[i], p[(i + 1) % n], p[(i + 2) % n]);
+        let turn = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+        turn * sign >= 0
+    }) && shoelace(points, keep) * sign > 0
+}
+/// The two faces replacing face `i` cut along the diagonal between its
+/// corners at positions `ends`: each keeps the face's style, its corners'
+/// UVs and order, so both face as the original.
+fn diagonal_cut(g: &Geometry, i: usize, ends: [usize; 2]) -> Result<Vec<NewFace>> {
+    let (offsets, points) = replaceable(g, i)?;
+    let f = &g.faces[i];
+    let at = f.offset;
+    let n = points.len();
+    let (a, b) = (ends[0].min(ends[1]), ends[0].max(ends[1]));
+    if b >= n || a == b {
+        return Err(format!("Name two corners of the face at {at:X}"));
     }
-    if !in_word(&point) {
+    if b - a == 1 || (a == 0 && b == n - 1) {
+        return Err(format!("Already connected by an edge of face {at:X}"));
+    }
+    let normal = face_normal(&points)
+        .ok_or_else(|| format!("Face at {at:X} is degenerate: its corners are collinear"))?;
+    let drop = (0..3).max_by_key(|k| normal[*k].abs()).unwrap_or(2);
+    // The face's own winding in the plane it is seen flattest in.
+    let keep = [(drop + 1) % 3, (drop + 2) % 3];
+    let sign = shoelace(&points, keep).signum();
+    let one: Vec<usize> = (a..=b).collect();
+    let two: Vec<usize> = (b..n).chain(0..=a).collect();
+    let mut out = Vec::new();
+    for part in [&one, &two] {
+        let p: Vec<[i32; 3]> = part.iter().map(|k| points[*k]).collect();
+        if shoelace(&p, keep) == 0 {
+            return Err(format!(
+                "The cut from corner {a} to {b} of the face at {at:X} leaves a face with no area (its corners coincide or line up)"
+            ));
+        }
+        if !convex(&p, keep, sign) {
+            return Err(format!(
+                "The diagonal from corner {a} to {b} leaves the face at {at:X} or makes a concave face"
+            ));
+        }
+        out.push(NewFace {
+            corners: part.iter().map(|k| Corner::Vertex(offsets[*k])).collect(),
+            style: style_of(f, part, None),
+        });
+    }
+    Ok(out)
+}
+/// Replace faces (file offsets) one after another, each by the faces
+/// `plan` gives for it (with `points` as new vertices in its frame), through
+/// its own continuation: the face's record becomes a same-size jump stub
+/// (`Base::Remove`) and the continuation draws the new faces in its place.
+/// One result; the whole edit is verified against the source.
+type Plan<'a> = &'a dyn Fn(&Geometry, usize, usize) -> Result<Vec<NewFace>>;
+fn replace_faces(source: &[u8], faces: &[usize], points: &[[i32; 3]], plan: Plan) -> Result<Split> {
+    if faces.is_empty() || faces.len() > 8 {
+        return Err(invalid("Edit one to eight faces at a time"));
+    }
+    if points.iter().any(|p| !in_word(p)) {
         return Err(invalid("Vertex exceeds signed 16-bit source coordinates"));
     }
     let g0 = Geometry::parse(source)?;
@@ -1963,44 +2035,43 @@ pub fn split_faces(source: &[u8], faces: &[usize], point: [i32; 3]) -> Result<Sp
     }
     let frame = g0.faces[picked[0]].frame;
     if picked.iter().any(|i| g0.faces[*i].frame != frame) {
-        return Err(invalid("Split faces of one part at a time"));
+        return Err(invalid("Edit faces of one part at a time"));
     }
     let mut new_faces = 0;
-    for i in &picked {
-        new_faces += split_fan(&g0, *i, point)?.len();
+    for (k, f) in faces.iter().enumerate() {
+        let i = g0.face_at(*f).ok_or("Face")?;
+        new_faces += plan(&g0, i, k)?.len();
     }
     // CODE offsets stay put: continuations go before the import tail.
     let code: Vec<usize> = faces.iter().map(|f| f - cs0).collect();
     let mut shape = source.to_vec();
-    let (mut tris, mut verts) = (Vec::new(), Vec::new());
-    for at in &code {
+    let (mut made, mut verts) = (Vec::new(), Vec::new());
+    for (k, at) in code.iter().enumerate() {
         let g = Geometry::parse(&shape)?;
         let cs = g.inventory.code_start;
-        let i = g.face_at(cs + at).ok_or("A face to split moved")?;
-        let fan = split_fan(&g, i, point)?;
+        let i = g.face_at(cs + at).ok_or("A face to replace moved")?;
         let added = append_geometry(
             &shape,
             &Addition {
                 host: Some(cs + at),
-                points: alloc::vec![point],
-                faces: fan,
+                points: points.to_vec(),
+                faces: plan(&g, i, k)?,
                 host_copy: Base::Remove,
                 flip: Vec::new(),
                 delete: Vec::new(),
             },
         )?;
         let cs2 = Geometry::parse(&added.shape)?.inventory.code_start;
-        tris.extend(added.faces.iter().map(|o| o - cs2));
+        made.extend(added.faces.iter().map(|o| o - cs2));
         verts.extend(added.vertices.iter().map(|o| o - cs2));
         shape = added.shape;
     }
-    // Verify the whole edit against the source.
     let after = verify_structure(&g0, source, &shape)?;
     let cs = after.inventory.code_start;
     if after.faces.len() + picked.len() != g0.faces.len() + new_faces
         || code.iter().any(|at| after.face_at(cs + at).is_some())
     {
-        return Err(invalid("The split did not replace exactly the faces"));
+        return Err(invalid("The edit did not replace exactly the faces"));
     }
     let mut changed = BTreeSet::new();
     for at in &code {
@@ -2009,8 +2080,33 @@ pub fn split_faces(source: &[u8], faces: &[usize], point: [i32; 3]) -> Result<Sp
     others_unchanged(&g0, &after, &changed)?;
     Ok(Split {
         shape,
-        faces: tris.iter().map(|o| o + cs).collect(),
+        faces: made.iter().map(|o| o + cs).collect(),
         vertices: verts.iter().map(|o| o + cs).collect(),
+    })
+}
+/// Split faces at one point (local to their frame, on each face): every
+/// face (file offset) is replaced by a fan of triangles from its edges to a
+/// new vertex at `point`, skipping the edge the point lies on, so a point
+/// on an edge shared by two faces splits both without a crack. Triangles
+/// keep the face's content, colour and material (the continuation draws
+/// where the face was); the point's UVs come from integer barycentrics over
+/// the face's fan; lit triangles store their own normal and centre, as
+/// retail faces do (`replace_faces`). Refused: faces of different frames,
+/// per-vertex shading, a point off a face or at a corner, and every
+/// `face_refusal`.
+pub fn split_faces(source: &[u8], faces: &[usize], point: [i32; 3]) -> Result<Split> {
+    replace_faces(source, faces, &[point], &|g, i, _| split_fan(g, i, point))
+}
+/// Connect two corners of each face: `cuts` names a face (file offset) and
+/// the positions of two non-adjacent corners; the face is replaced by the
+/// two faces either side of that diagonal, with its style, its corners'
+/// UVs and retail normals (`replace_faces`). Refused: adjacent corners
+/// ("already connected"), a diagonal outside the face or a concave result,
+/// per-vertex shading, and every `face_refusal`.
+pub fn connect_corners(source: &[u8], cuts: &[(usize, [usize; 2])]) -> Result<Split> {
+    let faces: Vec<usize> = cuts.iter().map(|c| c.0).collect();
+    replace_faces(source, &faces, &[], &|g, i, k| {
+        diagonal_cut(g, i, cuts[k].1)
     })
 }
 /// Resolved corners of each selected face, and their common frame.
