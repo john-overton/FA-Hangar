@@ -26,6 +26,9 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 - Edit mode on a shape owned by another open LIB, or in perspective view,
   now says why vertices cannot be dragged instead of ignoring the click or
   showing the station message.
+- The textured viewport frames on the committed shape like the wireframe,
+  vertex markers and station cursor, so G previews visibly move and overlays
+  stay aligned.
 
 ## 0.8.2
 

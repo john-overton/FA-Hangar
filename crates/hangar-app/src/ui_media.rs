@@ -267,16 +267,10 @@ impl App {
         let Some(m) = self.model_for_paint() else {
             return frame;
         };
-        let mut min = [i32::MAX; 3];
-        let mut max = [i32::MIN; 3];
-        for v in &m.vertices {
-            for j in 0..3 {
-                min[j] = min[j].min(v.point[j]);
-                max[j] = max[j].max(v.point[j]);
-            }
-        }
-        let center = core::array::from_fn::<_, 3, _>(|i| (min[i] + max[i]) / 2);
-        let span = (0..3).map(|i| max[i] - min[i]).max().unwrap_or(1).max(1);
+        // Frame on the committed model, as the wireframe and overlays do, so previews move.
+        let (center, span) = self
+            .model_bounds()
+            .unwrap_or_else(|| super::hardpoint_ui::bounds(m));
         let points: Vec<[i32; 3]> = m
             .vertices
             .iter()

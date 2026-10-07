@@ -61,27 +61,10 @@ impl App {
     fn hp_model(&self) -> Option<&Model> {
         self.model.as_ref().or(self.context_model.as_ref())
     }
-    fn model_bounds(&self) -> Option<([i32; 3], i32)> {
+    /// Shared viewport framing: the committed model's bounds, never a preview's.
+    pub(super) fn model_bounds(&self) -> Option<([i32; 3], i32)> {
         let model = self.hp_model()?;
-        if model.vertices.is_empty() {
-            return None;
-        }
-        let mut min = [i32::MAX; 3];
-        let mut max = [i32::MIN; 3];
-        for v in &model.vertices {
-            for k in 0..3 {
-                min[k] = min[k].min(v.point[k]);
-                max[k] = max[k].max(v.point[k]);
-            }
-        }
-        Some((
-            core::array::from_fn(|i| ((min[i] as i64 + max[i] as i64) / 2) as i32),
-            (0..3)
-                .map(|i| max[i].saturating_sub(min[i]))
-                .max()
-                .unwrap_or(1)
-                .max(1),
-        ))
+        (!model.vertices.is_empty()).then(|| bounds(model))
     }
     pub(super) fn hp_project(&self, p: [i32; 3]) -> Option<[i32; 2]> {
         let (center, span) = self.model_bounds()?;
@@ -428,4 +411,26 @@ impl App {
             o.button([r + 12, h - offset, w - 24, 24], title, action, false);
         }
     }
+}
+/// Bounding-box centre and largest extent (at least 1) of a model's vertices.
+pub(super) fn bounds(model: &Model) -> ([i32; 3], i32) {
+    let mut min = [i32::MAX; 3];
+    let mut max = [i32::MIN; 3];
+    for v in &model.vertices {
+        for k in 0..3 {
+            min[k] = min[k].min(v.point[k]);
+            max[k] = max[k].max(v.point[k]);
+        }
+    }
+    if model.vertices.is_empty() {
+        return ([0; 3], 1);
+    }
+    (
+        core::array::from_fn(|i| ((min[i] as i64 + max[i] as i64) / 2) as i32),
+        (0..3)
+            .map(|i| max[i].saturating_sub(min[i]))
+            .max()
+            .unwrap_or(1)
+            .max(1),
+    )
 }

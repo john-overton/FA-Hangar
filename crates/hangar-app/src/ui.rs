@@ -2118,16 +2118,9 @@ impl App {
         [-p[0], p[2], p[1]]
     }
     fn viewport(&self, d: &mut Canvas, m: &Model, x: i32, y: i32, w: i32, h: i32) {
-        let mut min = [i32::MAX; 3];
-        let mut max = [i32::MIN; 3];
-        for v in &self.model.as_ref().unwrap_or(m).vertices {
-            for j in 0..3 {
-                min[j] = min[j].min(v.point[j]);
-                max[j] = max[j].max(v.point[j]);
-            }
-        }
-        let center = core::array::from_fn::<_, 3, _>(|i| (min[i] + max[i]) / 2);
-        let span = (0..3).map(|i| max[i] - min[i]).max().unwrap_or(1).max(1);
+        let (center, span) = self
+            .model_bounds()
+            .unwrap_or_else(|| hardpoint_ui::bounds(m));
         let project = |p: [i32; 3]| {
             let p = self.camera_point(core::array::from_fn(|i| p[i] - center[i]));
             let denom = if self.perspective {

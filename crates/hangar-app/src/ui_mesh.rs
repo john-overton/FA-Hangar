@@ -512,6 +512,15 @@ impl App {
         let x = (a.left() + a.right()) / 2;
         let y = (54 + a.dock_y()) / 2;
         let (face, uv) = a.model_hit(x, y).expect("Synthetic panel hit");
+        // The textured raster frames on the committed shape, so a G preview moves it
+        // away from the cursor exactly as the wireframe and vertex markers do.
+        for c in "g300".chars() {
+            a.key(Key::Char(c), false, false);
+        }
+        assert!(a.preview.is_some());
+        assert!(a.model_hit(x, y).is_none(), "Textured G preview moves");
+        a.key(Key::Escape, false, false);
+        assert!(a.preview.is_none());
         assert_eq!(uv, [-1, -1]);
         a.selected_face = Some(face);
         a.model_paint = true;
