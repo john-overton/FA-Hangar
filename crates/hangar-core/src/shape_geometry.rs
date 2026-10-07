@@ -1907,36 +1907,73 @@ pub fn move_model_vertices(
     selected: &[usize],
     delta: [i32; 3],
 ) -> Result<Vec<u8>> {
-    let mut moves = BTreeMap::new();
+    let mut points = Vec::new();
     for i in selected {
         let v = model.vertices.get(*i).ok_or("No selected vertex")?;
+        let mut p = v.point;
+        for (k, d) in delta.iter().enumerate() {
+            p[k] = p[k].checked_add(*d).ok_or("Coordinate overflow")?;
+        }
+        points.push((*i, p));
+    }
+    write_model_points(source, model, &points)
+}
+/// Whether every part frame above model vertex `i` is unrotated, so its
+/// model and local coordinates differ only by a translation.
+pub fn unrotated(model: &Model, i: usize) -> bool {
+    let mut group = model.vertex_tags.get(i).and_then(|t| t.group);
+    for _ in 0..64 {
+        let Some(g) = group.and_then(|g| model.groups.get(g)) else {
+            return true;
+        };
+        if g.part
+            .and_then(|p| model.parts.get(p))
+            .is_some_and(|p| p.posed_rotation != [0; 3])
+        {
+            return false;
+        }
+        group = g.parent;
+    }
+    false
+}
+/// Write new model-space positions for model vertices (indices into
+/// `model.vertices`) through the region writer. Every part frame above a
+/// vertex must be unrotated in that model; vertices that share a stored
+/// coordinate must agree.
+pub fn write_model_points(
+    source: &[u8],
+    model: &Model,
+    points: &[(usize, [i32; 3])],
+) -> Result<Vec<u8>> {
+    let mut moves = BTreeMap::new();
+    for (i, p) in points {
+        let v = model.vertices.get(*i).ok_or("No selected vertex")?;
         let tag = model.vertex_tags.get(*i).ok_or("No selected vertex")?;
-        let mut group = tag.group;
-        for _ in 0..64 {
-            let Some(g) = group.and_then(|g| model.groups.get(g)) else {
-                break;
-            };
-            if let Some(p) = g.part.and_then(|p| model.parts.get(p)) {
-                if p.posed_rotation != [0; 3] {
-                    return Err(invalid(
-                        "A selected vertex is in a rotated part; edit it in local coordinates",
-                    ));
-                }
-            }
-            group = g.parent;
+        if !unrotated(model, *i) {
+            return Err(invalid(
+                "A selected vertex is in a rotated part; reset its pose or edit it in local coordinates",
+            ));
         }
         let mut local = tag.local;
-        for (k, d) in delta.iter().enumerate() {
-            local[k] = local[k].checked_add(*d).ok_or("Coordinate overflow")?;
+        for k in 0..3 {
+            local[k] = local[k]
+                .checked_add(p[k] - v.point[k])
+                .ok_or("Coordinate overflow")?;
         }
-        moves.insert(v.offset, local);
+        if moves
+            .insert(v.offset, local)
+            .is_some_and(|old| old != local)
+        {
+            return Err(invalid(
+                "Two selected copies of one stored vertex move differently",
+            ));
+        }
     }
     if moves.is_empty() {
         return Err(invalid("Select at least one vertex"));
     }
     write_vertices(source, &moves.into_iter().collect::<Vec<_>>())
 }
-
 #[cfg(test)]
 #[path = "shape_geometry_tests.rs"]
 mod tests;

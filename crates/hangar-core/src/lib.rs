@@ -29,8 +29,8 @@ pub mod shape_code;
 pub mod shape_edit;
 pub mod shape_geometry;
 pub mod shape_parts;
-#[cfg(test)]
-mod shape_testkit;
+#[doc(hidden)]
+pub mod shape_testkit;
 pub mod validation;
 pub type Result<T> = core::result::Result<T, alloc::string::String>;
 pub(crate) fn invalid(message: &str) -> alloc::string::String {

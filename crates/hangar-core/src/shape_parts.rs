@@ -184,6 +184,13 @@ const LAWS: &[LawCensus] = &[
     ("_PLvtAngle", &[], &[1]),
 ];
 const GEAR_LAW: &str = "_PLgearPos";
+/// Compare values the FA_2.LIB census shows for a toggle variable.
+pub fn census_values(variable: &str) -> &'static [i32] {
+    COMPARES
+        .iter()
+        .find(|(v, _)| *v == variable)
+        .map_or(&[], |(_, values)| values)
+}
 fn reviewed(variable: &str) -> bool {
     COMPARES.iter().any(|(v, _)| *v == variable) || LAWS.iter().any(|(v, ..)| *v == variable)
 }
@@ -723,7 +730,12 @@ pub fn parts(source: &[u8]) -> Result<Vec<PartInfo>> {
         if !xform && !matches!(b.target_op, 0x12 | 0x6e | 0xc4 | 0xc6) {
             continue;
         }
-        let vars: BTreeSet<String> = group.iter().flat_map(|b| b.variables()).collect();
+        // Inserted one by one: collecting sorts on a 4 KiB stack buffer,
+        // which the CRT-free x86_64 build cannot probe.
+        let mut vars = BTreeSet::new();
+        for v in group.iter().flat_map(|b| b.variables()) {
+            vars.insert(v);
+        }
         let mut when = Vec::new();
         for c in group.iter().flat_map(|b| &b.when) {
             if !when.contains(c) {
@@ -1598,5 +1610,54 @@ mod tests {
         for n in (0..flipped.len()).step_by(7) {
             let _ = parts(&flipped[..n]);
         }
+    }
+    #[test]
+    fn demo_parts_fixture_is_fully_editable() {
+        let b = crate::shape_testkit::demo_parts();
+        let list = parts(&b).unwrap();
+        let names: Vec<_> = list.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Gear left",
+                "Gear right",
+                "Nose gear",
+                "Flap left (state -1)",
+                "Flap left (state 0)",
+                "Flap right (state -1)",
+                "Flap right (state 0)",
+                "Rudder (state 0)",
+                "Hook (state 1)",
+                "Speed brake (state 1)",
+                "Afterburner (state 1)"
+            ]
+        );
+        assert!(list.iter().all(|p| p.locked.is_none() && p.retail()));
+        let g = crate::shape_geometry::Geometry::parse(&b).unwrap();
+        assert!(g.vertex_report().iter().all(|v| v.refusal.is_none()));
+        assert!((0..g.faces.len()).all(|f| g.face_refusal(f).is_none()));
+        let neutral = Model::parse(&b).unwrap();
+        let down = Model::with_pose(
+            &b,
+            &Pose::from([
+                ("_PLgearDown".into(), 1),
+                ("_PLleftFlap".into(), -1),
+                ("_PLafterBurner".into(), 1),
+            ]),
+        )
+        .unwrap();
+        assert!(down.faces.len() > neutral.faces.len());
+        // The left leg's direction flips in place.
+        let gear = find(&list, "Gear left");
+        let out = apply_part_setting(
+            &b,
+            gear.id,
+            &Setting::Direction {
+                index: 0,
+                negated: false,
+            },
+        )
+        .unwrap();
+        assert!(!find(&parts(&out).unwrap(), "Gear left").retail());
     }
 }

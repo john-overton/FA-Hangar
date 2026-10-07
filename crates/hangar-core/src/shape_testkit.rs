@@ -1,9 +1,10 @@
-//! Test-only labelled assembler for synthetic SH modules: SH records, the
-//! retail stub idioms (toggle and xform), end marker, import trampolines,
-//! `.idata` and HIGHLOW relocations. Never retail data.
+//! Labelled assembler for synthetic SH modules: SH records, the retail stub
+//! idioms (toggle and xform), end marker, import trampolines, `.idata` and
+//! HIGHLOW relocations. Used by core tests and the app's smoke fixtures
+//! (`demo_parts`). Never retail data.
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 
-pub const IMPORTS: [&str; 7] = [
+pub const IMPORTS: [&str; 10] = [
     "_PLgearDown",
     "_PLgearPos",
     "_PLhook",
@@ -11,7 +12,15 @@ pub const IMPORTS: [&str; 7] = [
     "_PLswingWing",
     "_PLrightFlap",
     "do_start_interp",
+    "_PLrudder",
+    "_PLbrake",
+    "_PLafterBurner",
 ];
+/// `.idata` layout: import lookup table, address table, DLL name, names.
+const ILT: usize = 0x40;
+const IAT: usize = ILT + 4 * (IMPORTS.len() + 1);
+const DLL: usize = IAT + 4 * (IMPORTS.len() + 1);
+const NAMES: usize = DLL + 8;
 const CODE_VA: usize = 0x1000;
 #[derive(Default)]
 pub struct Asm {
@@ -242,7 +251,7 @@ impl Asm {
             self.labels.insert(format!("alias:{name}"), self.c.len());
             self.relocs.push(self.c.len() + 2);
             self.c.extend([0xff, 0x25]);
-            self.c.extend(((idata + 0x60 + 4 * i) as u32).to_le_bytes());
+            self.c.extend(((idata + IAT + 4 * i) as u32).to_le_bytes());
         }
         let get = |labels: &BTreeMap<String, usize>, l: &str| -> usize {
             *labels.get(l).unwrap_or_else(|| panic!("label {l}"))
@@ -343,17 +352,229 @@ pub fn module(code: &[u8], relocs: &[usize]) -> Vec<u8> {
         }
     }
     b[1024..1024 + code.len()].copy_from_slice(code);
-    put(&mut b, idata_file, idata + 0x40);
-    put(&mut b, idata_file + 12, idata + 0x80);
-    put(&mut b, idata_file + 16, idata + 0x60);
-    b[idata_file + 0x80..idata_file + 0x83].copy_from_slice(b"FA\0");
+    put(&mut b, idata_file, idata + ILT);
+    put(&mut b, idata_file + 12, idata + DLL);
+    put(&mut b, idata_file + 16, idata + IAT);
+    b[idata_file + DLL..idata_file + DLL + 3].copy_from_slice(b"FA\0");
     for (i, name) in IMPORTS.iter().enumerate() {
-        let off = 0x90 + 32 * i;
-        put(&mut b, idata_file + 0x40 + 4 * i, idata + off);
-        put(&mut b, idata_file + 0x60 + 4 * i, idata + off);
+        let off = NAMES + 18 * i;
+        put(&mut b, idata_file + ILT + 4 * i, idata + off);
+        put(&mut b, idata_file + IAT + 4 * i, idata + off);
         let at = idata_file + off + 2;
         b[at..at + name.len()].copy_from_slice(name.as_bytes());
     }
     b[reloc_file..reloc_file + table.len()].copy_from_slice(&table);
     b
+}
+impl Asm {
+    /// An 82 buffer at `slot` and lit flat faces over it (0x63), each wound
+    /// so its retail normal points away from `inside` (model order).
+    pub fn solid(
+        &mut self,
+        slot: u16,
+        points: &[[i16; 3]],
+        faces: &[(&[u16], [i32; 3])],
+        color: u8,
+    ) -> &mut Self {
+        self.verts(slot, points);
+        for (corners, inside) in faces {
+            let mut order: Vec<u16> = corners.to_vec();
+            let at = |order: &[u16]| -> Vec<[i32; 3]> {
+                order
+                    .iter()
+                    .map(|k| points[*k as usize].map(|v| v as i32))
+                    .collect()
+            };
+            let mut p = at(&order);
+            let mut n = crate::model::face_normal(&p).unwrap_or([0, 0, 32765]);
+            let c: [i32; 3] =
+                core::array::from_fn(|k| p.iter().map(|q| q[k]).sum::<i32>() / p.len() as i32);
+            if (0..3)
+                .map(|k| n[k] as i64 * (c[k] - inside[k]) as i64)
+                .sum::<i64>()
+                < 0
+            {
+                order.reverse();
+                p = at(&order);
+                n = crate::model::face_normal(&p).unwrap_or([0, 0, 32765]);
+            }
+            let slots: Vec<u16> = order.iter().map(|k| slot + k).collect();
+            self.face(
+                0x23,
+                color,
+                Some((n.map(|v| v as i16), c.map(|v| v as i16))),
+                &slots,
+                &[],
+            );
+        }
+        self
+    }
+}
+/// A flat quad drawn from both sides.
+fn plate(a: &mut Asm, slot: u16, p: [[i16; 3]; 4], color: u8) {
+    let c: [i32; 3] = core::array::from_fn(|k| p.iter().map(|q| q[k] as i32).sum::<i32>() / 4);
+    let n = crate::model::face_normal(&p.map(|q| q.map(|v| v as i32))).unwrap_or([0, 0, 1]);
+    let off = |s: i32| -> [i32; 3] { core::array::from_fn(|k| c[k] + s * n[k].signum()) };
+    a.solid(
+        slot,
+        &p,
+        &[(&[0, 1, 2, 3], off(-1)), (&[0, 1, 2, 3], off(1))],
+        color,
+    );
+}
+/// A synthetic aircraft with animated parts, for smoke tests and demos:
+/// a lit flat body, gear legs on C4 transforms (a D1 + NEG slot on the left
+/// leg, D1 alone on the right, a C1 shift on the nose leg), and toggled
+/// meshes for flaps, rudder, hook, speed brake and afterburner. Not a game
+/// asset; coordinates are arbitrary source units.
+pub fn demo_parts() -> Vec<u8> {
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x10, 0]);
+    // Fuselage box (slots 0..8), wings (8..16) and fin (16..20).
+    let box_points: [[i16; 3]; 8] = core::array::from_fn(|i| {
+        [
+            if i & 1 == 0 { -5 } else { 5 },
+            if i & 2 == 0 { -40 } else { 40 },
+            if i & 4 == 0 { -4 } else { 4 },
+        ]
+    });
+    let inside = [0, 0, 0];
+    a.solid(
+        0,
+        &box_points,
+        &[
+            (&[0, 1, 3, 2], inside),
+            (&[4, 5, 7, 6], inside),
+            (&[0, 1, 5, 4], inside),
+            (&[2, 3, 7, 6], inside),
+            (&[0, 2, 6, 4], inside),
+            (&[1, 3, 7, 5], inside),
+        ],
+        150,
+    );
+    plate(
+        &mut a,
+        8,
+        [[-5, -6, 0], [-40, -12, 0], [-40, -2, 0], [-5, 10, 0]],
+        151,
+    );
+    plate(
+        &mut a,
+        12,
+        [[5, -6, 0], [40, -12, 0], [40, -2, 0], [5, 10, 0]],
+        151,
+    );
+    plate(
+        &mut a,
+        16,
+        [[0, -30, 4], [0, -40, 4], [0, -40, 16], [0, -35, 16]],
+        152,
+    );
+    // Stubs: gear transforms (pivots stored right, up, forward), then toggles.
+    let leg = [[0, 0, 0], [0, 0, -10], [1, 0, -10], [1, 0, 0]];
+    a.xform(
+        "gl",
+        Some(("_PLgearDown", 1)),
+        "_PLgearPos",
+        Shift::One,
+        true,
+        0x0a,
+        [-12, -4, 2],
+        "legl",
+        "s1",
+    );
+    a.label("s1");
+    a.xform(
+        "gr",
+        Some(("_PLgearDown", 1)),
+        "_PLgearPos",
+        Shift::One,
+        false,
+        0x0a,
+        [12, -4, 2],
+        "legr",
+        "s2",
+    );
+    a.label("s2");
+    a.xform(
+        "gn",
+        Some(("_PLgearDown", 1)),
+        "_PLgearPos",
+        Shift::Imm(3),
+        false,
+        0x08,
+        [0, -4, 30],
+        "legn",
+        "s3",
+    );
+    a.label("s3");
+    let toggles: [(&str, i8, &str, [[i16; 3]; 4]); 8] = [
+        (
+            "_PLleftFlap",
+            -1,
+            "fl1",
+            [[-10, -6, 0], [-30, -10, 0], [-30, -14, -4], [-10, -10, -4]],
+        ),
+        (
+            "_PLleftFlap",
+            0,
+            "fl0",
+            [[-10, -6, 0], [-30, -10, 0], [-30, -15, 0], [-10, -11, 0]],
+        ),
+        (
+            "_PLrightFlap",
+            -1,
+            "fr1",
+            [[10, -6, 0], [30, -10, 0], [30, -14, -4], [10, -10, -4]],
+        ),
+        (
+            "_PLrightFlap",
+            0,
+            "fr0",
+            [[10, -6, 0], [30, -10, 0], [30, -15, 0], [10, -11, 0]],
+        ),
+        (
+            "_PLrudder",
+            0,
+            "rd0",
+            [[0, -40, 4], [0, -44, 4], [0, -44, 16], [0, -40, 16]],
+        ),
+        (
+            "_PLhook",
+            1,
+            "hk",
+            [[0, -36, -4], [0, -46, -9], [1, -46, -9], [1, -36, -4]],
+        ),
+        (
+            "_PLbrake",
+            1,
+            "bk",
+            [[-3, 0, 4], [3, 0, 4], [3, -4, 9], [-3, -4, 9]],
+        ),
+        (
+            "_PLafterBurner",
+            1,
+            "ab",
+            [[-3, -40, -2], [3, -40, -2], [3, -52, 0], [-3, -52, 0]],
+        ),
+    ];
+    for (k, (var, value, name, _)) in toggles.iter().enumerate() {
+        let after = format!("t{k}");
+        a.toggle(var, *value, 0x75, name, &format!("{name}.mesh"), &after);
+        a.label(&after);
+    }
+    a.jump("end");
+    for (k, name) in ["legl", "legr", "legn"].iter().enumerate() {
+        a.label(name);
+        plate(&mut a, 20 + 4 * k as u16, leg, 153);
+        a.b(&[0x1e]);
+    }
+    for (k, (_, _, name, quad)) in toggles.iter().enumerate() {
+        a.label(&format!("{name}.mesh"));
+        plate(&mut a, 32 + 4 * k as u16, *quad, 154 + (k % 3) as u8);
+        a.b(&[0x1e]);
+    }
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    a.finish()
 }
