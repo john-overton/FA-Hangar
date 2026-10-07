@@ -384,7 +384,7 @@ pub fn rename(archive: &Archive, old: &str, new: &str, duplicate: bool) -> Resul
             && catalog.contains(&format!("{}.PAL", old.split('.').next().unwrap()))
         {
             return Err(invalid(
-                "Aircraft has a private palette binding; use New aircraft to preserve it",
+                "Aircraft has a private palette binding; use Rename reference ID to rename it with its palette",
             ));
         }
         let mut inspected = 0usize;

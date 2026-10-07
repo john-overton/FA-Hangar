@@ -231,20 +231,35 @@ pub fn companion(
 /// LIB alone; a warning when a custom LIB's `PALETTE.PAL` differs from the
 /// game's (`retail`), since FA would draw every aircraft with it.
 pub fn check(report: &mut Report, archive: &Archive, retail: Option<&[u8]>, custom: bool) {
-    let bare: Vec<&str> = archive
-        .entries
-        .iter()
-        .filter(|e| ext(&e.name) == "PT")
-        .filter(|e| local(archive, Some(&private_name(&e.name))).is_none())
-        .map(|e| e.name.as_str())
-        .collect();
+    // `local` for every PT, reading each PAL once.
+    // Inserted one by one: collecting a set runs a stable sort, whose stack
+    // buffer the CRT-free x86_64 build cannot probe.
+    let mut pals = BTreeSet::new();
+    for e in &archive.entries {
+        if ext(&e.name) == "PAL" && valid_entry(e) {
+            pals.insert(e.name.as_str());
+        }
+    }
+    let bare: Vec<&str> = if pals.contains(GAME) || pals.len() == 1 {
+        Vec::new()
+    } else {
+        archive
+            .entries
+            .iter()
+            .filter(|e| ext(&e.name) == "PT" && !pals.contains(private_name(&e.name).as_str()))
+            .map(|e| e.name.as_str())
+            .collect()
+    };
     if !bare.is_empty() {
+        let mut names = bare.iter().take(4).copied().collect::<Vec<_>>().join(", ");
+        if bare.len() > 4 {
+            names.push_str(&format!(" and {} more aircraft", bare.len() - 4));
+        }
         report.add(
             Level::Info,
             None,
             format!(
-                "{}: colors in Hangar need a palette; add one with Load palette or copy from FA_2.LIB",
-                bare.join(", ")
+                "{names}: colors in Hangar need a palette; add one with Load palette or copy from FA_2.LIB"
             ),
         );
     }
@@ -451,6 +466,16 @@ mod tests {
         assert!(report.checks[0]
             .message
             .starts_with("ONE.PT, TWO.PT: colors in Hangar"));
+        // Long lists are cut after four names.
+        let mut many = a.clone();
+        for n in ["A", "B", "C", "D"] {
+            many.entries.push(brf(&format!("{n}.PT"), &[]));
+        }
+        let mut long = Report::default();
+        check(&mut long, &many, None, true);
+        assert!(long.checks[0]
+            .message
+            .starts_with("ONE.PT, TWO.PT, A.PT, B.PT and 2 more aircraft: colors"));
         // A custom PALETTE.PAL: fine when it matches the game's, a warning otherwise.
         a.entries.push(Entry::new(GAME, pal(7)).unwrap());
         let mut report = Report::default();
