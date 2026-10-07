@@ -402,3 +402,66 @@ remaining changes, and passed undo/redo, validation and repack. The existing
 release builds pass; the PE audit reports 714,240 bytes (32-bit) and 836,608
 bytes (64-bit) with the same 59 reviewed imports. Loading a LIB that contains
 `.ORG` entries in the original game has not been tested yet.
+
+## Unreleased Edit Mesh, Parts and same-size gear encodings
+
+111 core tests pass. New ones walk every reachable state of each census
+gear slot (D1, D1+NEG, C1 2/3, C1 2/3+NEG): exactly the states that fit are
+reachable, each state has one encoding, the census form returns to the
+original bytes from every state, no-op settings are byte-identical, and the
+preview turns each leg by -(gearPos >> n), negated with the NEG. Refusals
+cover a NEG in a 3- or 4-byte slot, shift 2 or 3 with NEG in 6 bytes, NEG with
+shift 2 in 6 bytes, swing-wing direction and truncated input. The synthetic
+parts aircraft (`shape_testkit::demo_parts`) lists 11 named parts, all
+vertices writable and all faces editable.
+
+The shared UI smoke test (headless, Linux; it runs on both Windows targets in
+CI) drives Edit Mesh and Parts on that aircraft through hit regions: the mode
+Select, 1/3 and the header buttons, click, Shift+click and empty-space clicks,
+A, a drag box and B, L, the Select and Mesh menus at both sizes, delete (menu
+and X), Alt+N, E then Z 4, Shift+D then X 3 (and Esc cancelling it), S 50 with
+individual origins and median, F with a neighbour's colour and with a flat
+colour from the colour dialog, Add vertex, and raster face picking. Every edit
+is one undo step back to the exact bytes. Refusals show core's reason: two
+vertices for F, and E or G on a gear leg the pose rotates. Parts: the role
+list, presets, toggles, the gearPos field (never dirtying the document), part
+pick from the list and the viewport, the Direction Select with its **Not seen
+in retail** option applied and undone, pivot scrub and Backspace, a gate value,
+and locked reasons. Hit-region geometry passes for Edit Mesh (faces, with a
+refusal notice, and vertices), Parts, the scrolled settings panel and a
+non-retail setting at 1280 x 800 and 800 x 600.
+
+Manual checks against a copy of the user's FA_2.LIB, 2026-10-07:
+
+- `--geometry-check` analysis of all 1,275 SH is unchanged by the new `nop`
+  decoding: 313,097 of 313,097 vertices writable, 249,364 of 249,943 faces
+  editable, and `--shape-inventory` output byte-identical. Parts now number
+  1,767 (21 locked): the 12 ranged-gear second paths (A4, F4J, M17, M21F) are
+  merged into their legs instead of listed as extra "Gear mesh" parts.
+- F18, F14, A10, F16 and AV8: all 35 region edits and 78 part settings pass
+  (inventory 100%, bindings unchanged except the edited one). Their 30 gear
+  legs have 3-byte slots (18, fixed), 4-byte C1 slots (3, sar 1-3) and 6-byte
+  D1+NEG slots (9, four states each). Every reachable state re-parses with the
+  expected law and previews, and the census bytes return.
+- F111, MIG29, SU25 and SU35 add the 7-byte C1+NEG slots: 7 legs reach all
+  six states. A4, F4J and M17 add the ranged gear (two paths through one
+  slot); both paths' laws are checked. On A4 and F4J the check's own choice of
+  face was refused for add, duplicate and extrude (a degenerate face; a
+  textured face with no active texture at its host), as designed; F8 has no
+  face that heuristic accepts.
+- `--edit-check` on the same five aircraft runs delete, flip, extrude,
+  duplicate, G, S with individual origins, make face and add vertex on a body
+  face, and every flippable gear direction, through the app: 49 of 49 pass
+  and each undo restores the exact entry.
+- Stack: the deepest slot-liveness proof is 48 levels and 21 KiB on x86_64
+  release (cap 128, about 57 KiB), so it stays recursive.
+
+Formatting, strict Clippy and both Windows release builds pass; the PE audit
+reports 1,127,424 bytes (32-bit, was 939,008) and 1,288,704 bytes (64-bit,
+was 1,080,832) with the same 59 reviewed imports and no runtime DLLs. About a
+third of the growth is the region operations from core that the app now
+links (append, extrude, duplicate, delete, flip); the rest is the Edit Mesh
+and Parts UI and their smoke tests.
+
+None of the edited shapes, part settings or non-retail gear forms has been
+loaded in the original game yet; steps are in WINDOWS-TEST.md.

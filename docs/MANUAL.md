@@ -5,8 +5,9 @@ For downloads and builds see the [README](../README.md); for format and writer
 decisions see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 **Early working editor, not a complete SH authoring tool.** LIB and textual
-BRF editing work; general animated aircraft geometry remains read-only until
-its spatial and control records can be rewritten safely. No game data ships.
+BRF editing work. Aircraft geometry is edited per region, wherever Hangar can
+prove the change is safe, and moving parts change only through settings the
+retail shapes already use. No game data ships.
 
 ## Contents
 
@@ -23,6 +24,8 @@ its spatial and control records can be rewritten safely. No game data ships.
   - [Erase and restore textures](#erase-and-restore-textures)
 - [Hardpoints, materials and decals](#hardpoints-materials-and-decals)
 - [Ship, ground and animation tools](#ship-ground-and-animation-tools)
+- [Edit shapes](#edit-shapes)
+- [Moving parts](#moving-parts)
 - [Controls](#controls)
 - [Limits](#limits)
   - [Source values](#source-values)
@@ -170,15 +173,17 @@ sizes and weights.
 - Keep single-field donor copying under Tools > Copy one donor field.
 - View a bounded static pose from SH data, orbit/pan/zoom, use front/side/top
   views, and export geometry-only OBJ files.
-- Move, rotate and scale the supported static SH subset. Tab opens vertex edit
-  mode; click a vertex to select it, Shift+click to add or remove one, drag in
-  an orthographic view, or use G/R/S, which act on the selected vertices about
-  their median point. A selects all vertices or clears a full selection. A
-  press only becomes a drag after the pointer moves 4 pixels, and the vertex
-  keeps its offset from the cursor; dragging a selected vertex moves the whole
-  selection. Shapes with unhandled spatial records,
-  bounds, visibility logic or animation remain read-only. The synthetic demo
-  exercises transforms without retail data.
+- Move, rotate and scale the supported static SH subset in Object mode.
+  **Tab** opens [Edit Mesh](#edit-shapes) on any shape, retail aircraft
+  included: vertex and face selection, box and part select, move, rotate,
+  scale, delete, flip, duplicate, extrude, make face and add vertex, each
+  checked region by region. In vertex select, a press on a vertex becomes a
+  drag after the pointer moves 4 pixels, keeps its offset from the cursor and
+  moves the whole selection.
+- List an aircraft's [moving parts](#moving-parts) by role, preview gear,
+  flaps, hook, brakes, bays and afterburner in any state, and change the
+  settings their native code already has (gate values, swing range,
+  direction, rotation axis, pivot) as one undo step each.
 - Entry-level undo/redo, dirty state and explicit discard on close. Retail LIB
   names are protected; custom LIBs can be replaced with numbered backups.
 
@@ -230,6 +235,13 @@ cargo run --locked -- validate /path/to/MYMOD.LIB
 cargo run --locked -- set /path/to/FA_2.LIB F18.PT 35 23051 /new/path/MYMOD.LIB
 cargo run --locked -- --snapshot /new/path/workspace.svg
 ```
+
+Manual checks against your own LIBs (never part of CI) are also in
+`--help`: `--geometry-check NEW_DIR FA_2.LIB F18.SH` runs every region edit
+and part setting, including each reachable gear direction and range form, on
+in-memory copies and writes the results create-new to `NEW_DIR`;
+`--edit-check FA_2.LIB F18.SH` drives Edit Mesh and Parts through the app,
+undoing each step.
 
 Use `inspect` to confirm field indices and values for your own file first.
 The example changes the recognized object weight operand, in its source units.
@@ -521,14 +533,9 @@ distance conversions. The Properties groups also expose movement acceleration
 and engagement/firing parameters. Shape animation and weapon launch behavior
 are separate contracts.
 
-**Parts** in the Model toolbar opens animation inspection. Named imported state
-inputs select reviewed branches without changing the file. Set a state such as
-gear-down to reveal its C4 parts; edit a part's X/Y/Z placement with one-step
-undo. Existing rotations, code addresses and other bytes remain intact. Stored
-angles are shown for inspection. The wheel scrolls a long state input list.
-States are cleared when an undo, redo or replace moves the shape's import
-addresses. Native angle arithmetic, smooth animation,
-turret tracking and arbitrary animated geometry are not yet editable.
+**Parts** in the viewport mode select lists moving parts, previews poses and
+changes their settings; see [Moving parts](#moving-parts). Turret tracking,
+smooth animation playback and new animated parts are not available.
 
 The local developer command below creates baseline/edited weapon, building,
 ship, tank, AAA, SAM and mobile-launcher packages, plus F-18/A-10 texture and
@@ -556,6 +563,174 @@ cargo run --locked -- repair-panels INPUT.LIB MODEL.SH FIXED.LIB
 Do not load the original and repaired copies together: they retain the same
 resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 
+## Edit shapes
+
+**Tab** (or **Edit Mesh** in the viewport mode select) edits the selected SH,
+or the shape of the selected aircraft, in place. Retail aircraft are edited
+per region: before anything changes, Hangar proves which stored vertex every
+face shows and that no pointer, relocation or native code touches the bytes
+it rewrites. Whatever cannot be proved is refused with the reason, and the
+rest of the shape stays editable. Every operation below is one undo step.
+
+### Select
+
+| Action | Control |
+| --- | --- |
+| Vertex select / face select | **1** / **3**, the header's vertex and face buttons, or **Select** menu |
+| Select one | Click a vertex marker, or click a face in face select |
+| Add or remove from the selection | Shift+click |
+| Select everything / nothing | **A** |
+| Box select | Drag on empty space, or **B** then drag anywhere; Shift extends, Ctrl removes |
+| Select the part under the pointer | **L** |
+| Select all faces of the selected faces' parts | **Select > Select linked part** |
+| Invert | **Select > Invert** |
+
+Faces are picked from what the viewport draws: in **Solid** and **Textured**
+shading the face under the pointer, in **Wireframe** the nearest face whose
+outline contains the pointer. Face select shows a dot at each face centre.
+In Solid and Textured shading selected faces fill amber-deep with amber
+edges; in Wireframe their edges turn amber. The overlay and inspector show
+the count. Switching modes carries the selection over: faces
+select their corners, and in vertex select an operation uses every face whose
+corners are all selected.
+
+The **Selection** panel names the part that draws the first selected face or
+vertex (for example **Gear left**, or **Body (root frame)**) and its source
+offset.
+
+### Operations
+
+| Operation | Key | Menu |
+| --- | --- | --- |
+| Move, rotate, scale | **G**, **R**, **S**, then X/Y/Z and a value | **Mesh > Move** |
+| Delete faces | **X** or **Delete** | **Mesh > Delete faces** |
+| Flip normals | **Alt+N** | **Mesh > Flip normals** |
+| Duplicate, then move | **Shift+D**, then a move as for G | **Mesh > Duplicate** |
+| Extrude, then move | **E**, then a move as for G | **Mesh > Extrude** |
+| Make a face from the selected vertices | **F** | **Mesh > Make face** |
+| Add a vertex at the median | | **Mesh > Add vertex at median** |
+
+- **Pivot.** R and S turn or scale about the selection's median. With
+  **Pivot: Individual** (inspector or Mesh menu) in face select, each
+  connected group of selected faces scales or turns about its own centre,
+  like Blender's Individual Origins.
+- **Delete** replaces each face record with a same-size jump, so nothing
+  else in the shape moves. **Flip** reverses a face's corner order and normal.
+- **Duplicate** and **Extrude** preview while you type the move. Enter
+  applies both steps as one undo step; Esc cancels both. Extrude keeps the
+  moved cap selected and joins it to the edge of the selection with side
+  faces; the original faces are removed, as in Blender.
+- **Make face** orders the corners around their centre as seen in the view
+  and faces the new polygon towards you.
+- **New faces** copy the colour and shading of a face next to them, or take
+  the flat colour picked in **Flat colour** (the base colour dialog). A
+  textured neighbour gives its colour only, because its UVs do not fit the
+  new corners.
+- New faces and vertices are drawn where an existing face of the same part
+  is drawn: Hangar appends them before the shape's end marker and routes that
+  face through them. They take free vertex slots below 640, the largest slot
+  count of any retail shape.
+
+### Refusals and limits
+
+An operation that cannot be proved safe changes nothing. The status bar and
+an amber notice in the inspector give the reason, for example:
+
+- a face with a pointer or relocation inside it, or one native code
+  addresses;
+- a vertex whose slot shows a different vertex on another path;
+- a face in a part the preview pose rotates (reset the pose in **Parts**,
+  or use gear down, where the legs are at rest);
+- per-vertex shaded new faces (new slots have no F6 vertex records);
+- no CODE or relocation room for appended geometry, or a host face farther
+  than a 16-bit jump from the end of CODE.
+
+Hangar never recomputes BSP order, visibility planes, bounds or collision
+records. New faces draw in the order of the face they are attached to. There
+is no 3D cursor. Edited shapes have not been loaded in the original game yet;
+see [WINDOWS-TEST.md](WINDOWS-TEST.md).
+
+## Moving parts
+
+**Parts** in the viewport mode select (or **Entry > Parts**) lists the
+shape's moving parts: everything the shape's native stubs draw under a game
+variable or turn with a transform. Parts are grouped by role with an icon:
+**Gear** (legs, nose gear, gear meshes), **Control surfaces** (flaps, rudder,
+canards, slats), **Wings**, **Brakes and hook**, **Bays**, **Engines**
+(afterburner, thrust vectoring) and **Other**. Names come from the variables
+the stub reads and the side of the part's pivot, for example **Gear left**,
+**Nose gear**, **Flap left (state -1)** or **Hook (state 1)**. Toggled
+meshes carry the game state they are drawn in, because the meaning of each
+retail state is not verified. Gear doors driven by the same variables as the
+legs are numbered (**Nose gear 2**). C4 parts no stub drives are listed as
+**Static parts**.
+
+Click a part, or click its geometry in the viewport, to select it. Its faces
+are selected for Edit Mesh (Tab), highlighted, and its pivot is marked.
+
+### Preview a pose
+
+**Pose preview** sets the game variables the parts read. It changes only the
+picture: it is never saved, never part of undo, and it stays set while you
+edit, switch between Parts and Edit Mesh, or undo, because it is stored by
+variable name (`_PLgearDown`), not by address. Selecting another entry
+clears it. The viewport overlay lists the active pose in amber.
+
+- **Gear down**, **Gear up**, **Flaps down** and **Afterburner** set the
+  usual combinations.
+- Toggles (gear down, flaps, rudder, brake, hook, afterburner, bay) are
+  buttons with the values the shape and the retail census compare against.
+- **gearPos** is shown in percent down: 100% is gearPos 0, 0% is -8192
+  (OpenFA's range). Other transforms (swing wing, canards, bay doors) take
+  raw source values. Backspace over a field returns it to unset.
+- **Reset pose** clears everything.
+
+### Change settings
+
+The settings panel of a selected part shows the parameters its stub already
+has. Each change rewrites one field in place, at the same size, then re-reads
+the shape and checks that the stub still says exactly what was asked. Each is
+one undo step.
+
+| Setting | Control | Values |
+| --- | --- | --- |
+| Gate value | buttons | the values the retail census shows for that variable |
+| Gate test | Equal / Not equal | je or jne after the compare |
+| Swing range (gear) / Shift | Select | sar 1, 2 or 3 where the stub's bytes allow; swing-wing terms 1 to 7 |
+| Direction (gear) | Select | Plain or Negated (NEG), where the stub's bytes allow |
+| Rotation axis | Select | yaw (r0), pitch (r1), roll (r2) |
+| Pivot | X, Y, Z number fields | the part's C4 translation, in source units |
+
+Gear swing range is shown in degrees assuming gearPos runs from 0 to -8192:
+sar 1 swings 90°, sar 2 45°, sar 3 22°.
+
+**Not seen in retail.** Gear direction and range changes may use encodings
+that no retail shape contains: `mov ax,ax` in place of NEG, or a 4-byte
+`sar ax, n` with a 2-byte no-op. Hangar's stub evaluator proves the new law,
+but the game has not run them yet. Such options carry a **Not seen in
+retail** badge in the Select, the setting shows the badge while it is in
+effect, and the part is marked **NOT RETAIL** in the list. Returning to the
+census form restores the original bytes exactly.
+
+What cannot change, and why:
+
+- **Locked** parts: their stubs use code outside the reviewed subset (radar
+  and turret stubs, insect wings, ejection logic), or variables that are not
+  reviewed aircraft parts (`_PLstate`, `_PLdead`, `_currentTicks`). The
+  reason is shown.
+- A gear direction or range that does not fit the stub's bytes: a stub with
+  only a 3-byte `sar ax, 1` has no room for a NEG or a larger shift; NEG with
+  shift 2 or 3 needs 7 bytes. The Select offers only what fits, and the reason
+  is shown under fixed settings.
+- Direction of other transforms (swing wing, canards, bay doors): only gear
+  laws are reviewed for same-size changes.
+- A pivot that native code writes at run time.
+- New parts, new stubs, new imports or a different law: out of scope.
+
+The preview applies the same law the stub evaluator reads, so a reversed leg
+folds the other way in the viewport. Whether the game agrees is listed in
+[WINDOWS-TEST.md](WINDOWS-TEST.md).
+
 ## Controls
 
 | Action | Control |
@@ -579,8 +754,12 @@ resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 | Zoom / frame | Wheel over viewport / Home or period |
 | Shading | Viewport header: Wireframe / Solid / Textured, or View menu |
 | View along an axis | Click an axis cap on the navigation gizmo |
-| Front / side / top / projection | 1 / 3 / 7 / 5, including numpad |
-| Vertex edit mode | Tab; click vertex, Shift+click adds/removes, A all/none, G/R/S on the selection, orthographic drag (X/Y/Z locks an axis) |
+| Front / side / top / projection | 1 / 3 / 7 / 5, including numpad (in Edit Mesh, the top-row 1 and 3 switch select modes) |
+| Edit Mesh | Tab; see [Edit shapes](#edit-shapes) for its keys |
+| Vertex / face select | 1 / 3 in Edit Mesh (numpad 1 and 3 still change the view) |
+| Select in Edit Mesh | Click, Shift+click, A, B or drag for a box (Ctrl removes), L for the part under the pointer |
+| Delete / flip / duplicate / extrude / make face | X or Delete / Alt+N / Shift+D / E / F |
+| Preview a moving part's state | Parts: Pose preview buttons and fields (never saved) |
 | Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
@@ -593,8 +772,9 @@ removes the lock. Translation is in integer source coordinates: with no lock
 one value moves along X and three values (`X Y Z`) move freely. Rotation is in
 degrees about the locked axis, or about the principal axis nearest the view
 direction. Scale is in percent on the locked axis, or uniform with no lock.
-In Object mode transforms pivot on the shape origin; in Edit mode they act
-only on the selected vertices and pivot on their median point.
+In Object mode transforms pivot on the shape origin; in Edit Mesh they act
+only on the selection and pivot on its median point, or with **Pivot:
+Individual** on each group of selected faces.
 
 ## Limits
 

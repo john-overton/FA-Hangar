@@ -18,8 +18,9 @@ Win32/GDI on Windows, X11/Xwayland for local Linux development. The supplied
 Blender-inspired workspace.
 
 **Early working editor, not a complete SH authoring tool.** LIB and textual
-BRF editing work; general animated aircraft geometry remains read-only until
-its spatial and control records can be rewritten safely. No game data ships.
+BRF editing work. Aircraft geometry is edited per region where Hangar can
+prove the change safe, and moving parts change only through settings retail
+shapes already use. No game data ships.
 
 ## Highlights
 
@@ -30,8 +31,12 @@ its spatial and control records can be rewritten safely. No game data ships.
 - Graft characteristic groups from a donor definition as one undo step.
 - Export an aircraft, weapon or other object with its resources into a new,
   privately named LIB.
-- View SH static poses, transform the supported static subset, edit vertices,
-  place hardpoints and preview state-switched parts.
+- View SH static poses and place hardpoints. Edit Mesh selects vertices or
+  faces (click, box, part) and moves, scales, deletes, flips, duplicates,
+  extrudes and adds geometry on retail aircraft, region by region.
+- List moving parts (gear, flaps, rudder, hook, brakes, bays, afterburner,
+  swing wings, canards), preview their states, and change their gate values,
+  gear swing range and direction, rotation axis and pivot.
 - Paint PIC textures on the atlas or directly on the model, erase back to or
   restore the original artwork, edit palettes and UVs, and bake PNG,
   tail-number and national decals.
@@ -109,7 +114,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 ## Scope still ahead
 
-A complete animated SH writer, general aircraft vertex/face editing, topology changes,
+A complete animated SH writer, new animated parts, BSP-aware placement of new faces,
 topology-aware UV unwrapping, animation playback, complete runtime dependency
 closure, geometric grafting, verified gameplay-unit conversions,
 resizable editor splits and bitmap fonts.

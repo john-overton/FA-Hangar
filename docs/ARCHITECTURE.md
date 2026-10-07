@@ -188,9 +188,8 @@ excepted), and that chrome labels are not truncated at 1280 x 800.
 - **Components** (`ui_widgets.rs`): buttons, icon buttons, segmented controls,
   checkbox and checkbox rows, select and dropdown menu, NumberField with
   scrub/step/type/reset, type badges, notices, panels with property rows,
-  keycaps, dirty dot and focus ring. Chrome and the editor bodies use them.
-  The Edit Mesh and Parts inspectors (`ui_mesh.rs`, `ui_animation.rs`) keep
-  the earlier boxed buttons until they are rebuilt.
+  keycaps, dirty dot and focus ring. Chrome, the editor bodies and the Edit
+  Mesh and Parts inspectors use them; the old boxed button is gone.
 - **Panel stacks.** The right-hand editors lay out a `Stack`: rows draw and
   take hit regions only when entirely visible, panel frames are cut at the
   edges and spliced beneath their rows once the panel's height is known, and
@@ -206,8 +205,12 @@ excepted), and that chrome labels are not truncated at 1280 x 800.
 - **Units.** BRF values have no evidenced units, so none are shown; "^"
   scaled operands read "scaled" in raw source units. Units appear where the
   editor defines them: decal px, ° and %, byte sizes, brush px.
-- **Not implemented from the mockups:** LOD select, header Select/Mesh menus,
-  the vertical property tab strip (field groups are a panel list instead), the
+- **Edit Mesh header.** The Select and Mesh menus and the vertex/face
+  segmented control appear in Edit Mesh only. At 800 x 600 the segmented
+  control is left out (1 and 3 and the Select menu remain) before the menus
+  are.
+- **Not implemented from the mockups:** LOD select, the Hardpoints header
+  menu, the vertical property tab strip (field groups are a panel list instead), the
   animation timeline, editor-type switching per header, draggable splitters,
   graft geometry aspects and viewport ghost preview, panel header tools, and
   collapsing side editors to tab strips at 800 x 600 (both side editors keep
@@ -567,6 +570,10 @@ the slot, either directly or in a block a call reaches. The walk stops at the
 writing 82 or at a record that does not fall through. Every pointer entering
 that span from outside (Rel16/Rel32, HIGHLOW, x86 branches) must resolve to
 the same buffer, recursively up to 128 regions deep, with memoised results.
+Proofs recurse up to 128 entries deep. Over all
+1,275 FA_2.LIB shapes the deepest proof is 48 levels and 21 KiB of stack
+(about 450 bytes a level, x86_64 release), so the cap bounds it near 57 KiB,
+far inside Win98's 1 MiB default stack; it stays recursive.
 Walking back, every 1E counts as falling through. Whether it is a return or
 padding, that only adds paths to check. The forward walks (frames and called
 blocks) follow `Model`: a 1E covered by a preceding 38 scope of the same walk
@@ -651,8 +658,9 @@ outside the reviewed list (`_PLdead`, `_PLstate`, `_currentTicks` and others).
 | Gate compare | imm8 of `66 83 3D <var> imm8` | gearDown 0/1/4, flaps −2..1, rudder −1/0/1, brake, hook, afterBurner and bayOpen 0/1 | values observed per variable in the FA_2.LIB census; vtOn and slats show one value and stay fixed |
 | Branch sense | `74`/`75` after that compare | je or jne | same 2-byte form; both senses occur in retail. Ranged branches (`7C`, `7D`, `7F`) stay fixed |
 | Shift | imm8 of `66 C1 F8/F9 n` | 1–3; swing-wing terms 1–7 | C1 forms with 2 and 3 occur for gear |
-| Shift (D1 form) | `66 D1 F8` | read-only (1) | 2 or 3 would need the 4-byte C1 form |
-| Direction | `66 F7 D8` present or absent | read-only | adding or removing NEG changes size; no same-size substitute is in the census |
+| Gear law slot | `sar ax` (D1 or C1) and an optional NEG before a C4 store | the forms of the slot table below | see "Same-size gear encodings" |
+| Shift (other D1) | `66 D1 F8` outside a gear slot | read-only (1) | 2 or 3 would need the 4-byte C1 form |
+| Direction (other laws) | `66 F7 D8` present or absent | read-only | only gear laws are reviewed for same-size changes |
 | Rotation axis | disp8 of `66 89 43 d` | +6 r0 yaw, +8 r1 pitch, +0A r2 roll | gear uses +8 and +0A, swing wings +6; two stores of one stub may not share an axis |
 | Pivot | C4/C6 translation words | any i16 | refused when any stub stores into them or an unrecognised stub addresses them |
 
@@ -668,8 +676,65 @@ Gear doors and legs driven by the same variables are not told apart and are
 numbered. Toggle names carry the gate value ("Flap left (state -1)"), because
 the meaning of each retail state is not verified.
 
+Bindings of one stub that resume at one target are one part. A ranged gear
+stub stores 0 on one path and a computed law on the other; both paths now
+share one part instead of a second "Gear mesh" entry with the same id.
+
 Out of scope: authoring new stubs or adding template stubs to shapes without
-them, new imports, and changing law structure (direction, the D1 shift).
+them, new imports, relocating stubs, and laws other than the gear slot forms.
+
+### Same-size gear encodings
+
+The user allowed same-size x86 encodings that are not in the retail census
+for gear fold direction and swing range, provided the evaluator proves the
+result. A gear law slot is the `sar ax` right before a `mov [ebx+d], ax`
+store into a C4 rotation word of a `_PLgearPos` law, plus the instruction
+after the shift when it is `neg ax` (`66 F7 D8`), `mov ax, ax`
+(`66 89 C0`) or `xchg ax, ax` (`66 90`). The slot's size never changes;
+inside it Hangar writes one canonical form per (shift, NEG) state, and shift
+1 keeps the 3-byte D1 form so a census slot returns to its exact bytes:
+
+| Slot | Census form | Reachable states | Not in the census |
+|---|---|---|---|
+| 3 bytes | `D1 F8` (sar 1) | sar 1 | none; direction and range are fixed |
+| 4 bytes | `C1 F8 0n` (n = 2, 3) | sar 1–3 | sar 1 as `C1 F8 01` |
+| 6 bytes | `D1 F8`, `F7 D8` (sar 1, NEG) | sar 1 ± NEG; sar 2–3 without NEG | `D1 F8 89 C0`; `C1 F8 0n 90` |
+| 7 bytes | `C1 F8 0n`, `F7 D8` (n = 2, 3, NEG) | sar 1–3 ± NEG | `C1 F8 01 …`; `… 89 C0` |
+
+(All forms carry the `66` operand-size prefix.) NEG with shift 2 or 3 needs
+7 bytes, so a 6-byte slot refuses it with that reason, and so on. A slot
+with a branch target inside it is not offered. The decoder and evaluator
+accept `66 90` as a no-op; adding it changed nothing in the retail
+inventory (identical `--shape-inventory` output over FA_2.LIB).
+
+Each change re-parses the inventory and requires: the same coverage and stub
+count, the stub still recognised, every instruction outside the slot at the
+same boundary with the same kind, the slot re-parsing as the requested
+(shift, NEG), and every path's law for that word equal to the old law with
+its trailing NEG and last shift replaced. Other parts' bindings must not
+change. `Control::retail` and `Control::unseen` mark forms outside the
+census (gear slot forms, C1 shift amounts and rotation words not seen for
+that variable); the UI badges them **Not seen in retail**.
+
+## Parts and Edit Mesh UI boundary
+
+The Parts panel only reads `shape_parts::parts` and writes through
+`apply_part_setting` (or, for C4 parts no stub drives, the existing
+`animation::place_part`). It never assembles stub bytes. Option lists come
+from each control's `Allowed`; a fixed control shows its reason. The preview
+pose is a map from import variable name to value passed to
+`Model::with_pose`. It is app state only (never in the document, undo or a
+save) and, keyed by name, survives edits, undo and tail relocation, so the
+old address-keyed state list and its revalidation are gone. The shown model
+is posed in every Model workspace mode, so Edit Mesh works on the posed
+geometry; `shape_geometry::write_model_points` converts model-space moves to
+stored coordinates and refuses vertices whose part frames the pose rotates.
+
+Edit Mesh selections are model vertex indices (re-picked by stored offset
+after every reload) and face file offsets. Every operation reads the entry's
+bytes, calls one `shape_geometry` function, and replaces the entry once:
+one undo step. Duplicate and extrude preview by running the core function on
+each keystroke and apply the final offset in one call.
 
 ## Texture originals boundary
 

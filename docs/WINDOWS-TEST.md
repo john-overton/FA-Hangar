@@ -287,6 +287,49 @@ F18.SH A10.SH`. Then put the `F18-*.SH` and `A10-*.SH` results you test, renamed
    state. Report any crash, a part drawn in the wrong place, or a
    flight-model difference.
 
+## Edit Mesh, Parts and gear encodings (unreleased)
+
+Use a copy of FA_2.LIB and save every result to a new custom LIB, one variant
+per LIB.
+
+Editor checks (any Windows box):
+
+1. Select `F18.SH`, press Tab. Press 3: the header face button lights and
+   face dots appear. Click a fuselage face: it fills amber-deep with amber
+   edges and the overlay reads "1 / … faces". Shift+click it again: cleared.
+2. Drag a box over the nose on empty space; Ctrl+drag removes part of it. Press
+   B, then drag starting on the aircraft. Point at a gear leg and press L: the
+   inspector's Part row reads **Gear left** (or the leg's name).
+3. Press Alt+N on one face: the status reports one flipped normal. Ctrl+Z.
+   Press X: one face deleted; Ctrl+Z restores the exact LIB (dirty dot clears).
+4. Select one face, press E, Z, 4, Enter: one undo step extrudes it. Shift+D,
+   X, 6, Enter duplicates it. Press 1, select three vertices, press F.
+5. Open **Select** and **Mesh** from the header at 800 x 600 and 1280 x 800:
+   both open inside the window and list their keys.
+6. Choose **Parts**. Click **Gear down**, then **Gear up**: the legs swing and
+   the document stays unmodified. Drag the gearPos field: the legs follow.
+
+In-game checks:
+
+1. **Edited mesh.** In Edit Mesh on `F18.SH`, select one fuselage face and
+   extrude it 4 units outwards (E, then the axis and 4, Enter). Save. In the
+   game, the bump appears at every view distance where the original panel
+   shows, with its neighbours' colour. Nothing else distorts and the game
+   does not crash. Report flicker or missing panels nearby.
+2. **Part setting.** In **Parts**, select **Hook (state 1)** on `F18.SH` and set
+   its gate value to 0. Save. In the game the hook mesh should now show with
+   the hook up and hide when it is lowered. Report if it never shows.
+3. **Non-retail direction flip.** Select **Gear left** on `F18.SH` and set
+   **Direction** to **Plain** (badge **Not seen in retail**). Save. In the
+   game, lower and raise the gear: the left main leg should fold the opposite
+   way to the right leg, as the preview shows, and the game must not crash.
+   Also try **Swing range** sar 2 (45°) on a variant. Report the leg's
+   behaviour, any crash, and the exact variant. Until this passes, these
+   encodings stay marked **Not seen in retail**.
+4. `--geometry-check` writes `*-form-*.SH` files for every non-retail gear
+   form it reaches; any of them can replace the aircraft's SH in a test LIB
+   for the same check.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

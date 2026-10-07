@@ -7,6 +7,36 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Edit Mesh** works on retail aircraft, region by region. Vertex and face
+  select modes (1 / 3 and header buttons), click, Shift+click, A, box select
+  (B or a drag; Ctrl removes), L for the part under the pointer and **Select
+  linked part**. Face picking follows the shaded raster, or the nearest
+  outline in Wireframe. Selected faces are filled amber-deep with amber edges.
+- Edit Mesh operations, each one undo step: G/R/S through the region writer
+  (with **Pivot: Individual** for faces), X/Delete to delete faces, Alt+N to
+  flip normals, F to make a face, Shift+D and E to duplicate or extrude and
+  then move, and **Add vertex at median**. New faces copy a neighbour or use a
+  flat colour from the colour dialog. A refused operation names its reason in
+  the inspector. **Select** and **Mesh** header menus list everything with
+  keycaps.
+- **Parts** lists moving parts by role with icons (Gear left, Nose gear,
+  Flap left (state -1), Rudder, Speed brake, Hook, Bay doors, Afterburner,
+  Swing wing, Canards). Selecting one selects its geometry for Edit Mesh and
+  marks its pivot; clicking a part in the viewport selects it.
+- **Pose preview** with Gear down, Gear up, Flaps down and Afterburner
+  presets, toggles and gear position in percent. The pose is stored by
+  variable name, survives edits and undo, and is never saved; the old
+  address-keyed state list is gone.
+- Part settings as one undo step each: gate value, gate test, swing range,
+  direction, rotation axis and pivot, with reasons on locked controls. Gear
+  direction and swing range may now use same-size encodings that no retail
+  shape contains; they show a **Not seen in retail** badge until verified in
+  the game, and returning to the retail form restores the original bytes.
+- Years, IDs, flags, types, classes and sizes show without thousands
+  separators (`1997`, not `1,997`).
+- `--geometry-check` also walks every reachable gear direction and range
+  form; `--edit-check` drives Edit Mesh and Parts on real shapes.
+
 - The editor bodies follow the design system. The outliner has aircraft,
   shape and image type filters, 20px zebra rows with hover, group counts and
   type badges, an active row distinct from its linked entries, and ink filter
