@@ -1140,9 +1140,19 @@ impl App {
         *self.gizmo.occlusion.borrow_mut() = Some((key, verts.clone(), faces.clone()));
         Some((verts, faces))
     }
-    /// Vertex handles: one per stored vertex and screen position, only for
-    /// corners of drawn faces, inside the viewport.
+    /// Vertex handles: one per screen position and point, only for corners
+    /// of drawn faces, inside the viewport.
     pub(super) fn vertex_handles(&self) -> Vec<VertexHandle> {
+        let mut all = self.handle_points();
+        // Copies of a vertex in several frames or buffers draw once, the
+        // shown copy first.
+        all.sort_unstable_by_key(|(h, p)| (h.at, *p, !h.visible, h.index));
+        all.dedup_by_key(|(h, p)| (h.at, *p));
+        all.into_iter().map(|(h, _)| h).collect()
+    }
+    /// Every drawn corner inside the viewport with its point; box select
+    /// takes all copies, so it uses these rather than the handles.
+    pub(super) fn handle_points(&self) -> Vec<(VertexHandle, [i32; 3])> {
         let Some(model) = self.shown_model() else {
             return Vec::new();
         };
@@ -1176,11 +1186,7 @@ impl App {
                 v.point,
             ));
         }
-        // One handle per screen position and point: copies of a vertex in
-        // several frames or buffers draw once, the shown copy first.
-        all.sort_unstable_by_key(|(h, p)| (h.at, *p, !h.visible, h.index));
-        all.dedup_by_key(|(h, p)| (h.at, *p));
-        all.into_iter().map(|(h, _)| h).collect()
+        all
     }
     /// The vertex handle nearest the pointer within `HANDLE_HIT` px; ties go
     /// to the nearer vertex in depth. Hidden vertices only with X-ray.

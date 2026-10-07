@@ -414,10 +414,10 @@ impl App {
             self.sync_face_vertices();
         } else {
             let found: Vec<usize> = self
-                .vertex_handles()
+                .handle_points()
                 .into_iter()
-                .filter(|h| h.visible && hit(Some(h.at)))
-                .map(|h| h.index)
+                .filter(|(h, _)| h.visible && hit(Some(h.at)))
+                .map(|(h, _)| h.index)
                 .collect();
             if !b.extend && !b.subtract {
                 self.mesh_vertices.clear();
