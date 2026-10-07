@@ -410,3 +410,94 @@ in the Entry menu, or included when another panel is generated on a legacy SH.
 Unrecognized tails, relocation kinds/directories, and exhausted address/relocation
 space fail without applying an edit. This remains bounded SH authoring, not an
 arbitrary PE or full animated geometry writer.
+
+
+## Whole-CODE inventory and part bindings (0.9 groundwork)
+
+`shape_code::Inventory` is analysis only; no writer uses it yet. It splits all
+of CODE into contiguous records with exact spans, in order: SH records, 1E
+bytes (one record each, since retail pointers land inside 1E runs), the end
+object, embedded x86, x86 data, the end marker with its zero padding, the
+`FF 25` import trampolines, and opaque spans. Offsets are CODE-relative.
+
+The record grammar is OpenFA's instruction table with these evidence-backed
+deviations, all measured on FA_2.LIB:
+
+- 06 is an 18-byte head plus a separate 38 or 50 record; its count at +14 (5
+  or 8) covers a rel16 at +16 and that trailer. The rel16, measured from +18,
+  lands on a record start for all 48,821 retail 06s (22 of them inside 1E runs
+  that OpenFA merges into one pad). 0C/0E/10 follow the same shape (count at +10; 14 or
+  12 bytes) and all 15,155 of their rel16s hit record starts. 6C is 10 bytes
+  followed by its own 38/48/50 record, so the 48 jump inside OpenFA's 6C is
+  exposed. Hangar's older reached-path table (06 = 14, 0C = 10, 05 = 4, ...)
+  resynchronises on these count fields by accident.
+- The 38 operand is not a code pointer: measured from the record end it lands
+  on a record start for 46 of 64,981 retail 38s, and no tested base (record
+  start, field, previous record, preceding 06 target, absolute) beats chance
+  (best 17%). It is kept as unknown data, so Model's 38 scope reading is
+  unverified.
+- 40 frame offsets are relative to each field's own position.
+- Face normals are present when content flag 0x40 is set (no retail face sets
+  0x20 alone).
+- An end object is 18 bytes when bytes 16-17 are zero and bytes 1-5 are not
+  (1138 retail cases), otherwise it runs to the marker as in OpenFA (138 cases,
+  2 to 794 bytes, some read by x86 self-offsets). A record that would straddle the F2 end-object
+  target leaves the bytes before it opaque (SOLDIER.SH's two dead bytes).
+
+F0 blocks are not decoded linearly. From each `F0 00` the inventory follows x86
+with OpenFA's opcode subset: jcc/jmp targets are queued, `push A; push B; ret`
+to an import other than do_start_interp/_ErrorExit is a call returning to A,
+and `push SH; push do_start_interp; ret` resumes SH at SH. Bytes between decoded
+blocks are parsed as SH records (for example the C4 between a gear stub's jne
+and its target) or become x86 data; spans addressed by call/pop/add
+self-offsets are x86 data tables (CATGUY). Anything else is opaque to the next
+known boundary. Limits: 256 blocks, 8192 instructions per flow, 64 paths and
+256 steps per evaluated stub path.
+
+Records carry pointers with field offset, base and target: Rel16/Rel32/Off16
+SH displacements, HIGHLOW sites from `.reloc` (Abs32, CODE or import slot
+targets), x86 rel8/rel32 branches and `add r32, K` self-offsets after
+`call $+5; pop`. All are inputs for a later relocating writer. Reachability is
+the union over every branch: calls return to the next record, 06/A6/C8/AC take
+both paths, 48/40 jump, 00 and 1E end a path, and an F0 reaches every SH resume
+in its x86 flow. `slots` is every vertex slot any 82 record writes, for a
+free-slot allocator.
+
+Real-data coverage (manual `--shape-inventory`, 2026-10-07): FA_2.LIB 1274 of
+1275 SH fully covered with no opaque span (SOLDIER.SH keeps 2 opaque bytes, as
+OpenFA does); swpatch.lib 7 of 7. FA_1.LIB and FA_4B.LIB contain no SH. No SH
+pointer target misses a record start. No parse failed or panicked.
+
+The stub evaluator walks each F0 symbolically over a whitelisted subset: word
+or dword compares of an imported variable (or a register loaded from one)
+against an immediate, jcc/jmp, `call $+5; pop`, constant add/sub, loads of
+imported words, sar/shl/shr/neg/add/sub/imul and register moves, and 16-bit
+stores through a register holding a CODE address. Each path yields its
+conditions, its stores as reverse-Polish laws over variable names, and its SH
+resume. Bindings group these by resume target: Toggle (a 12/6E/C4/C6 call or
+direct geometry reached under condition sets) or Xform (law stores into the
+target C4/C6 words, with the C4 translation as pivot). Calls to other imports
+(@HardpointAngle@4, _InsectWingAngle@0, @HARDNumLoaded@8), pushad blocks, byte
+compares and flag writes are reported as unrecognised, never approximated. In
+FA_2.LIB 101 stubs are unrecognised; none belong to aircraft gear, flaps,
+brakes, rudders, hooks, bays, afterburners, canards or swing wings.
+
+Model now tags each vertex (`vertex_tags`, aligned with `vertices`) and face
+with its innermost C4/C6 part and 12/6E/C4/C6 call group, keeps the stored 82
+coordinate as the pivot-local point, follows 6E/C6 calls, and composes Q14
+fixed-point frames. Stored C4 angles always apply; a law applies only when all
+its variables are supplied, so the neutral parse keeps the stored words.
+Rotation follows OpenFA's xform reader: in C4 space (right, up, forward) the
+matrix is Rz(-r2) Ry(-r0) Rx(r1) with 8192 units per half turn, so r0 turns
+about up, r1 about right and r2 about forward. Sine and cosine use the same
+Bhaskara approximation as `sin_cos`, at FA angle resolution. With OpenFA's
+gearPos range (0 down, -8192 up) the A-10's main and nose legs both retract
+forward and the F/A-18's nose leg forward, matching those aircraft; this is
+preview plausibility, not in-game verification. `Model::with_pose` takes
+import-name keys, which survive tail relocation; `with_state` keeps
+address keys for existing callers, and `state_names`,
+`pose_from_state`/`state_from_pose` map between them.
+
+`--stub-census OUTPUT LIB...` groups address-masked stub signatures by
+variable, lists binding parameters per variable, and records which animated
+shapes lack each animation import and how much `.reloc` space remains.
