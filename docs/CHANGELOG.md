@@ -5,6 +5,16 @@ the root [`Cargo.toml`](../Cargo.toml). What was verified for each version is
 recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
+## Unreleased
+
+- **App icon.** A gold outline on a gunmetal plate with TORE over HANGAR
+  ([design](../tore-hangar-design/icons/app/README.md)). Windows builds embed
+  it at 16, 24, 32 and 48 px in 8-bit and 32-bit color plus a 256 px PNG, so
+  Explorer, the title bar and the taskbar show it on Windows 98/ME and current
+  Windows. The EXE also carries version information (product name, version,
+  GPL notice) for its Properties dialog. On Linux the X11 window sets
+  `_NET_WM_ICON`.
+
 ## 0.9.0
 
 Design-system UI pass, region-scoped SH editing on retail aircraft, a

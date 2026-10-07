@@ -48,6 +48,12 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
   overlay the texture cache until mouse release commits one document operation.
 - `windows.rs`: Win32 ANSI events, GDI back buffer, filesystem and allocation.
   `linux.rs`: Xlib events/drawing plus standard Linux filesystem support.
+- `build.rs` (windows-msvc only): writes the committed app icon
+  (`tore-hangar-design/icons/app/tore-hangar.ico`) as RT_ICON/RT_GROUP_ICON 1
+  plus a VERSIONINFO into a `.res` that the linker converts itself, so no
+  resource compiler or Python is needed. `windows.rs` loads it with
+  `LoadIconA`; `linux.rs` reads the same file's 32-bit entries for
+  `_NET_WM_ICON`.
 - `cli.rs`: local Linux inspection and automation using the same core.
 
 No vendored retail fixtures, absolute dependency on a sibling repository,

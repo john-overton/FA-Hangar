@@ -101,6 +101,9 @@ python3 tools/check_pe.py --legacy target/i686-pc-windows-msvc/release/tore-hang
 python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 ```
 
+The audit also checks the embedded app icon and version resources;
+`--extract-icon OUT.ico` writes the icon back out.
+
 ## Documentation
 
 | Document | Contents |

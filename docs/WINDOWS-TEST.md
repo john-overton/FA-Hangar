@@ -330,6 +330,17 @@ In-game checks:
    form it reaches; any of them can replace the aircraft's SH in a test LIB
    for the same check.
 
+## App icon and version information (unreleased)
+
+1. In Explorer, view the folder holding `tore-hangar.exe` as Large Icons and
+   as Small Icons (on current Windows also Extra large): the gold-outlined
+   TORE / HANGAR plate shows at large sizes and the TH monogram at small
+   sizes, with clear corners and no black box.
+2. Launch it: the title bar and taskbar button show the icon. On Windows
+   98/ME also check Alt+Tab and a 256-colour display mode.
+3. Right-click the EXE, **Properties**: the Version tab (98/ME) or Details tab
+   shows TORE Hangar, the release version and the GPL-3.0-only notice.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

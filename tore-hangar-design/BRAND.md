@@ -19,7 +19,7 @@ Hangar is the TORE dev tool for Fighters Anthology LIB files: open libs, browse 
 One theme, Gunmetal. The surface ladder runs dark to light: `gm-1000` keylines, `gm-950` viewport and fields, `gm-900` window, `gm-800` editors and panels, `gm-700` raised controls, `gm-600` hover.
 
 - Text is `ink` on any gm surface, `ink-muted` for labels and secondary text. `ink-faint` is for disabled text and placeholders only.
-- `amber` means selected, active, or changed. Nothing decorative is amber. Selection fills are the solid `amber-deep`, never a translucent amber.
+- `amber` means selected, active, or changed. Nothing decorative in the UI is amber (the app icon is the one exception). Selection fills are the solid `amber-deep`, never a translucent amber.
 - `steel` means time or reference: the playhead, hardpoints, the graft ghost, focus. It never means selected.
 - `axis-x`, `axis-y`, `axis-z` are reserved for axes: gizmo, grid axis lines, and vector field labels.
 - `ok` and `danger` always travel with an icon or a word.
@@ -57,3 +57,12 @@ One theme, Gunmetal. The surface ladder runs dark to light: `gm-1000` keylines, 
 ## Iconography
 
 Hangar's own 16px line set in `assets/Icons`: 1.5px stroke, round caps and joins, 16px grid, drawn with currentColor in the app. Idle icons are `ink-muted`, active ones `amber`. Every entry type has one icon: aircraft (PT), shape (SH), image (PIC), weapon (JT), object (OT), palette (PAL), mission (M), sound (11K), lib (.LIB). Icon-only buttons always carry a `title`.
+
+The app icon (`icons/app/`) is the product mark, not part of the line set: a
+gold `amber` outline on a chamfered `gm-900` plate, TORE in `ink` over HANGAR
+in `amber`, echoing the patch logo. It is the only decorative use of amber.
+Letters are bold condensed square capitals drawn as geometry. 48 and 32 px are
+hand-placed pixel art of the full name; at 24 and 16 px, where the name is
+illegible, a TH monogram (T `ink`, H `amber`) keeps the same plate and outline.
+Every size has solid pixels only, so the 8-bit Windows 98 entries match the
+32-bit ones exactly.

@@ -4,6 +4,21 @@ Visual spec for Hangar, the TORE dev tool for reading, editing, grafting, and re
 
 Start with `screens/workspace.png`, then `BRAND.md`.
 
+## App icon
+
+<p>
+  <img src="icons/app/tore-hangar-256.png" alt="TORE Hangar app icon, 256 px" width="128">
+  <img src="icons/app/tore-hangar-48.png" alt="48 px" width="48">
+  <img src="icons/app/tore-hangar-32.png" alt="32 px" width="32">
+  <img src="icons/app/tore-hangar-24.png" alt="24 px" width="24">
+  <img src="icons/app/tore-hangar-16.png" alt="16 px" width="16">
+</p>
+
+A gold outline on a gunmetal plate with TORE over HANGAR. The 256 master is
+`icons/app/tore-hangar.svg`; 48 and 32 are pixel art of the full name, 24 and
+16 a TH monogram. `icons/app/tore-hangar.ico` is embedded in the Windows
+executables. See `icons/app/README.md`.
+
 ## Layout
 
 ```
@@ -18,6 +33,7 @@ components/<Name>/
   README.md              Behavior, states, token usage, what the caller provides
   preview.html           Standalone HTML reference render (open in a browser)
 icons/*.svg              16px line icon set, 1.5px stroke, inked #aab3bb
+icons/app/               App icon: SVG master, PNGs at 16/24/32/48/256, multi-image .ico
 screens/*.png            Rendered previews of every component plus the full Model workspace (2x)
 tools/gen/               Python generator that produced the previews and tokens (reference only)
 ```

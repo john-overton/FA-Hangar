@@ -465,3 +465,18 @@ and Parts UI and their smoke tests.
 
 None of the edited shapes, part settings or non-retail gear forms has been
 loaded in the original game yet; steps are in WINDOWS-TEST.md.
+
+## Unreleased app icon
+
+The `.res` that `build.rs` writes is byte-identical to `llvm-rc` output for
+the equivalent `.rc` (ICON plus VERSIONINFO). `check_pe.py` finds icon group 1
+with 32-bit and 8-bit DIBs at 16, 24, 32 and 48 px plus the 256 px PNG, and
+version 0.9.0, in both release builds; `--extract-icon` writes back a file
+byte-identical to the committed `.ico`, and every entry decodes (ImageMagick)
+to the committed PNG pixels. On Linux/Xwayland, `xprop` reads `_NET_WM_ICON`
+from the demo window as 48, 32 and 16 px images matching the PNGs. The PE
+audit reports 1,158,656 bytes (32-bit, was 1,127,936) and 1,320,960 bytes
+(64-bit, was 1,290,240) with 60 reviewed imports (`LoadIconA` added).
+
+The icon has not yet been seen in Explorer, a title bar or a Properties
+dialog on Windows 98/ME or current Windows; steps are in WINDOWS-TEST.md.
