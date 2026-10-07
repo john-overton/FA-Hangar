@@ -2627,11 +2627,7 @@ impl App {
     /// A proper camera basis: front sees +forward, screen right is -body X.
     /// The old X/up/forward swap had determinant -1 and mirrored every view.
     pub(super) fn camera_point(&self, p: [i32; 3]) -> [i32; 3] {
-        model::rotate(
-            model::rotate([-p[0], p[2], p[1]], 1, self.yaw),
-            0,
-            self.pitch,
-        )
+        model::view_point(self.yaw, self.pitch, p)
     }
     pub(super) fn camera_inverse(&self, p: [i32; 3]) -> [i32; 3] {
         let p = model::rotate(model::rotate(p, 0, -self.pitch), 1, -self.yaw);

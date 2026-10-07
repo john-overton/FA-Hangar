@@ -900,6 +900,30 @@ pub fn assign_texture(
     name: &str,
     mode: UvMode,
 ) -> Result<Assigned> {
+    assign(source, faces, name, Uvs::Mode(mode))
+}
+/// `assign_texture` with the UVs given: one list per requested face, one UV
+/// per corner in record order (PIC pixels, V as stored). Byte UVs widen to
+/// words when a value exceeds 255; untextured faces become textured as for
+/// Project.
+pub fn assign_texture_uvs(
+    source: &[u8],
+    faces: &[usize],
+    name: &str,
+    uvs: &[Vec<[i32; 2]>],
+) -> Result<Assigned> {
+    if uvs.len() != faces.len() {
+        return Err(invalid("One UV list per face is required"));
+    }
+    assign(source, faces, name, Uvs::Given(uvs))
+}
+/// Where an assignment's UVs come from.
+#[derive(Clone, Copy)]
+enum Uvs<'a> {
+    Mode(UvMode),
+    Given(&'a [Vec<[i32; 2]>]),
+}
+fn assign(source: &[u8], faces: &[usize], name: &str, uvs: Uvs) -> Result<Assigned> {
     let name = name.trim().to_ascii_uppercase();
     validate_name(&name)?;
     if !name.ends_with(".PIC") {
@@ -974,7 +998,7 @@ pub fn assign_texture(
         };
         items.push(item);
     }
-    if mode == UvMode::Keep {
+    if matches!(uvs, Uvs::Mode(UvMode::Keep)) {
         items.retain(|i| i.texture != name);
         if items.is_empty() {
             return Ok(Assigned {
@@ -985,8 +1009,22 @@ pub fn assign_texture(
     }
     // New records.
     let mut records = Vec::new();
+    let mode = match uvs {
+        Uvs::Mode(mode) => Some(mode),
+        Uvs::Given(given) => {
+            for it in &items {
+                let (content, word) = match stored_uvs(&it.record)? {
+                    Some((_, word)) => (it.record[1], word),
+                    None => (textured_content(&it.record, cs + it.old)?, false),
+                };
+                records.push(with_uvs(&it.record, content, &given[it.request], word)?);
+            }
+            None
+        }
+    };
     match mode {
-        UvMode::Keep | UvMode::Scale { .. } => {
+        None => {}
+        Some(UvMode::Keep | UvMode::Scale { .. }) => {
             for it in &items {
                 let (uv, word) = stored_uvs(&it.record)?.ok_or_else(|| {
                     format!(
@@ -995,7 +1033,7 @@ pub fn assign_texture(
                     )
                 })?;
                 let uv: Vec<[i32; 2]> = match mode {
-                    UvMode::Scale { from, to } => {
+                    Some(UvMode::Scale { from, to }) => {
                         if from.contains(&0) || to.contains(&0) {
                             return Err(invalid("Texture sizes must be positive"));
                         }
@@ -1015,7 +1053,7 @@ pub fn assign_texture(
                 records.push(with_uvs(&it.record, it.record[1], &uv, word)?);
             }
         }
-        UvMode::Project { plane, size } => {
+        Some(UvMode::Project { plane, size }) => {
             let mut frames: BTreeMap<Frame, Vec<usize>> = BTreeMap::new();
             for (k, it) in items.iter().enumerate() {
                 frames.entry(g.faces[it.face].frame).or_default().push(k);

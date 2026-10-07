@@ -30,6 +30,7 @@ pub mod shape_code;
 pub mod shape_edit;
 pub mod shape_geometry;
 pub mod shape_parts;
+pub mod shape_remap;
 #[doc(hidden)]
 pub mod shape_testkit;
 pub mod shape_texture;

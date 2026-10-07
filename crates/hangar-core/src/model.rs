@@ -206,6 +206,13 @@ pub fn rotate(p: [i32; 3], axis: usize, degrees: i32) -> [i32; 3] {
     q[b] = ((p[a] as i64 * s as i64 + p[b] as i64 * c as i64) / 1024) as i32;
     q
 }
+/// The viewport camera: a proper rotation of model order (right, forward,
+/// up) to view order (screen right, screen up, towards the viewer). Front
+/// sees +forward; screen right is -X; yaw turns about up, then pitch about
+/// screen right. Orthographic views drop the third component.
+pub fn view_point(yaw: i32, pitch: i32, p: [i32; 3]) -> [i32; 3] {
+    rotate(rotate([-p[0], p[2], p[1]], 1, yaw), 0, pitch)
+}
 fn word(b: &[u8], p: usize) -> Result<i32> {
     Ok(u16_at(b, p)? as u16 as i16 as i32)
 }
