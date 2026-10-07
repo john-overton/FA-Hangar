@@ -309,10 +309,16 @@ pub(super) fn repack(
         put32(&mut out, c.optional + 8, initialized)?;
     }
     put32(&mut out, c.optional + 64, 0)?;
-    let image = u32_at(source, c.optional + 56)?.max(align(
-        c.rva + sections[ci].virtual_size,
-        c.section_alignment,
-    )?);
+    // Relocation padding can also grow past a page when .reloc is the last section.
+    let mut extent = 0;
+    for s in &sections {
+        extent = extent.max(
+            s.rva
+                .checked_add(s.virtual_size)
+                .ok_or("Module size overflow")?,
+        );
+    }
+    let image = u32_at(source, c.optional + 56)?.max(align(extent, c.section_alignment)?);
     put32(&mut out, c.optional + 56, image)?;
     let old_end = sections
         .iter()
@@ -610,6 +616,43 @@ mod tests {
                 .collect::<Vec<_>>(),
             [0x2070]
         );
+    }
+    #[test]
+    fn image_size_covers_relocation_padding_past_a_page() {
+        // .reloc is the last section by RVA; a large table whose new file offset sits
+        // late in a 4 KiB page is padded across a page boundary.
+        let mut b = fixture();
+        let (idata, reloc) = (376 + 40, 376 + 80);
+        put32(&mut b, idata + 16, 2048).unwrap();
+        let block = b[5632..5648].to_vec();
+        b.resize(7168, 0);
+        b.extend(block);
+        let mut entries = 4;
+        for k in 0..500usize {
+            b.extend((0x3000u16 | (0x200 + k as u16 * 2)).to_le_bytes());
+            entries += 1;
+        }
+        let size = 8 + entries * 2;
+        put32(&mut b, 7168 + 4, size).unwrap();
+        b.resize(7168 + 1536, 0);
+        for (off, v) in [(8, 1536), (16, 1536), (20, 7168)] {
+            put32(&mut b, reloc + off, v).unwrap();
+        }
+        put32(&mut b, 292, size).unwrap();
+        assert_eq!(u32_at(&b, 208).unwrap(), 0x7000);
+        let result = super::super::texture_panel(&b, 0, "NEW.PIC", 64, &[[0; 3]; 256]).unwrap();
+        let out = &result.shape;
+        let image = u32_at(out, 208).unwrap();
+        for n in 0..3 {
+            let h = 376 + n * 40;
+            let end = u32_at(out, h + 12).unwrap() + u32_at(out, h + 8).unwrap();
+            assert!(
+                end <= image,
+                "Section {n} ends at {end:#x} past SizeOfImage {image:#x}"
+            );
+        }
+        assert_eq!(image, 0x8000);
+        assert!(Model::parse(out).is_ok());
     }
     #[test]
     fn legacy_repair_is_idempotent_and_preserves_all_face_data() {

@@ -39,6 +39,10 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   show hover, and clicks on menu padding no longer reach controls beneath.
 - Singular counts read "1 reference", "1 direct user", "1 aircraft user".
   SVG snapshots preserve repeated spaces.
+- Generated-panel layout sets SizeOfImage to cover every section, including a
+  relocation table padded across a page when `.reloc` is the last section.
+  Retail FA_2 shapes always place `$$DOSX` after `.reloc` and were not
+  affected.
 
 ## 0.8.2
 
