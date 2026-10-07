@@ -436,6 +436,29 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    replaced color shows only where it was applied, and the `.ORG` entry does
    not disturb loading.
 
+## Panel selection and Remap from view (unreleased)
+
+Use a copy of a LIB holding the aircraft (save under a new custom name).
+
+1. Select `F18.SH` in the Model workspace, Textured. Click a panel, then
+   Shift+click two neighbours: the overlay reads "3 panels selected" and
+   they fill amber-deep. Shift+click one again to drop it; Esc clears. Turn
+   on the brush: Shift+click still selects without painting, a plain click
+   paints. On Windows 98/ME check Shift+click is not taken by the system.
+2. Press **3** (side view), select the left or right intake side panels and
+   choose **Remap selected panels from view…** in the Face textures panel.
+   The dialog suggests `_F18T1.PIC` and shows a size 256 pixels wide. Choose
+   **Bake current look** and **Remap**: the panels look the same, and
+   Paint shows `_F18T1.PIC` with the panels as seen from the side. Paint a
+   straight line across them: it stays straight and even on the model.
+3. Press **1** (front view) with panels on the side selected and try again:
+   the status reads "turn the view to face the panel" and nothing changes.
+4. Save, install the LIB and view the F/A-18 in Fighters Anthology, in the
+   external view and in flight: the remapped panels show the bake and the
+   paint, nothing else changes, and the game does not crash when the
+   aircraft is drawn (the new PIC has the retail texture layout). Repeat
+   with **Blank**.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

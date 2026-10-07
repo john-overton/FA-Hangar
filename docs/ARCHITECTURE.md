@@ -920,6 +920,49 @@ corners lie within one unit of the first face's plane; they keep one legacy
 continuation each but share the sheet and one projection. When `Model` has
 no selector for the panel, its continuation restores the proved one.
 
+## Remap from view and the retail texture layout
+
+`shape_remap::remap_from_view` projects the selected faces' corners, in the
+shown pose, through `model::view_point(yaw, pitch, p)` (the same proper
+rotation the viewport's `camera_point` now calls) with points scaled by 256
+as the renderer's fixed point, and drops depth: an orthographic layout in
+which screen right is U and screen up is stored V, so the PIC is the screen
+image (row 0 at the top) and reads unmirrored from each face's front. A
+face whose projected area is under a quarter of its true area (Newell, both
+in integers; about 75° from the view) or whose stored normal the renderer
+would cull is refused. The layout's extent times the shape's
+`atlas_density` gives the panels' texels; both sides scale together into
+252 × 1,276, and one rational scale for both axes keeps texels square. The
+bake runs per texel centre `(2i + 1, 2j + 1)` against each face's fan
+triangles in the new integer UVs (doubled), so it matches what the renderer
+will sample; the edge-function weights interpolate the face's old UVs (or
+take its flat colour), the old PIC is read at the nearest pixel exactly as
+`render_model` reads it, and the nearer face wins where faces overlap.
+Indices of a PIC with its own palette are mapped to the nearest base colour
+(identity when they agree). Blank fills covered texels with their dominant
+index; the margin repeats the nearest covered texel for `MARGIN + 1` passes
+and the rest of the sheet takes the dominant index. The faces then go
+through `assign_texture_uvs`, `assign_texture` with the UVs given (byte UVs
+widen to words when needed, untextured faces become textured as for
+Project), so every proof, refusal, continuation rule and the re-parse
+verification of per-face assignment apply, and Use shape texture reverses
+it; the result is re-parsed once more for the new name and UVs.
+
+The new PIC is written by `picture::retail_texture` in the layout of every
+texture retail SH shapes use (1,070 across the retail LIBs): kind 0, 256
+wide, raster at 64, no embedded palette, the unused span capacity
+`10 × (rows + 1)` with a null span pointer as retail carries it, and a row
+table of `64 + row × 256`, at most 1,280 rows. FA.EXE indexes that table
+while setting up textured polygons (`mov ecx,[ecx+ebp*4]` at 0x4CAF0D with a
+0x500 row bound); a generated 64 × 64 sheet without it crashed the game in
+the external view. `is_retail_texture` checks the layout on every remap.
+Generated panel sheets still use their own writer; their fix is separate.
+
+App side, the panel selection outside Edit Mesh is `EditState::mesh_faces`
+(face file offsets), the same list Edit Mesh's face select uses, pruned on
+refresh to the offsets the shown model draws; `selected_face` stays the
+active panel for Panel lock and the Paint panel.
+
 ## Identity, rename and duplicate ownership
 
 `hangar-core/src/identity.rs` owns names blocks and in-place aircraft

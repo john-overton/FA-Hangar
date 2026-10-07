@@ -754,3 +754,78 @@ bytes. Alt is read with `GetKeyState`, already imported; the PE audit
 reports 1,501,696 bytes (32-bit) and 1,716,224 bytes (64-bit) with the same
 60 reviewed imports. Replace has not been tried in the original game or on
 Windows 98 yet; steps are in WINDOWS-TEST.md.
+
+## Unreleased panel selection and Remap from view
+
+`--remap-check FA_2.LIB NEW_DIR F18.SH F16.SH A10.SH` on a copy of the
+user's retail `FA_2.LIB` (2026-10-07; the original's SHA-256 was the same
+before and after, and no game data is in the repository). Colors come from
+`PALETTE.PAL`.
+
+- **Stretch census.** Texels per source unit along each textured face's
+  vertical axis (up projected onto the face; forward for flat faces) and
+  across it, from its largest fan triangle; stretch is their ratio. F-18:
+  178 faces measured, 51 stretched 1.5× or more; the worst are lower side
+  panels at 0.3 and 0.7 texels per unit vertically against 3.2 across (9.7×
+  and 4.8×, CODE 2EB4 and 2E57), a canted rear panel at 8.7×, the nose
+  underside at 3.5× and the intake sides (2274, 1EEC) at 7.0 against 3.0
+  (2.3×); the fins reach 1.5× (48FB). F-16: 237 faces (12 more map a line or
+  point of the PIC), 112 at 1.5× or more, the worst near-horizontal panels
+  at 13.9× and 10.0× (2E12, 2C1E: 0.2 and 0.3 texels per unit across), the
+  forward side 1EE7 at 3.3× and the fin at 1.6×. A-10: 152 faces, 47 at
+  1.5× or more, the worst the top of the rear fuselage at 10.6× (17A9, 0.2
+  vertically against 1.6), the nacelle undersides at 4.5× and 4.0×, the
+  forward side 3B83 at 2.4× and the fins at 1.2×.
+- **Remap from the side, Bake.** Through the panel selection and the Remap
+  dialog, from the side the faces face (yaw 270 or 90, pitch 0): F-18 four
+  left forward-side faces (2274, 21C3, 2190, 1992, 1.8× to 2.3×) to
+  `_F18T1.PIC`, 256 × 33 at 3.1 texels per unit, afterwards 1.0× to 1.3×;
+  F-16 three faces (1EE7, 3856, 1F86, up to 3.3×) to `_F16T1.PIC`,
+  256 × 53 at 2.6, afterwards 1.0× to 1.2× (a fourth, 213C, was refused as
+  edge-on to the side view, as designed); A-10 the forward side 3B83 (2.4×)
+  to `_A10T1.PIC`, 256 × 15 at 2.2, afterwards 1.0×.
+- **Checks.** Each new PIC passes `is_retail_texture` (kind 0, 256 wide, row
+  table, no palette, 3,964 to 13,844 bytes). CODE stayed completely
+  explained (0 opaque bytes), the 18, 19 and 12 part bindings and the stubs
+  are unchanged, 287, 361 and 299 faces are drawn before and after, the
+  remapped faces draw from the new PIC, every other face keeps its CODE
+  offset, texture and UVs, and the shapes re-parse. **Use shape texture**
+  returned every drawn face to its original texture, UVs and content, and
+  its undo restored the remapped bytes. `REMAP.LIB` (5,408 entries) was
+  written create-new, reopened, and every SH re-parses.
+- **Renders.** Side views at 640 × 400 before and after differ in 38 (F-18),
+  240 (F-16) and 12 (A-10) pixels; 38, 216 and 8 of them lie on the
+  remapped panels (where the bake resamples the old texture at texel
+  centres) and the rest within one pixel of them. `*-panels.png` shows the
+  remapped faces selected and
+  `*-_F18T1.png` etc. the new PICs. They stayed in
+  `/tmp/claude-1000/remap/out1/` (not committed).
+
+Core tests cover a stretched fin baked to square texels from the side (a
+vertical gradient of 7 old rows spread over 40 rows, U increasing with
+forward), the bake agreeing with the old look at sample points in four
+rotated views, a plate seen from the left reading unmirrored (and the right
+face refused there as seen from behind), edge-on refusals from the front, the
+top and near-grazing angles, two neighbouring faces sharing one continuous
+layout and one continuation, flat faces baking their colour and Blank
+filling the dominant index, clamping to 256 × 1,280 and refused sizes, a
+missing source PIC, Use shape texture after a remap and after remapping
+again, the retail layout of every PIC written, and no floating point. The
+smoke test drives, through the rendered viewport and controls: click,
+Shift+click add and remove, Esc and empty space clearing, the amber-deep
+fill with no paint tool and edges only with the brush on, Shift+click with
+the brush on selecting without painting while a plain click paints and keeps
+the selection, Replace color opening on Selected panels and changing only
+their footprint, Remap with Bake (256 wide, faces drawing from it, the look
+kept, undo to the exact bytes), painting the remapped panel changing only
+the new PIC (`KITT1.ORG` made by that first stroke), Blank, the edge-on
+refusal from the front, Edit Mesh taking the selection and its Mesh menu,
+the Paint workspace model preview selecting panels, and the dialog's
+controls inside the window and apart at 800x600 and 1280x800.
+
+Formatting, strict Clippy (also for both Windows targets), all tests and the
+smoke test pass. The selection and dialog live in the boxed Edit Mesh
+state, so `App` stays 2,680 bytes. No Win32 API was added; the PE audit
+reports 1,561,600 bytes (32-bit) and 1,767,424 bytes (64-bit) with the same
+60 reviewed imports. Remapped textures have not been loaded in the original
+game yet; steps are in WINDOWS-TEST.md.

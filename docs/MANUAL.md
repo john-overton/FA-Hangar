@@ -27,7 +27,9 @@ the game. No game data ships.
 - [Work across LIBs](#work-across-libs)
 - [Flight envelope table](#flight-envelope-table)
 - [Paint a livery](#paint-a-livery)
+  - [Select panels](#select-panels)
   - [Per-panel textures](#per-panel-textures)
+  - [Remap panels from the view](#remap-panels-from-the-view)
   - [Replace a color](#replace-a-color)
   - [Erase and restore textures](#erase-and-restore-textures)
 - [Hardpoints, materials and decals](#hardpoints-materials-and-decals)
@@ -265,6 +267,13 @@ shape's main PIC for the whole texture and for its tail panels, then a 3D
 Replace stroke and the eraser, checking that only matching raster bytes
 change, that `X.ORG` matches the saved texture, undo, redo and Restore
 texture; it writes before/after PNGs and two LIBs create-new to `NEW_DIR`.
+`--remap-check FA_2.LIB NEW_DIR F18.SH F16.SH A10.SH` lists each shape's
+most stretched textured faces (texels per unit along each face's vertical
+and horizontal axes), remaps the most stretched side faces from the side
+they face with **Bake current look** through the panel selection and the
+Remap dialog, checks the new PIC's layout, CODE coverage, bindings and every
+other face, renders the side view before and after and the new PIC as PNG,
+runs **Use shape texture** and its undo, and writes `REMAP.LIB` create-new.
 The `replace`, `replace-model` and `replace-dialog` snapshot workspaces show
 the tool and the dialog. `--snapshot
 OUT.svg NEW.LIB F18.SH paint-side 1280x800` renders a textured side view;
@@ -621,15 +630,42 @@ pixels outside existing spans. PNG decal import and bounded per-face UV
 transforms are also available. Arbitrary audio-format conversion and
 topology-aware UV unwrapping remain outside this version.
 
+### Select panels
+
+Outside Edit Mesh, panels are selected in the Model viewport and in the
+Paint workspace's model preview:
+
+| Action | Control |
+| --- | --- |
+| Select one panel | Click it (no paint tool on) |
+| Add or remove a panel | Shift+click |
+| Select none | Esc, or click empty viewport space |
+
+With **Brush**, **Eraser** or **Replace** on, a plain click paints, as
+before, and Shift+click still selects without painting, so a selection
+survives painting (as in Blender's paint modes, painting never changes the
+selection). Selected panels show amber edges; with no paint tool on they
+also fill amber-deep, and while one is on only the edges show so strokes
+stay visible. The viewport overlay ("3 panels selected") and the **Face
+textures** panel give the count.
+
+It is one selection with Edit Mesh's faces: **Tab** enters Edit Mesh in face
+select with the same faces, and leaving Edit Mesh keeps them. The selected
+panels feed **Clone texture for selected faces**, **Assign texture…**, **Use
+shape texture**, **Replace color…** (which opens on **Selected panels**) and
+**Remap selected panels from view…**.
+
 ### Per-panel textures
 
 An aircraft normally draws every textured face from one atlas PIC: the shape
 selects the texture once and every face after it uses it. To paint some
 panels without changing the rest, give them their own PIC.
 
-Select the faces in **Edit Mesh** (face select, **3**), or click a face in
-the Model workspace. The **Face textures** panel in the inspector (and the
-**Mesh** menu in Edit Mesh) lists each selected face's texture and offers:
+Select the faces in **Edit Mesh** (face select, **3**), or click and
+Shift+click panels in the Model workspace or the Paint workspace's model
+preview (see [Select panels](#select-panels)). The **Face textures** panel in
+the inspector (and the **Mesh** menu in Edit Mesh) lists each selected
+face's texture and offers:
 
 - **Clone texture for selected faces** (the primary action) copies the
   faces' PIC to a new private 8.3 name, suggested as the first six letters of
@@ -651,6 +687,8 @@ the Model workspace. The **Face textures** panel in the inspector (and the
     to its size: **Auto** uses the faces' own plane (longest edge along the
     width), **Top**, **Side** and **Front** look along an axis. Untextured
     faces can only be projected; they become textured faces.
+- **Remap selected panels from view…** makes a new PIC laid out as the view
+  shows the panels; see [Remap panels from the view](#remap-panels-from-the-view).
 - **Use shape texture** returns faces to the shape's own texture: their
   original records go back exactly, keeping later moves or flips of the face.
   It applies to faces Hangar assigned; on any other face the status reads "No
@@ -673,6 +711,55 @@ texture state cannot be proved are refused with the reason. Damage shapes
 (`_A` to `_D`) are separate geometry: their faces never match the main shape
 by position and bytes in retail data, so Hangar does not offer to apply an
 assignment to them; assign their faces separately.
+
+### Remap panels from the view
+
+Some panels draw a thin strip of the atlas stretched over a much larger
+area, so their texels are tall or wide on the model and paint smears along
+one direction. **Remap selected panels from view…** (in the **Face
+textures** panel, the Paint panel and the **Mesh** menu) gives the selected
+panels a new PIC laid out exactly as the viewport shows them, with square
+texels.
+
+1. Select the panels (click and Shift+click, or Edit Mesh face select).
+2. Orbit with the middle mouse button, or press **1**, **3** or **7** (front,
+   side, top), until the panels face you. The layout is the orthographic
+   view: the new texture holds the panels as you see them, so a panel seen
+   at an angle is foreshortened in it, and the texture reads correctly from
+   the panel's front, never mirrored.
+3. Choose the action. The dialog shows the new name (a private 8.3 name,
+   suggested as for a clone, for example `_F18T1.PIC`; type another), the
+   sheet size with the panels' extent inside it, the texel density, and
+   **Fill**:
+   - **Bake current look** (the default): every texel the panels cover takes
+     what the panel shows there now, sampled from its current texture at the
+     nearest pixel; flat panels bake their colour. Where panels overlap in
+     the view, the nearer one wins, as on screen.
+   - **Blank**: the panels' most common colour, ready to paint from scratch.
+   Around the panels, texels repeat the nearest panel edge for 3 pixels and
+   the rest of the sheet takes the panels' most common colour.
+4. **Remap** draws the panels from the new PIC as one undo step. They show
+   it at once in the textured viewport and on the atlas, and the brush,
+   eraser and Replace paint only the new PIC on them. **Use shape texture**
+   returns them to the shape's texture with their original records.
+
+The density is the shape's own texels per unit, as for generated panel
+sheets, so the remapped panels match their neighbours. The new PIC has the
+layout of every texture retail shapes draw from: 256 pixels wide, as tall as
+the panels need up to 1,280 rows (at least 8), a row table and no palette of
+its own, so its pixels are game-palette indices like retail skins. The
+panels sit at the left with a 2-pixel margin; the rest of each row is
+padding. Panels wider than 252 texels or taller than 1,276 shrink, both
+directions together. The game palette (`PALETTE.PAL` in the LIB, or one
+loaded) is required.
+
+Refused with the reason, changing nothing: a panel nearly edge-on to the
+view (it must face you within about 75°; "Turn the view to face the
+panel"), a panel seen from behind, runtime markings without a named
+texture, and every face Assign texture refuses (texture state not proved, a
+part stub resuming at it, pointers inside it). The new PIC keeps no `.ORG`
+until it is first painted; `X.ORG` then holds the remapped texture, which
+the eraser and **Restore texture** bring back.
 
 ### Replace a color
 
@@ -1079,6 +1166,8 @@ folds the other way in the viewport. Whether the game agrees is listed in
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
 | Erase paint / restore a texture | Paint panel: Brush / Eraser control, Restore texture |
 | Replace a color | Paint panel: Replace, then Alt+click the color (or Pick); Replace color… for a whole texture or panels |
+| Select panels (Model viewport, Paint model preview) | Click; Shift+click adds or removes (also with the brush on); Esc or empty space clears |
+| Remap stretched panels | Select them, orbit until they face you, Remap selected panels from view… |
 | Cancel transform or dialog | Esc or right mouse button |
 | Close with unsaved edits | Click Discard changes, or Cancel/Esc to return |
 
@@ -1146,4 +1235,6 @@ Every texture a retail FA_2.LIB shape uses is 256 pixels wide (heights vary
 from 11 to 1,037). Generated panel sheets are 8 to 256 pixels wide, sized to
 the panel; like the earlier 64 × 64 sheets, a width other than 256 has not
 yet been confirmed in the original game (see [WINDOWS-TEST.md](WINDOWS-TEST.md)).
-Assigned textures can be any PIC in the LIB.
+Assigned textures can be any PIC in the LIB. Textures made by **Remap
+selected panels from view…** always have the retail layout: 256 wide, up to
+1,280 rows, a row table and no palette.

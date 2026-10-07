@@ -7,6 +7,27 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Select panels outside Edit Mesh.** In the Model viewport and the Paint
+  workspace's model preview, click picks a panel and Shift+click adds or
+  removes one; Esc or a click on empty space clears. With the brush,
+  eraser or Replace on, a plain click still paints and Shift+click selects
+  without painting. Selected panels show amber edges (and an amber-deep
+  fill with no paint tool on) and the count shows in the overlay and the
+  Face textures panel. It is the same selection as Edit Mesh's faces and
+  feeds Clone texture, Assign texture, Use shape texture and Replace
+  color's Selected panels.
+- **Remap selected panels from view…** (Face textures panel, Paint panel,
+  Mesh menu) gives stretched panels a new texture laid out as the viewport
+  shows them, with square texels at the shape's density: **Bake current
+  look** copies what the panels show now, **Blank** fills their most common
+  colour. The new PIC has the retail SH texture layout (256 wide, up to
+  1,280 rows, row table, no palette); the SH and the PIC are one undo step
+  and Use shape texture reverses it. Panels seen edge-on are refused with
+  "Turn the view to face the panel".
+- **`--remap-check`** lists each shape's most stretched textured faces and
+  remaps the worst side faces from the side view on a user LIB, with
+  before/after renders.
+
 - **Replace a color.** The Paint tool control adds **Replace** beside Brush
   and Eraser, and so does the Model inspector's 3D brush row. Alt+click (or
   Pick) the color to replace; strokes then paint the current color over
