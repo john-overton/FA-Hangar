@@ -610,21 +610,14 @@ caller's frame), Mixed when several frames reach it, or Unreached. A shape is
 no longer writable or read-only as a whole: each vertex and face says whether
 it can be edited, and why not.
 
-Slot liveness is proved, never assumed. To find the vertex a face's slot
-shows, the resolver walks back from the face. No record on the way may rewrite
-the slot, either directly or in a block a call reaches. The walk stops at the
-writing 82 or at a record that does not fall through. Every pointer entering
-that span from outside (Rel16/Rel32, HIGHLOW, x86 branches) must resolve to
-the same buffer, recursively up to 128 regions deep, with memoised results.
-Proofs recurse up to 128 entries deep. Over all
-1,275 FA_2.LIB shapes the deepest proof is 48 levels and 21 KiB of stack
-(about 450 bytes a level, x86_64 release), so the cap bounds it near 57 KiB,
-far inside Win98's 1 MiB default stack; it stays recursive.
-Walking back, every 1E counts as falling through. Whether it is a return or
-padding, that only adds paths to check. The forward walks (frames and called
-blocks) follow `Model`: a 1E covered by a preceding 38 scope of the same walk
-is padding, and walks repeat until that set is stable. Without this, 30 to 50%
-of retail BSP faces looked unreachable even though the preview draws them.
+Slot liveness is proved, never assumed: the vertex a face's slot shows is
+the one 82 buffer that may have written the slot last on every path that
+draws the face, found by the dataflow analysis described in
+[Dataflow proofs over SH control flow](#dataflow-proofs-over-sh-control-flow).
+The frame walks follow `Model`: a 1E covered by a preceding 38 scope of the
+same walk is padding, and walks repeat until that set is stable. Without
+this, 30 to 50% of retail BSP faces looked unreachable even though the
+preview draws them.
 
 A face may be rewritten, deleted, flipped or used as a host only when no
 pointer or relocation field lies inside it, no pointer target lies strictly
@@ -851,14 +844,80 @@ excepted), and a dialog apply puts every changed PIC into one
 SH faces carry no texture name. An E2 record selects a texture (E0 selects an
 untextured state) and every later textured FC draws with it, so one E2 near
 the start of a retail aircraft serves the whole atlas. `Geometry::material`
-proves which selector holds at a face the way slot liveness is proved:
-walking back to the nearest E2/E0, every pointer entering that span must
-resolve to a selector with the same bytes. A 12/6E/C4/C6 call whose block
-reaches no selector is transparent; one that does passes on the state that
-every return of the block resolves to (they must agree). `Model` clears its
+proves which selector holds at a face with the same dataflow analysis as
+slot liveness (next section): every E2/E0 record that may be the last one
+before the face, on any path, must have the same bytes. `Model` clears its
 selector after an F0 stub because native code runs there; the proof sees
 through the stub's resumes. Over the neutral F-18, F-16 and A-10 models it
 proves every drawn face (FA_2.LIB, 2026-10-07).
+
+## Dataflow proofs over SH control flow
+
+The first proofs walked back from a face to the nearest writer and recursed
+into every pointer entering that span. A cycle in that search ended the
+proof ("its control flow loops"): a backward branch, or a called block whose
+nested call led back into the caller. The F-5 (`F5EV.SH`, retail and
+edited alike) has the second form: `12` calls the block right after a `38`
+scope, so the block runs once called and once entered under the scope, and
+a nested `12` in it calls a block that falls into later code. The walk also
+counted the returns of nested calls as returns of the outer block. In
+FA_2.LIB, 17,988 of 137,959 drawn faces were refused this way.
+
+`shape_flow` replaces it with a forward "may" analysis over the whole CODE
+graph, built from the inventory's records and pointers:
+
+- **Nodes** are records paired with the 38 scope end in force, as `Model`
+  tracks it per call frame: a 1E is padding while a scope covers it and a
+  return otherwise; 00 returns; 38 extends the scope.
+- **Edges**: SH branches (06, 0C/0E/10 with a pointer, 6C, A6, AC, C8) go
+  both ways, 48 and 40 to their targets, other records fall through. x86
+  records go to every CODE target their decoded instructions name (rel8 and
+  rel32 branches, HIGHLOW pushes of SH resumes); import trampolines and x86
+  data tables are not control flow. All of a stub's resumes are taken, so
+  every pose is covered. A stub the evaluator does not recognise also
+  resumes at its self-offset targets. Code is never executed.
+- **Calls** (12, 6E, C4, C6) are procedures. Each called block is analysed
+  once from a symbolic entry state; its summary is the set its returns
+  leave, with "entry" standing for whatever the caller had. A call applies
+  the summary to the caller's set and continues at the next record with the
+  caller's scope. For a last-writer problem this is exact over valid
+  call/return paths, so unrelated call sites never merge. Procedure entry
+  sets are then joined from every reachable call site, and a face's set is
+  the join over its (procedure, scope) nodes.
+- **Values** are the last writer: an E2/E0 record (compared by bytes) for
+  the texture state, an 82 buffer for a slot, "nothing since the shape
+  start", or "unknown" after unexplained bytes (opaque spans, x86 data, the
+  end marker) and calls whose target is not a record start. A set holds up
+  to four values and then becomes top, which is never a proof; that cannot
+  turn an unproved face into a proved one, since only a single value is a
+  proof and a writer replaces the whole set.
+- **A proof** is a set with exactly one writer. The refusal names what
+  reaches the face instead: two textures by name and offset, a path with
+  no E2/E0 (or no 82 for the slot) since the shape start, undecodable bytes
+  at an offset, or "no path from the shape start draws it".
+
+Everything is bounded and iterative, with no recursion: the product graph
+has at most 2^19 nodes (else "too many paths to follow"), the worklist pops
+at most `(CAP + 3) × 2 × nodes + procedures + 64` times (a node's set grows at
+most `CAP + 1` times and a summary change requeues each caller as often),
+and the call-site rounds stop within `procedures × (CAP + 2) + 2`. The
+graph is built once per `Geometry`; the per-face results of the 64 most
+recently proved states (the texture state and slots) are kept. The old
+recursive proof's 128-level cap and its stack measurements no longer apply.
+
+Over FA_2.LIB (2026-10-07, `--proof-census`), the texture state is proved
+for 134,546 of 137,959 drawn faces (was 116,558) with no disagreement where
+the old proof succeeded, and every remaining refusal is a path with no
+selector since the shape start. The vertex report and face refusals of all
+1,275 shapes, and every drawn face's slot proof, are identical to the old
+proof's.
+
+Not modelled: x86 code changes neither state (recognised stubs store only
+into C4/C6 words; an unrecognised stub's stores are unknown and assumed not
+to touch E2/E0 or 82 bytes), and a `Model` C4/C6 call restores the caller's
+selector while this analysis keeps what the block leaves, as the old proof
+did. Where `Model` also knows the selector (114,494 drawn faces in FA_2.LIB)
+the proof names the same bytes in every case.
 
 `shape_texture::assign_texture` gives faces their own texture. Selected
 faces are grouped into runs: contiguous records with the same texture and

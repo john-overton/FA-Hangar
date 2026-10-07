@@ -962,3 +962,90 @@ and the smoke test pass. `App` is 2,736 bytes. No Win32 API was added; the
 PE audit reports 1,665,024 bytes (32-bit) and 1,890,304 bytes (64-bit) with
 the same 60 reviewed imports. Not yet checked in the original game; steps
 are in WINDOWS-TEST.md.
+
+## Unreleased dataflow texture and slot proofs, F-5 tail remap
+
+Read-only probes (2026-10-07) on the user's retail `FA_2.LIB` and on a copy
+of the user's `TOPGUNFX.LIB`; neither original was modified, and no game
+data is in the repository.
+
+- **The refusal.** On the F-5 (`F5EV.SH`) Clone texture for the six
+  tail-fin faces stopped at "Face at 3821: its texture state cannot be
+  proved: CODE+2801 enters before CODE+3421 and the block called at
+  CODE+2636 the block called at CODE+2636 its control flow loops". The cause
+  is retail: `F5EV.SH` in `FA_2.LIB` has the same records and the same
+  refusal on the same 47 of its 255 drawn faces. At CODE+2636 a `12` calls
+  the block right after a `38` scope (CODE+263A), so the block runs once
+  called and once entered under the scope. A stub in that block resumes at
+  a `12` (CODE+2801) whose block lies before the fin's records. Walking back
+  from the fin face reached that call, then the call at CODE+2636 it was
+  already proving, and gave up; it also counted the nested block's returns
+  as the outer block's. Hangar's own continuations in the TopGun copy add
+  no loop.
+- **Proof census** (`--proof-census`, the old proof's list as the
+  baseline):
+
+  | `FA_2.LIB`, faces the neutral models of 1,250 decodable shapes draw | Old proof | Dataflow proof |
+  | --- | --- | --- |
+  | Texture state proved | 116,558 of 137,959 | 134,546 of 137,959 |
+  | Shapes with every face proved | 966 | 1,073 |
+  | Answers that differ where the old proof succeeded | | 0 |
+  | Vertex slots proved (all drawn faces' corners) | 506,494 of 506,494 | the same, 0 differ |
+
+  Of the old refusals, 17,988 were "loops" variants; all are now proved.
+  The 3,413 left are paths with no E2/E0 since the shape start (the old
+  proof refused the same faces with the same reason). Where `Model` knows
+  the selector (114,494 drawn faces) the new proof names the same bytes in
+  every case. The full vertex report and every face refusal of all 1,275
+  shapes (563,040 lines) are byte-identical before and after. In the TopGun
+  copy 1,910 of 2,090 faces were proved and 2,067 are now, 0 differ;
+  `F5EV.SH` goes from 208 to 255 of 255 in both files. The census takes
+  7.6 s for `FA_2.LIB` with either proof; `--geometry-check`'s whole-LIB
+  analysis went from 7.7 s to 9.8 s (x86_64 release, Linux).
+- **F-5 tail, both files.** The fin is six faces drawn from `_F5EV.PIC` with
+  every corner at U = 190 (V 139 to 162): two of each side's three faces map
+  a line of the PIC, so one texel paints across the fin. `--remap-check ...
+  F5EV.SH --clone 3821,2E84,2E9F,2DD5,2DF0,3840 --faces 3821,2E84,2E9F
+  --view 270,0 F5EV.SH --faces 2DD5,2DF0,3840 --view 90,0` (TopGun with
+  `--palette` from `FA_2.LIB`):
+
+  | | Retail `FA_2.LIB` | TopGun copy |
+  | --- | --- | --- |
+  | Clone texture for the 6 faces | `_F5EVT1.PIC`, 6 faces, undo exact | the same |
+  | Left side, 3 faces (incl. 3821), yaw 270 | 256 × 32, 1.4 texels/unit | 256 × 35, 1.5 texels/unit |
+  | Right side, 3 faces, yaw 90 | 256 × 32, 1.4 texels/unit | 256 × 36, 1.6 texels/unit |
+  | New UVs | U spans 11 to 26, V 3 to 25 texels | U 12 to 28, V 3 to 29 |
+  | Stretch after | 1.0 to 1.1x | 1.0 to 1.1x |
+  | One texel before (left, right) | 181 px over 3 × 64; 272 px over 5 × 71 | the same |
+  | One texel after (left, right) | 6 px over 3 × 2; 6 px over 2 × 3 | 9 px over 3 × 3 each |
+
+  Each new PIC has the retail texture layout; inventory coverage stays
+  complete (0 opaque bytes), the 14 bindings are unchanged, the model still
+  draws 255 faces with every other face at its offset, texture and UVs, and
+  the shape re-parses. Use shape texture returns every drawn face to its
+  original record and texture, and undo restores the remap. A side remap
+  refuses the far side's faces ("faces away from the view"), so each side is
+  one remap. The renders (side view before and after, the remapped panels,
+  the one-texel tests and the new PICs) were checked by eye: the baked fin
+  looks as before, the old texel is a line the height of the fin, the new
+  one a dot.
+
+Core tests add synthetic loops: a backward branch around a call, a call
+inside a loop, a loop that changes the texture (refused, naming both PICs)
+and one that keeps it (proved, including a second E2 with the same bytes),
+call sites that must not merge, the F-5's call-then-scope idiom, recursion,
+an adversarial dense graph (sets overflow to top and settle), a thousand
+mutually recursive procedures, a scope pattern whose product graph would be
+quadratic (refused at the node cap), truncation and corruption. All of the
+loop and idiom cases fail on the old proof. The smoke test opens Clone,
+Assign and Remap on a looped synthetic kit at 800x600 and 1280x800: the
+reason shows in full in a wrapped notice, the primary button is off, Enter
+changes nothing, and a proved face of the same shape clones; it also checks
+that the mode Select shows "Texture Paint" whole.
+
+Formatting, strict Clippy (also for both Windows targets), 188 core tests
+and the smoke test pass on top of the palette-resolver changes. `App` is
+2,736 bytes (unchanged by this work; the dialogs' new state is in the boxed
+`EditState`). No Win32 API was added; the PE audit reports 1,677,312 bytes
+(32-bit) and 1,907,712 bytes (64-bit) with the same 60 reviewed imports. The
+remapped F-5 has not been flown in the original game.

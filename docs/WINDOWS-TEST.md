@@ -511,6 +511,28 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    say why. Duplicate an aircraft in a LIB without a palette: the review has
    a `<ID>.PAL` row; **Skip** leaves it out.
 
+## F-5 tail fin: proofs through loops (unreleased)
+
+Use a copy of `TOPGUNFX.LIB` (or a custom LIB holding `F5EV.SH`) with the
+game palette loaded.
+
+1. Select `F5EV.SH`, Textured, press **3** and orbit half a turn so the
+   fin's left side faces you. Click the three fin panels (Shift+click), then
+   orbit back and add the three on the right. **Clone texture for selected
+   faces** opens with no refusal; Apply: "6 selected faces now draw from
+   `_F5EVT1.PIC`". Undo.
+2. Select the three left fin panels from the left side and **Remap selected
+   panels from view…**: no refusal notice, **Remap** on. Remap with **Bake
+   current look**: the fin looks the same. Paint one dot on it with the
+   smallest brush: a dot, not a line the height of the fin. Repeat for the
+   right side.
+3. Select a face of the right side while looking at the left and open Remap:
+   the status reads "faces away from the view" and nothing changes. At
+   800x600 in paint mode the viewport header reads **Texture Paint** whole.
+4. Save, install, and view the F-5 in FA's external view and in flight: the
+   fin shows the bake and the dot, nothing else changes, and the game does
+   not crash.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

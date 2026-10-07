@@ -31,6 +31,33 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   when the source LIB has no palette of its own. Never `PALETTE.PAL`, which
   FA would apply to every aircraft. `--palette-check` shows the resolution
   and a Copy to on a real LIB.
+- **Fix: Clone, Assign and Remap refused panels with "its control flow
+  loops"**, for example the F-5's tail fin. Hangar now proves which texture
+  draws a face (and which vertex each corner shows) by following every path
+  through the shape at once, loops and nested calls included, instead of
+  walking back from the face. Across the retail FA_2.LIB, 134,546 of 137,959
+  drawn faces are now provable (was 116,558); every answer the old proof gave
+  is unchanged. The F-5's six tail-fin faces clone, and each side of the fin
+  remaps from the side view with square texels, so one painted pixel stays
+  one dot instead of a line along the fin.
+- **Readable refusals.** A face that still cannot take a new texture says why
+  in plain terms, for example "different textures reach it on different
+  paths: KIT.PIC (E2 at CODE+E) and SAME.PIC (E2 at CODE+A5)", without
+  repeated phrases. **Clone texture for selected faces**, **Assign
+  texture…** and **Remap selected panels from view…** check the selection
+  when their dialog opens: a refused selection shows the reason in full and
+  the primary button is off. Long errors in these dialogs and in other
+  prompts wrap instead of being cut off with "…".
+- **Fix: the viewport mode menu read "Texture P…"**; it now shows **Texture
+  Paint** whole at every window size.
+- **Command line.** `--proof-census INPUT.LIB NEW_OUTPUT.txt [BASELINE.txt]`
+  lists the texture and slot proof of every drawn face and compares it with
+  an earlier list. `--remap-check` takes `--faces HEX,...`, `--clone
+  HEX,...` and `--view YAW,PITCH` after an SH name (the SH may be named again
+  for its other side) and `--palette PALETTE.PAL|LIB`, clones and remaps
+  exactly those faces, and reports how far one painted texel reaches on
+  screen before and after.
+
 - **Fix: FA crashed drawing Hangar's generated panel textures** (for example
   the external view of a painted F-5). Generated panel sheets were raw PICs
   with an embedded palette and no row table, which FA's texture mapper reads

@@ -35,6 +35,7 @@ the game. No game data ships.
   - [Select panels](#select-panels)
   - [Per-panel textures](#per-panel-textures)
   - [Remap panels from the view](#remap-panels-from-the-view)
+    - [Fixing a stretched panel](#fixing-a-stretched-panel)
   - [Replace a color](#replace-a-color)
   - [Erase and restore textures](#erase-and-restore-textures)
 - [Hardpoints, materials and decals](#hardpoints-materials-and-decals)
@@ -378,6 +379,17 @@ they face with **Bake current look** through the panel selection and the
 Remap dialog, checks the new PIC's layout, CODE coverage, bindings and every
 other face, renders the side view before and after and the new PIC as PNG,
 runs **Use shape texture** and its undo, and writes `REMAP.LIB` create-new.
+After an SH name, `--faces 3821,2E84,2E9F` picks the faces instead (file
+offsets, as refusals name them), `--clone HEX,...` the faces to clone first
+(default: the same), and `--view 270,0` the camera yaw and pitch; name the
+SH again for its other side. With explicit faces the check clones them
+through **Clone texture for selected faces** and undoes it, remaps them,
+requires square texels spanning both directions, and paints one texel (in
+memory) before and after to report how many screen pixels it reaches.
+`--palette PALETTE.PAL|LIB` supplies the game palette for a LIB without one.
+`--proof-census FA_2.LIB NEW_OUT.txt [OLD.txt]` lists the texture and vertex
+proofs of every face each shape's neutral model draws, and compares them
+with an earlier list.
 `--palette-check TOPGUN.LIB NEW.LIB F5EV.PT F14.PT F14.SH` prints the
 palette each entry resolves and where it comes from, then copies `F5EV.PT`
 with its linked files into a new LIB through **Copy to** and lists the PALs
@@ -908,9 +920,16 @@ neighbouring face paints that face's PIC.
 
 Assigned faces keep their part, so moving parts still move them, and their
 draw order. Selected faces that follow each other in the shape share one
-detour; scattered faces get one each. A face that a part stub resumes
-drawing at, a face with a pointer or relocation inside it, and a face whose
-texture state cannot be proved are refused with the reason. Damage shapes
+detour; scattered faces get one each. Hangar must prove which texture each
+face draws with: it follows every path through the shape, through loops,
+part calls and moving-part code, and needs the same texture on all of them.
+A face that a part stub resumes drawing at, a face with a pointer or
+relocation inside it, and a face reached under more than one texture (the
+reason names them, for example "different textures reach it on different
+paths: _F18.PIC (E2 at CODE+71) and the E0 record at CODE+28A8") are refused.
+The three dialogs check this when they open: a refused selection shows the
+reason in full and the primary button stays off, so pick other faces or
+Cancel. Damage shapes
 (`_A` to `_D`) are separate geometry: their faces never match the main shape
 by position and bytes in retail data, so Hangar does not offer to apply an
 assignment to them; assign their faces separately.
@@ -963,6 +982,27 @@ texture, and every face Assign texture refuses (texture state not proved, a
 part stub resuming at it, pointers inside it). The new PIC keeps no `.ORG`
 until it is first painted; `X.ORG` then holds the remapped texture, which
 the eraser and **Restore texture** bring back.
+
+#### Fixing a stretched panel
+
+A tail fin that smears every brush dab into a line along the fin maps a
+strip of the atlas one pixel wide: all its corners share one U. To give it
+a proper layout:
+
+1. Turn the view so the fin's side faces you: **View · Side** (**3**; in
+   Edit Mesh, numpad 3) shows one side square on. For the other side, orbit
+   half a turn with the middle mouse button.
+2. Click the fin's panels on this side, Shift+click to add the rest. The
+   **Face textures** panel lists their texture.
+3. **Remap selected panels from view…**, keep **Bake current look**, and
+   **Remap**. The fin now draws from its own PIC with square texels, looking
+   as before; one painted pixel is one texel on the fin.
+4. The panels on the far side face away and are refused ("faces away from
+   the view"). Orbit to the other side and remap them the same way; each
+   side gets its own PIC, so neither reads mirrored.
+
+**Use shape texture** puts the fin back on the atlas; **Ctrl+Z** undoes each
+remap.
 
 ### Replace a color
 
@@ -1247,6 +1287,14 @@ an amber notice in the inspector give the reason, for example:
 - no CODE or relocation room for appended geometry, or a host face farther
   than a 16-bit jump from the end of CODE.
 
+Hangar proves which vertex each corner shows, and which texture each face
+draws with, by following every path through the shape at once: branches,
+loops, part calls and every outcome of the moving-part code. A proof needs
+one answer on all of them, so a refusal names what reaches the face instead
+(another vertex for the slot, two textures, or a path with no texture
+selected since the shape start). Texture refusals are explained under
+[Per-panel textures](#per-panel-textures).
+
 Hangar never recomputes BSP order, visibility planes, bounds or collision
 records. New faces draw in the order of the face they are attached to. There
 is no 3D cursor. Edited shapes have not been loaded in the original game yet;
@@ -1424,7 +1472,7 @@ number.
 | "{label} contains a pointer or relocation field at CODE+{offset}" | [Shape geometry](#shape-geometry) |
 | "native code addresses {label} at CODE+{offset}" | [Shape geometry](#shape-geometry) |
 | "Vertex at {offset} is not current at the host face: slot {n} shows another vertex" | [Shape geometry](#shape-geometry) |
-| "Face at {offset}: its texture state cannot be proved: {why}" | [Shape geometry](#shape-geometry) |
+| "Face at {offset}: Hangar cannot prove which texture draws it: {why}" | [Shape geometry](#shape-geometry) |
 | "Face at {offset}: a part stub resumes drawing at this face, so it cannot be moved" | [Shape geometry](#shape-geometry) |
 | "A selected vertex is in a rotated part; reset its pose or edit it in local coordinates" | [Shape geometry](#shape-geometry) |
 | "Per-vertex shaded faces need F6 vertex records; choose a flat or textured style" | [Shape geometry](#shape-geometry) |
@@ -1542,13 +1590,14 @@ Hangar edits an SH by rewriting only bytes it can prove nothing else depends
 on. It is not a complete SH writer: it never recomputes BSP order,
 visibility planes, bounds or collision records, because it has no writer for
 them yet. See [Refusals and limits](#refusals-and-limits) for how refusals
-appear.
+appear and how Hangar proves vertices and textures, and [Fixing a stretched
+panel](#fixing-a-stretched-panel) for panels whose texture smears.
 
 | Limit | Why | Instead |
 | --- | --- | --- |
 | A face with a pointer or relocation inside it, a pointer target inside it, or native code addressing it cannot be rewritten, deleted, flipped or used as a host | Other code jumps into or reads those bytes; changing them would break it. | Edit a neighbouring face, or move its vertices if they are writable. |
-| A vertex is refused when its slot shows a different vertex on another path | SH faces name vertex slots, not vertices. Hangar proves which vertex a slot holds at each face by walking every path that reaches it (up to 128 levels); a slot rewritten on another path has no single answer. | Select the vertex where it is drawn alone. |
-| A face whose texture state cannot be proved is refused for texture and layout operations | One E2 record selects the texture for every later face; Hangar must prove which selector reaches the face over every path. | For new geometry, name a texture; otherwise none. |
+| A vertex is refused when its slot shows a different vertex on another path | SH faces name vertex slots, not vertices. Hangar proves which vertex a slot holds at each face by following every path that reaches it, through loops and calls; a slot rewritten on another path has no single answer. | Select the vertex where it is drawn alone. |
+| A face whose texture state cannot be proved is refused for texture and layout operations | One E2 record selects the texture for every later face; Hangar must prove which selector reaches the face over every path. The refusal names what reaches it: two textures, or a path with no E2/E0 since the shape start. | For new geometry, name a texture; otherwise select faces drawn under one texture ([Per-panel textures](#per-panel-textures)). |
 | A face a part stub resumes drawing at cannot be moved | The stub's native code jumps to that record; moving it would change where the part draws. | Leave it in place; edit the faces after it. |
 | Model-space moves of a part the preview pose rotates are refused | Hangar converts model-space moves to stored coordinates only through unrotated part frames. | **Reset pose** in **Parts** (or gear down, where legs rest), or edit in local coordinates. |
 | Faces never drawn are read-only | No path reaches them, so nothing can be proved about them. | |
