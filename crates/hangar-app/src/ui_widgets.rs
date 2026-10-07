@@ -591,12 +591,16 @@ impl Layout {
     /// equally; each gets its own hit region.
     pub(super) fn segmented(&mut self, rect: [i32; 4], items: &[(Btn, Action)]) {
         let [x, y, w, h] = rect;
-        let n = items.len().max(1) as i32;
+        // Members share the inner width in proportion to their natural widths.
+        let natural: Vec<i32> = items.iter().map(|(b, _)| b.width().max(1)).collect();
+        let total: i32 = natural.iter().sum::<i32>().max(1);
+        let mut before = 0;
         notched(&mut self.canvas, rect, None, Some(c::GM_1000));
         for (i, (b, action)) in items.iter().enumerate() {
+            let mx = x + 1 + (w - 2) * before / total;
+            before += natural[i];
+            let mw = x + 1 + (w - 2) * before / total - mx;
             let i = i as i32;
-            let mx = x + 1 + (w - 2) * i / n;
-            let mw = x + 1 + (w - 2) * (i + 1) / n - mx;
             let member = [mx, y + 1, mw, h - 2];
             let hover = b.enabled && self.over(member);
             let mut l = look(b, hover, hover && self.pressed);

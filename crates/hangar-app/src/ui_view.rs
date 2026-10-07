@@ -905,6 +905,12 @@ impl App {
             return Ok(());
         }
 
+        // "menu-N" snapshots dropdown N open over the Model workspace.
+        if let Some(n) = name.strip_prefix("menu-") {
+            self.mode = Mode::Model;
+            self.menu = Some(n.parse().map_err(|_| "Menu number")?);
+            return Ok(());
+        }
         if name == "paint-model" {
             self.mode = Mode::Model;
             self.act(Action::ModelPaint);
@@ -1088,7 +1094,7 @@ impl App {
         };
         Ok(())
     }
-    fn lib_name(&self) -> &str {
+    pub(super) fn lib_name(&self) -> &str {
         if self.path.starts_with("Synthetic") {
             "DEMO.LIB"
         } else if self.path.is_empty() {
@@ -1185,83 +1191,7 @@ impl App {
         let r = self.right();
         let dock = self.dock_y();
         out.canvas.rect(0, 0, w, h, c::GM_800);
-        out.canvas.rect(0, 0, w, 26, c::GM_950);
-        icon(&mut out.canvas, 8, 5, Icon::Hardpoint, c::AMBER);
-        out.canvas.label(30, 18, "Hangar", c::INK);
-        out.hit([4, 0, 78, 26], Action::Demo);
-        let menus = [
-            ("File", 86, 34),
-            ("Edit", 124, 34),
-            ("Lib", 163, 28),
-            ("Entry", 196, 42),
-            ("View", 243, 38),
-            ("Tools", 286, 42),
-            ("Help", 333, 36),
-        ];
-        for (i, (name, x, width)) in menus.iter().enumerate() {
-            if self.menu == Some(i) {
-                out.canvas.rect(*x, 0, *width, 26, c::GM_700);
-            }
-            out.canvas.label(*x + 4, 18, name, c::INK_MUTED);
-            out.hit([*x, 0, *width, 26], Action::Menu(i));
-        }
-        let tabs = [
-            ("Browse", Mode::Browse, 62),
-            ("Model", Mode::Model, 60),
-            ("Flight", Mode::Properties, 56),
-            ("Graft", Mode::Graft, 54),
-            ("Package", Mode::Package, 70),
-            ("Paint", Mode::Media, 52),
-        ];
-        out.canvas.line(378, 4, 378, 22, c::LINE_STRONG);
-        out.canvas.rect(384, 1, 366, 25, c::GM_900);
-        let mut tx = 386;
-        for (name, m, width) in tabs {
-            let active = self.mode == m;
-            out.canvas
-                .rect(tx, 3, width, 23, if active { c::GM_700 } else { c::GM_800 });
-            border(
-                &mut out.canvas,
-                tx,
-                3,
-                width,
-                23,
-                if active { c::STEEL } else { c::LINE_STRONG },
-            );
-            if active {
-                out.canvas.rect(tx + 1, 3, width - 2, 2, c::AMBER);
-                out.canvas.line(tx + 1, 25, tx + width - 2, 25, c::GM_700);
-            }
-            out.canvas.label(
-                tx + 9,
-                18,
-                name,
-                if self.mode == m { c::INK } else { c::INK_MUTED },
-            );
-            out.hit([tx, 0, width, 26], Action::Mode(m));
-            tx += width + 2;
-        }
-        if w > 1050 {
-            text_fit(
-                &mut out.canvas,
-                w - 220,
-                18,
-                204,
-                &format!(
-                    "{}{}",
-                    self.lib_name(),
-                    if hangar_core::save::protected_name(&self.path).is_some() {
-                        " [Protected]"
-                    } else {
-                        ""
-                    }
-                ),
-                c::INK_MUTED,
-            );
-            if self.doc.dirty() {
-                out.canvas.rect(w - 234, 10, 5, 5, c::AMBER);
-            }
-        }
+        self.menubar(&mut out);
         if self.mode == Mode::Package {
             self.package_layout(&mut out);
         } else {
@@ -1301,61 +1231,11 @@ impl App {
             out.canvas.line(l, 26, l, h - 22, c::GM_1000);
             out.canvas.line(r, 26, r, h - 22, c::GM_1000);
         }
-        out.canvas.rect(0, h - 22, w, 22, c::GM_950);
-        let msg = if !self.status.starts_with("Opened ")
-            && !self.status.starts_with("Ready")
-            && !self.status.starts_with("Synthetic demo")
-            && !self.status.is_empty()
-        {
-            self.status.as_str()
-        } else {
-            match self.mode {
-                Mode::Model => "G Move   R Rotate   S Scale   MMB Orbit   Shift+MMB Pan",
-                Mode::Browse => "Click Select   Ctrl+F Filter   Ctrl+E Export   Delete Remove",
-                Mode::Properties => "Click value Edit   Wheel Scroll   Ctrl+Z Undo",
-                Mode::Graft => "Choose donor   Select aspects   Review changes   Apply graft",
-                Mode::Package => {
-                    "Ctrl+B Package   Retail names protected / custom saves keep backups"
-                }
-                Mode::Media => "Paint indexed colors / one stroke per undo / Ctrl+S package",
-            }
-        };
-        text_fit(
-            &mut out.canvas,
-            10,
-            h - 7,
-            w - 245,
-            msg,
-            if self.status.starts_with("Error:") {
-                c::DANGER
-            } else {
-                c::INK_MUTED
-            },
-        );
-        text_fit(
-            &mut out.canvas,
-            w - 220,
-            h - 7,
-            208,
-            &format!(
-                "{} entries  {}",
-                self.doc.archive.entries.len(),
-                if self.doc.dirty() {
-                    "* Modified"
-                } else {
-                    "Saved"
-                }
-            ),
-            if self.doc.dirty() {
-                c::AMBER
-            } else {
-                c::INK_FAINT
-            },
-        );
+        self.statusbar(&mut out);
+        out.mouse = self.mouse;
         if let Some(menu) = self.menu {
             self.menu_layout(&mut out, menu);
         }
-        out.mouse = self.mouse;
         if self
             .prompt
             .as_ref()
@@ -2217,53 +2097,14 @@ impl App {
     }
     fn dock_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
         o.canvas.rect(x, y, w, h, c::GM_800);
-        o.canvas.line(x, y, x + w, y, c::GM_1000);
-        let compact = w < 450;
-        let mut tx = x + 4;
-        for (id, title, width) in if compact {
-            [
-                (0, "Raw", 48),
-                (1, "Hex", 40),
-                (2, "Details", 60),
-                (4, "Links", 62),
-                (3, "3D preview", 86),
-            ]
-        } else {
-            [
-                (0, "Raw fields", 90),
-                (1, "Hex", 52),
-                (2, "Details", 72),
-                (4, "References", 94),
-                (3, "3D preview", 86),
-            ]
-        } {
-            if id == 3 && !(self.mode == Mode::Media && self.context_model.is_some()) {
-                continue;
-            }
-            o.button(
-                [tx, y + 4, width, 22],
-                title,
-                Action::Dock(id),
-                self.dock == id,
-            );
-            tx += width + 3;
-        }
-        if w > tx - x + 140 {
-            text_fit(
-                &mut o.canvas,
-                tx + 8,
-                y + 20,
-                x + w - tx - 16,
-                self.name(),
-                c::INK_MUTED,
-            );
-        }
+        self.dock_header(o, x, y, w);
+        let top = theme::metric::EDITOR_HEADER_H;
         if self.dock == 4 {
-            self.references_layout(o, x, y + 30, w, h - 30);
+            self.references_layout(o, x, y + top, w, h - top);
             return;
         }
         if self.dock == 3 && self.context_model.is_some() {
-            self.draw_model(o, x, y + 30, w, h - 30);
+            self.draw_model(o, x, y + top, w, h - top);
             label_fit(
                 &mut o.canvas,
                 x + 12,
@@ -2273,9 +2114,9 @@ impl App {
                 c::INK_FAINT,
             );
         } else if self.dock == 0 && self.brf.is_some() {
-            self.fields_layout(o, x, y + 30, w, h - 30, false);
+            self.fields_layout(o, x, y + top, w, h - top, false);
         } else if self.dock == 1 || (self.dock == 0 && self.brf.is_none()) {
-            o.canvas.rect(x, y + 30, w, h - 30, c::GM_950);
+            o.canvas.rect(x, y + top, w, h - top, c::GM_950);
             let count = ((w - 88) / 21).clamp(4, 16) as usize;
             for (row, bytes) in self
                 .data
@@ -2323,100 +2164,6 @@ impl App {
             );
         }
     }
-    fn menu_layout(&self, o: &mut Layout, menu: usize) {
-        let xs = [86, 124, 163, 196, 243, 286, 333];
-        let x = xs[menu];
-        let items: Vec<(&str, Action)> = match menu {
-            0 => vec![
-                ("Open LIB        Ctrl+O", Action::File(FileAction::Open)),
-                ("New empty LIB", Action::NewLibrary),
-                ("Close active LIB", Action::CloseLibrary),
-                ("Package LIB     Ctrl+S", Action::File(FileAction::Save)),
-                ("Load synthetic demo", Action::Demo),
-                ("Close", Action::Close),
-            ],
-            1 => vec![
-                ("Undo            Ctrl+Z", Action::Undo),
-                ("Redo      Ctrl+Shift+Z", Action::Redo),
-            ],
-            2 => vec![
-                ("Add entry       Ctrl+I", Action::File(FileAction::Import)),
-                (
-                    "Export object + resources",
-                    Action::File(FileAction::Variant),
-                ),
-                ("From loose SH file...", Action::File(FileAction::VariantSh)),
-                ("Validate package", Action::Validate),
-            ],
-            3 => vec![
-                ("Copy resource   Ctrl+C", Action::CopyResource),
-                ("Paste resources Ctrl+V", Action::PasteResources),
-                ("Rename resource", Action::RenameResource(false)),
-                ("Duplicate resource", Action::RenameResource(true)),
-                ("References / users", Action::Dock(4)),
-                ("Export entry    Ctrl+E", Action::File(FileAction::Export)),
-                ("Replace entry", Action::File(FileAction::Replace)),
-                ("Export geometry as OBJ", Action::File(FileAction::Obj)),
-                ("Use as graft donor", Action::PinDonor),
-                ("Graft characteristics", Action::Mode(Mode::Graft)),
-                ("Preview / Paint media", Action::Mode(Mode::Media)),
-                ("Hardpoint tools", Action::Hardpoints),
-                ("Animation / parts", Action::Animation),
-                ("Repair generated panel mappings", Action::RepairPanels),
-                ("Decals / markings", Action::MediaTab(2)),
-                ("Base color", Action::BaseColor(false)),
-                ("Panel color", Action::BaseColor(true)),
-                ("Remap color indices", Action::Recolor),
-            ],
-            4 => vec![
-                ("Frame all        Home", Action::View(0)),
-                ("Front               1", Action::View(1)),
-                ("Side                3", Action::View(3)),
-                ("Top                 7", Action::View(7)),
-                ("Toggle projection   5", Action::View(5)),
-                ("Textured / wireframe", Action::Textured),
-            ],
-            5 => vec![
-                (
-                    "Export object + resources",
-                    Action::File(FileAction::Variant),
-                ),
-                ("From loose SH file...", Action::File(FileAction::VariantSh)),
-                ("Graft characteristics", Action::Mode(Mode::Graft)),
-                ("Copy one donor field", Action::File(FileAction::Graft)),
-            ],
-            _ => vec![
-                ("Controls           F1", Action::Help),
-                ("Load synthetic demo", Action::Demo),
-            ],
-        };
-        o.canvas
-            .rect(x + 3, 29, 222, items.len() as i32 * 26 + 8, c::GM_1000);
-        o.canvas
-            .rect(x, 26, 222, items.len() as i32 * 26 + 8, c::GM_700);
-        border(
-            &mut o.canvas,
-            x,
-            26,
-            222,
-            items.len() as i32 * 26 + 8,
-            c::LINE_STRONG,
-        );
-        o.hit([x, 26, 222, items.len() as i32 * 26 + 8], Action::MenuPad);
-        for (i, (label, a)) in items.into_iter().enumerate() {
-            let y = 30 + i as i32 * 26;
-            let hover = self.mouse[0] >= x
-                && self.mouse[0] < x + 222
-                && self.mouse[1] >= y
-                && self.mouse[1] < y + 26;
-            if hover {
-                o.canvas.rect(x + 2, y, 218, 26, c::AMBER_DEEP);
-            }
-            o.canvas
-                .text(x + 10, y + 17, label, if hover { c::AMBER } else { c::INK });
-            o.hit([x + 2, y, 218, 26], a);
-        }
-    }
     fn prompt_layout(&self, o: &mut Layout) {
         let p = self.prompt.as_ref().unwrap();
         let w = (self.width - 48).min(710);
@@ -2424,7 +2171,6 @@ impl App {
         let y = self.height / 2 - 112;
         o.hits.clear();
         let d = &mut o.canvas;
-        d.rect(x + 5, y + 6, w, 224, c::GM_1000);
         d.rect(x, y, w, 224, c::GM_800);
         border(d, x, y, w, 224, c::LINE_STRONG);
         d.rect(x + 1, y + 1, w - 2, 34, c::GM_700);

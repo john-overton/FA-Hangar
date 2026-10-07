@@ -2556,6 +2556,8 @@ fn clip(mut a: [i32; 2], mut b: [i32; 2], r: [i32; 4]) -> Option<([i32; 2], [i32
     None
 }
 
+#[path = "ui_chrome.rs"]
+mod chrome;
 #[path = "ui_view.rs"]
 mod view;
 // Components not yet adopted by every editor stay available for later passes.
