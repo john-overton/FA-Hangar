@@ -24,6 +24,19 @@ pub struct Face {
     pub uv_offsets: Vec<usize>,
     pub end: usize,
     pub material_selector: Vec<u8>,
+    /// Innermost C4/C6 part (index into `Model::parts`) drawing this face.
+    pub part: Option<usize>,
+    /// Innermost 12/6E/C4/C6 call (index into `Model::groups`) drawing this face.
+    pub group: Option<usize>,
+}
+/// Per-vertex provenance, aligned with `Model::vertices`. Kept beside `Vertex`
+/// so synthetic `Vertex` literals elsewhere stay valid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VertexTag {
+    /// Stored 82 coordinate, local to the innermost part's pivot frame.
+    pub local: [i32; 3],
+    pub part: Option<usize>,
+    pub group: Option<usize>,
 }
 #[derive(Clone, Debug)]
 pub struct Model {
@@ -34,8 +47,14 @@ pub struct Model {
     pub writable: bool,
     pub reason: String,
     pub records: Vec<Record>,
+    /// Virtual addresses compared by reached F0 guards (trampoline aliases).
     pub state_words: BTreeSet<usize>,
     pub parts: Vec<Part>,
+    pub vertex_tags: Vec<VertexTag>,
+    pub groups: Vec<Group>,
+    /// Import name of each state word, when the alias resolves. Symbolic keys
+    /// survive tail relocation; virtual addresses do not.
+    pub state_names: BTreeMap<usize, String>,
 }
 #[derive(Clone, Debug)]
 pub struct Part {
@@ -44,6 +63,109 @@ pub struct Part {
     pub position: [i32; 3],
     /// Stored C4 angles; native arithmetic can overwrite these at runtime.
     pub rotation: [i32; 3],
+    /// Translation (vertex order) and C4 angles used by this pose, after any
+    /// evaluated xform laws for supplied variables.
+    pub posed_position: [i32; 3],
+    pub posed_rotation: [i32; 3],
+}
+/// A reached SH call (12/6E/C4/C6) and the block it draws.
+#[derive(Clone, Debug)]
+pub struct Group {
+    /// File offsets of the call record and its target.
+    pub offset: usize,
+    pub target: usize,
+    pub opcode: u8,
+    pub parent: Option<usize>,
+    /// Innermost C4/C6 part enclosing or equal to this call.
+    pub part: Option<usize>,
+}
+/// Symbolic preview state: import variable name to word value.
+pub type Pose = BTreeMap<String, i32>;
+enum Inputs<'a> {
+    Address(&'a BTreeMap<usize, i32>),
+    Named(&'a Pose),
+}
+/// Fixed-point (Q14) frame transform in vertex order (right, forward, up).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct Frame3 {
+    m: [[i64; 3]; 3],
+    t: [i64; 3],
+}
+const Q: i64 = 1 << 14;
+fn div_round(n: i64, d: i64) -> i64 {
+    if n >= 0 {
+        (n + d / 2) / d
+    } else {
+        -((-n + d / 2) / d)
+    }
+}
+impl Frame3 {
+    const IDENTITY: Self = Self {
+        m: [[Q, 0, 0], [0, Q, 0], [0, 0, Q]],
+        t: [0; 3],
+    };
+    fn apply(&self, p: [i32; 3]) -> [i32; 3] {
+        core::array::from_fn(|i| {
+            let v: i64 = (0..3).map(|j| self.m[i][j] * p[j] as i64).sum::<i64>() + self.t[i];
+            div_round(v, Q) as i32
+        })
+    }
+    /// Child frame for a C4 translation (vertex order) and stored C4 angles.
+    fn child(&self, position: [i32; 3], rotation: [i32; 3]) -> Self {
+        let t = core::array::from_fn(|i| {
+            self.t[i]
+                + (0..3)
+                    .map(|j| self.m[i][j] * position[j] as i64)
+                    .sum::<i64>()
+        });
+        if rotation == [0; 3] {
+            return Self { m: self.m, t };
+        }
+        let r = c4_rotation(rotation);
+        let m = core::array::from_fn(|i| {
+            core::array::from_fn(|j| div_round((0..3).map(|k| self.m[i][k] * r[k][j]).sum(), Q))
+        });
+        Self { m, t }
+    }
+}
+/// Integer sine/cosine (Q14) of an FA angle word: 8192 units per half turn.
+/// Same Bhaskara approximation as `sin_cos`, at FA angle resolution.
+pub fn fa_sin_cos(units: i32) -> (i32, i32) {
+    fn sin(u: i64) -> i64 {
+        let mut u = u.rem_euclid(16384);
+        let sign = if u >= 8192 {
+            u -= 8192;
+            -1
+        } else {
+            1
+        };
+        let t = u * (8192 - u);
+        sign * div_round(16 * t * Q, 5 * 8192 * 8192 - 4 * t)
+    }
+    (sin(units as i64) as i32, sin(units as i64 + 4096) as i32)
+}
+/// C4 angles to a Q14 matrix in vertex order. Following OpenFA's xform reader,
+/// in C4 space (right, up, forward) the matrix is Rz(-r2) Ry(-r0) Rx(r1), each
+/// angle in FA units: r0 turns about up, r1 about right, r2 about forward.
+fn c4_rotation(r: [i32; 3]) -> [[i64; 3]; 3] {
+    let (sx, cx) = fa_sin_cos(r[1]);
+    let (sy, cy) = fa_sin_cos(-r[0]);
+    let (sz, cz) = fa_sin_cos(-r[2]);
+    let (sx, cx, sy, cy, sz, cz) = (
+        sx as i64, cx as i64, sy as i64, cy as i64, sz as i64, cz as i64,
+    );
+    let rx = [[Q, 0, 0], [0, cx, -sx], [0, sx, cx]];
+    let ry = [[cy, 0, sy], [0, Q, 0], [-sy, 0, cy]];
+    let rz = [[cz, -sz, 0], [sz, cz, 0], [0, 0, Q]];
+    let mul = |a: [[i64; 3]; 3], b: [[i64; 3]; 3]| -> [[i64; 3]; 3] {
+        core::array::from_fn(|i| {
+            core::array::from_fn(|j| div_round((0..3).map(|k| a[i][k] * b[k][j]).sum(), Q))
+        })
+    };
+    let c4 = mul(mul(rz, ry), rx);
+    // Vertex order swaps C4's up and forward axes.
+    let p = [0, 2, 1];
+    core::array::from_fn(|i| core::array::from_fn(|j| c4[p[i]][p[j]]))
 }
 #[derive(Clone, Debug)]
 pub struct Record {
@@ -95,7 +217,8 @@ fn target(p: usize, d: i32, len: usize) -> Result<usize> {
         Ok(t as usize)
     }
 }
-fn section(data: &[u8]) -> Result<(usize, usize, usize)> {
+/// CODE file offset, length and virtual address.
+pub(crate) fn section(data: &[u8]) -> Result<(usize, usize, usize)> {
     if data.len() > 16 * 1024 * 1024 || slice(data, 0, 2)? != b"MZ" {
         return Err(invalid("Not a PL/PE shape module"));
     }
@@ -129,10 +252,59 @@ impl Model {
     pub fn parse(data: &[u8]) -> Result<Self> {
         Self::with_state(data, &BTreeMap::new())
     }
-    /// Reviewed state switches only. Imported code and angle arithmetic are inert.
+    /// Reviewed state switches only, keyed by state-word virtual address.
+    /// Imported code is inert; xform laws apply only for supplied variables.
     pub fn with_state(data: &[u8], state: &BTreeMap<usize, i32>) -> Result<Self> {
+        Self::build(data, Inputs::Address(state))
+    }
+    /// As `with_state`, keyed by import variable name (for example
+    /// `_PLgearDown`). Names survive tail relocation; addresses do not.
+    pub fn with_pose(data: &[u8], pose: &Pose) -> Result<Self> {
+        Self::build(data, Inputs::Named(pose))
+    }
+    /// Name-keyed pose for an address-keyed state map, using `state_names`.
+    pub fn pose_from_state(&self, state: &BTreeMap<usize, i32>) -> Pose {
+        state
+            .iter()
+            .filter_map(|(a, v)| self.state_names.get(a).map(|n| (n.clone(), *v)))
+            .collect()
+    }
+    /// Address-keyed state for this shape's current layout.
+    pub fn state_from_pose(&self, pose: &Pose) -> BTreeMap<usize, i32> {
+        self.state_names
+            .iter()
+            .filter_map(|(a, n)| pose.get(n).map(|v| (*a, *v)))
+            .collect()
+    }
+    fn build(data: &[u8], inputs: Inputs) -> Result<Self> {
         let (start, len, base) = section(data)?;
         let c = &data[start..start + len];
+        let names = crate::animation::symbols(data).unwrap_or_default();
+        let by_address = |address: usize| -> Option<i32> {
+            match &inputs {
+                Inputs::Address(s) => s.get(&address).copied(),
+                Inputs::Named(p) => names.get(&address).and_then(|n| p.get(n)).copied(),
+            }
+        };
+        let by_name = |name: &str| -> Option<i32> {
+            match &inputs {
+                Inputs::Named(p) => p.get(name).copied(),
+                Inputs::Address(s) => names
+                    .iter()
+                    .filter(|(a, n)| n.as_str() == name && s.contains_key(a))
+                    .find_map(|(a, _)| s.get(a).copied()),
+            }
+        };
+        // Xform laws for C4/C6 words, from the whole-CODE inventory. Only laws
+        // whose variables are all supplied are evaluated.
+        let mut laws = BTreeMap::<usize, Vec<(usize, Vec<crate::shape_code::LawOp>)>>::new();
+        if let Ok(inv) = crate::shape_code::Inventory::parse(data) {
+            for b in inv.bindings {
+                if let crate::shape_code::BindingKind::Xform { writes } = b.kind {
+                    laws.entry(start + b.target).or_default().extend(writes);
+                }
+            }
+        }
         let mut out = Self {
             vertices: Vec::new(),
             faces: Vec::new(),
@@ -143,6 +315,9 @@ impl Model {
             records: Vec::new(),
             state_words: BTreeSet::new(),
             parts: Vec::new(),
+            vertex_tags: Vec::new(),
+            groups: Vec::new(),
+            state_names: BTreeMap::new(),
         };
         let mut slots = BTreeMap::<usize, usize>::new();
         let mut vertex_colors = BTreeMap::<usize, u8>::new();
@@ -151,9 +326,18 @@ impl Model {
         let mut material_selector = Vec::new();
         let mut p = 0;
         let mut end = None;
-        let mut trans = [0; 3];
-        type Frame = (usize, Option<usize>, [i32; 3], Option<(String, Vec<u8>)>);
-        let mut stack: Vec<Frame> = Vec::new();
+        let mut frame = Frame3::IDENTITY;
+        let mut part: Option<usize> = None;
+        let mut group: Option<usize> = None;
+        struct Saved {
+            ret: usize,
+            end: Option<usize>,
+            frame: Frame3,
+            part: Option<usize>,
+            group: Option<usize>,
+            material: Option<(String, Vec<u8>)>,
+        }
+        let mut stack: Vec<Saved> = Vec::new();
         let mut done = false;
         for _ in 0..30000 {
             if stack.len() > 64 {
@@ -161,11 +345,13 @@ impl Model {
             }
             let op = slice(c, p, 1)?[0];
             if op == 0 || (op == 0x1e && end.is_none_or(|e| p >= e)) {
-                if let Some((ret, e, t, old_texture)) = stack.pop() {
-                    p = ret;
-                    end = e;
-                    trans = t;
-                    if let Some((name, selector)) = old_texture {
+                if let Some(s) = stack.pop() {
+                    p = s.ret;
+                    end = s.end;
+                    frame = s.frame;
+                    part = s.part;
+                    group = s.group;
+                    if let Some((name, selector)) = s.material {
                         texture = name;
                         material_selector = selector;
                     }
@@ -215,38 +401,89 @@ impl Model {
                     end = Some(end.unwrap_or(t).max(t));
                     p += 3;
                 }
-                0x12 => {
+                0x12 | 0x6e | 0xc4 | 0xc6 => {
                     out.writable = false;
-                    let t = target(p + 4, word(c, p + 2)?, len)?;
-                    stack.push((p + 4, end, trans, None));
+                    let (size, t) = match op {
+                        0x12 => (4, target(p + 4, word(c, p + 2)?, len)?),
+                        0x6e => (6, target(p + 6, u32_at(c, p + 2)? as u32 as i32, len)?),
+                        0xc4 => (16, target(p + 16, word(c, p + 14)?, len)?),
+                        _ => (18, target(p + 18, u32_at(c, p + 14)? as u32 as i32, len)?),
+                    };
+                    let parent = group;
+                    let mut material = None;
+                    let mut child = frame;
+                    let mut this_part = part;
+                    if matches!(op, 0xc4 | 0xc6) {
+                        material = Some((texture.clone(), material_selector.clone()));
+                        let mut words = [0i32; 6];
+                        for (k, w) in words.iter_mut().enumerate() {
+                            *w = word(c, p + 2 + 2 * k)?;
+                        }
+                        let stored = words;
+                        for (k, law) in laws.get(&(start + p)).into_iter().flatten() {
+                            let vars: Vec<_> = law
+                                .iter()
+                                .filter_map(|o| match o {
+                                    crate::shape_code::LawOp::Var(v) => Some(v.as_str()),
+                                    _ => None,
+                                })
+                                .collect();
+                            if !vars.is_empty() && vars.iter().all(|v| by_name(v).is_some()) {
+                                if let Some(v) = crate::shape_code::x86::evaluate(law, &|n| {
+                                    by_name(n).unwrap_or(0)
+                                }) {
+                                    words[*k] = v as i32;
+                                }
+                            }
+                        }
+                        let position = [words[0], words[2], words[1]];
+                        let rotation = [words[3], words[4], words[5]];
+                        child = frame.child(position, rotation);
+                        let index = match out.parts.iter().position(|q| q.offset == start + p) {
+                            Some(i) => i,
+                            None => {
+                                out.parts.push(Part {
+                                    offset: start + p,
+                                    target: start + t,
+                                    position: [stored[0], stored[2], stored[1]],
+                                    rotation: [stored[3], stored[4], stored[5]],
+                                    posed_position: position,
+                                    posed_rotation: rotation,
+                                });
+                                out.parts.len() - 1
+                            }
+                        };
+                        this_part = Some(index);
+                    }
+                    let gi = match out.groups.iter().position(|g| g.offset == start + p) {
+                        Some(i) => i,
+                        None => {
+                            out.groups.push(Group {
+                                offset: start + p,
+                                target: start + t,
+                                opcode: op,
+                                parent,
+                                part: this_part,
+                            });
+                            out.groups.len() - 1
+                        }
+                    };
+                    stack.push(Saved {
+                        ret: p + size,
+                        end,
+                        frame,
+                        part,
+                        group,
+                        material,
+                    });
+                    frame = child;
+                    part = this_part;
+                    group = Some(gi);
                     p = t;
                     end = None;
                 }
                 0x48 => {
                     p = target(p + 4, word(c, p + 2)?, len)?;
-                }
-                0xc4 => {
-                    out.writable = false;
-                    let t = target(p + 16, word(c, p + 14)?, len)?;
-                    if !out.parts.iter().any(|part| part.offset == start + p) {
-                        out.parts.push(Part {
-                            offset: start + p,
-                            target: start + t,
-                            position: [word(c, p + 2)?, word(c, p + 6)?, word(c, p + 4)?],
-                            rotation: [word(c, p + 8)?, word(c, p + 10)?, word(c, p + 12)?],
-                        });
-                    }
-                    stack.push((
-                        p + 16,
-                        end,
-                        trans,
-                        Some((texture.clone(), material_selector.clone())),
-                    ));
-                    trans[0] += word(c, p + 2)?;
-                    trans[1] += word(c, p + 6)?;
-                    trans[2] += word(c, p + 4)?;
-                    p = t;
-                    end = None;
                 }
                 0xf0 => {
                     out.writable = false;
@@ -264,7 +501,10 @@ impl Model {
                         }
                         let address = u32_at(c, at + 3)?;
                         out.state_words.insert(address);
-                        let value = state.get(&address).copied().unwrap_or(0);
+                        if let Some(n) = names.get(&address) {
+                            out.state_names.insert(address, n.clone());
+                        }
+                        let value = by_address(address).unwrap_or(0);
                         let imm = slice(c, at + 7, 1)?[0] as i8 as i32;
                         let take = match slice(c, at + 8, 1)?[0] {
                             0x74 => value == imm,
@@ -303,16 +543,13 @@ impl Model {
                     slice(c, p, 6 + count * 6)?;
                     for i in 0..count {
                         let at = p + 6 + i * 6;
-                        let point = [
-                            word(c, at)? + trans[0],
-                            word(c, at + 2)? + trans[1],
-                            word(c, at + 4)? + trans[2],
-                        ];
+                        let local = [word(c, at)?, word(c, at + 2)?, word(c, at + 4)?];
                         slots.insert(dest / 8 + i, out.vertices.len());
                         out.vertices.push(Vertex {
-                            point,
+                            point: frame.apply(local),
                             offset: start + at,
                         });
+                        out.vertex_tags.push(VertexTag { local, part, group });
                     }
                     p += 6 + count * 6;
                 }
@@ -328,7 +565,7 @@ impl Model {
                     let sub = h[1];
                     let flags = h[2];
                     p += 5;
-                    if sub & 0x60 != 0 {
+                    if sub & 0x40 != 0 {
                         p += 6 + if flags & 2 != 0 { 3 } else { 6 };
                     }
                     let count = slice(c, p, 1)?[0] as usize;
@@ -375,7 +612,7 @@ impl Model {
                         }
                     }
                     slice(c, addr, p - addr)?;
-                    if seen.insert((addr, trans)) {
+                    if seen.insert((addr, frame)) {
                         out.faces.push(Face {
                             indices,
                             offset: start + addr,
@@ -383,7 +620,7 @@ impl Model {
                             flags,
                             color: c[addr + 3],
                             colors,
-                            normal: if sub & 0x60 != 0 {
+                            normal: if sub & 0x40 != 0 {
                                 Some([word(c, addr + 5)?, word(c, addr + 9)?, word(c, addr + 7)?])
                             } else {
                                 None
@@ -393,6 +630,8 @@ impl Model {
                             uv_offsets,
                             end: start + p,
                             material_selector: material_selector.clone(),
+                            part,
+                            group,
                         });
                     }
                 }
@@ -454,7 +693,9 @@ impl Model {
             }
             let length = match op {
                 0x12 | 0x48 => 4,
+                0x6e => 6,
                 0xc4 => 16,
+                0xc6 => 18,
                 0xf0 | 0xeb => 2,
                 _ => p.saturating_sub(record_start),
             };
@@ -887,6 +1128,20 @@ mod tests {
             .unwrap()
             .transformed(Transform::Scale(None, 0))
             .is_err());
+    }
+    #[test]
+    fn fa_angle_trig_and_c4_axes() {
+        assert_eq!(fa_sin_cos(0), (0, 16384));
+        assert_eq!(fa_sin_cos(4096), (16384, 0));
+        assert_eq!(fa_sin_cos(8192), (0, -16384));
+        assert_eq!(fa_sin_cos(-4096), (-16384, 0));
+        assert_eq!(fa_sin_cos(i32::MIN), fa_sin_cos(0));
+        let (s, c) = fa_sin_cos(2048);
+        assert!((s - 11585).abs() < 40 && (c - 11585).abs() < 40);
+        let f = Frame3::IDENTITY.child([0; 3], [0, -4096, 0]);
+        assert_eq!(f.apply([0, 0, -10]), [0, 10, 0]);
+        let f = Frame3::IDENTITY.child([1, 2, 3], [0, 0, 0]);
+        assert_eq!(f.apply([4, 5, 6]), [5, 7, 9]);
     }
     #[test]
     fn unknown_records_never_written() {

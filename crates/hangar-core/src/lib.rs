@@ -24,6 +24,7 @@ pub mod resource_ops;
 pub mod save;
 #[allow(dead_code)]
 mod schema;
+pub mod shape_code;
 pub mod shape_edit;
 pub mod validation;
 pub type Result<T> = core::result::Result<T, alloc::string::String>;
