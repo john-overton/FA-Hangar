@@ -790,6 +790,61 @@ impl Layout {
         }
         rect
     }
+    /// Checkbox row: box, optional icon, label and a right-aligned mono
+    /// `detail` in `ink-muted`. The whole row toggles; hover fills `gm-700`.
+    pub(super) fn checkbox_row(
+        &mut self,
+        rect: [i32; 4],
+        icon: Option<Icon>,
+        label: &str,
+        detail: &str,
+        state: Check,
+        action: Action,
+    ) {
+        let [x, y, w, h] = rect;
+        let hover = self.over(rect);
+        let ground = if hover { c::GM_700 } else { c::GM_800 };
+        if hover {
+            notched(&mut self.canvas, rect, Some(c::GM_700), None);
+        }
+        let s = m::CHECKBOX;
+        let by = y + (h - s) / 2;
+        let d = &mut self.canvas;
+        match state {
+            Check::On => {
+                notched(d, [x + 2, by, s, s], Some(c::AMBER), Some(c::AMBER));
+                d.icon_sm(x + 3, by + 1, Icon::Check, c::ON_AMBER, c::AMBER);
+            }
+            Check::Off | Check::Mixed => {
+                notched(d, [x + 2, by, s, s], Some(c::GM_950), Some(c::LINE_STRONG));
+                if state == Check::Mixed {
+                    d.rect(x + 5, by + 6, 8, 2, c::AMBER);
+                }
+            }
+        }
+        let mut tx = x + 2 + s + 6;
+        if let Some(g) = icon {
+            d.icon(tx, y + (h - m::ICON) / 2, g, c::INK_MUTED, ground);
+            tx += m::ICON + space::SPACE_1;
+        }
+        let dw = text_width(detail, Style::ValueSm);
+        let dx = x + w - 4 - dw;
+        d.styled(
+            dx,
+            baseline(y, h, Style::ValueSm),
+            detail,
+            c::INK_MUTED,
+            Style::ValueSm,
+        );
+        d.styled(
+            tx,
+            baseline(y, h, Style::Label),
+            &fit(label, dx - space::SPACE_2 - tx, Style::Label),
+            c::INK,
+            Style::Label,
+        );
+        self.hit(rect, action);
+    }
     /// Panel header plus surface. Draws the `gm-800` body (unless collapsed)
     /// and keyline over `rect`, the chevron, optional icon and title. Click
     /// the header to `toggle`. Returns the body rect for property rows.

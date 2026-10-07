@@ -1,7 +1,15 @@
-use super::view::{border, label_fit, text_fit, Action, Icon, Layout};
+use super::view::{count, Action, Icon, Layout};
 use super::*;
 use hangar_core::definition::{self, ASPECTS};
 
+/// Source and target slot height.
+const GRAFT_SLOT_H: i32 = 58;
+/// Top of the donor list or differences below the slots.
+const GRAFT_LIST_TOP: i32 = theme::metric::MENUBAR_H
+    + theme::metric::EDITOR_HEADER_H
+    + theme::space::SPACE_2
+    + GRAFT_SLOT_H
+    + theme::space::SPACE_3;
 /// UI name and icon of a definition aspect (noun labels, no slashes).
 pub(super) fn aspect_view(a: definition::Aspect) -> (&'static str, Icon) {
     use definition::Aspect as A;
@@ -93,57 +101,109 @@ impl App {
             },
         )
     }
+    /// Rows of the graft list (donor entries or differences) that fit.
+    pub(super) fn graft_visible(&self) -> usize {
+        ((self.dock_y() - GRAFT_LIST_TOP - 2 * theme::metric::ROW_H) / theme::metric::ROW_H).max(1)
+            as usize
+    }
+    /// Graft editor: source and target slots, then the donor list or the
+    /// field differences the selected aspects would apply.
     pub(super) fn graft_layout(&self, o: &mut Layout) {
-        let (l, r, bottom) = (self.left(), self.right(), self.dock_y());
-        let w = r - l;
+        use theme::{metric as m, space};
+        use widgets::{baseline, notched, subhead, Btn};
+        let (l, r) = (self.left(), self.right());
+        let (x, w) = (l + 1, r - l - 2);
+        let top = m::MENUBAR_H;
+        o.canvas.rect(x, top, w, self.dock_y() - top, c::GM_800);
         o.canvas
-            .label(l + 12, 44, "Graft / characteristics", c::INK);
-        let cw = (w - 36) / 2;
-        for (x, title, name, path, col) in [
+            .rect(x, top + m::EDITOR_HEADER_H - 1, w, 1, c::GM_1000);
+        o.canvas.styled(
+            x + space::SPACE_3,
+            baseline(top, m::EDITOR_HEADER_H, Style::Strong),
+            "Graft",
+            c::INK,
+            Style::Strong,
+        );
+        let choose = Btn::new("Choose donor LIB").with_icon(Icon::Folder);
+        let cw = choose.width();
+        o.button_ex(
+            [
+                x + w - space::SPACE_1 - cw,
+                top + (m::EDITOR_HEADER_H - m::BUTTON_H) / 2,
+                cw,
+                m::BUTTON_H,
+            ],
+            choose,
+            Action::File(FileAction::GraftLibrary),
+        );
+        // Source -> target slots.
+        let sy = top + m::EDITOR_HEADER_H + space::SPACE_2;
+        let arrow = m::ICON + 2 * space::SPACE_2;
+        let slot_w = (w - 2 * space::SPACE_3 - arrow) / 2;
+        let file = |p: &str| p.rsplit(['/', '\\']).next().unwrap_or(p).to_string();
+        let slots = [
             (
-                l + 12,
-                "SOURCE SNAPSHOT",
+                "Source",
                 self.graft_donor
                     .as_ref()
-                    .map_or("Choose donor", |d| d.name.as_str()),
-                self.graft_donor.as_ref().map_or("", |d| d.path.as_str()),
-                c::STEEL,
+                    .map_or("No donor".to_string(), |d| d.name.clone()),
+                self.graft_donor
+                    .as_ref()
+                    .map_or("Use as graft donor or choose a LIB".into(), |d| {
+                        file(&d.path)
+                    }),
             ),
-            (
-                l + 24 + cw,
-                "TARGET",
-                self.name(),
-                self.path.as_str(),
-                c::AMBER,
-            ),
-        ] {
-            o.canvas.rect(x, 60, cw, 84, c::GM_900);
-            border(&mut o.canvas, x, 60, cw, 84, c::LINE_STRONG);
-            label_fit(&mut o.canvas, x + 8, 80, cw - 16, title, col);
-            text_fit(&mut o.canvas, x + 8, 105, cw - 16, name, c::INK);
-            text_fit(
-                &mut o.canvas,
-                x + 8,
-                130,
-                cw - 16,
-                path.rsplit(['/', '\\']).next().unwrap_or(path),
+            ("Target", self.name().to_string(), file(self.lib_name())),
+        ];
+        for (n, (role, name, lib)) in slots.iter().enumerate() {
+            let sx = x + space::SPACE_3 + n as i32 * (slot_w + arrow);
+            let d = &mut o.canvas;
+            notched(
+                d,
+                [sx, sy, slot_w, GRAFT_SLOT_H],
+                Some(c::GM_950),
+                Some(c::LINE_STRONG),
+            );
+            subhead(d, sx + space::SPACE_2, sy + 2, slot_w - 16, role);
+            d.styled(
+                sx + space::SPACE_2,
+                baseline(sy + 20, 20, Style::Title),
+                &fit(name, slot_w - 16, Style::Title),
+                c::INK,
+                Style::Title,
+            );
+            d.styled(
+                sx + space::SPACE_2,
+                baseline(sy + 38, 16, Style::ValueSm),
+                &fit(lib, slot_w - 16, Style::ValueSm),
                 c::INK_MUTED,
+                Style::ValueSm,
             );
         }
-        o.button(
-            [l + 12, 154, w - 24, 24],
-            "Choose donor LIB",
-            Action::File(FileAction::GraftLibrary),
-            false,
+        o.canvas.icon(
+            x + space::SPACE_3 + slot_w + space::SPACE_2,
+            sy + (GRAFT_SLOT_H - m::ICON) / 2,
+            Icon::ChevronRight,
+            c::STEEL,
+            c::GM_800,
         );
+        let list = GRAFT_LIST_TOP;
+        let visible = self.graft_visible();
+        let row_rect = |i: usize| {
+            [
+                x + space::SPACE_2,
+                list + m::ROW_H + i as i32 * m::ROW_H,
+                w - 2 * space::SPACE_2,
+                m::ROW_H,
+            ]
+        };
         if let Some((_, archive)) = &self.graft_library {
-            label_fit(
+            subhead(
                 &mut o.canvas,
-                l + 12,
-                199,
+                x + space::SPACE_3,
+                list,
                 w - 24,
-                "Select a compatible donor entry / wheel scroll",
-                c::STEEL,
+                "Donor entries",
             );
             for (row, (i, e)) in archive
                 .entries
@@ -151,142 +211,218 @@ impl App {
                 .enumerate()
                 .filter(|(_, e)| extension(&e.name) == extension(self.name()))
                 .skip(self.graft_scroll)
-                .take(((bottom - 228) / 26).max(0) as usize)
+                .take(visible)
                 .enumerate()
             {
-                o.button(
-                    [l + 12, 210 + row as i32 * 26, w - 24, 24],
-                    &e.name,
-                    Action::GraftDonor(i),
-                    false,
+                let rect = row_rect(row);
+                let fill = if o.over(rect) { c::GM_700 } else { c::GM_800 };
+                let d = &mut o.canvas;
+                d.rect(rect[0], rect[1], rect[2], rect[3], fill);
+                d.icon(
+                    rect[0] + 4,
+                    rect[1] + 2,
+                    super::view::group_icon(&e.name),
+                    c::INK_MUTED,
+                    fill,
                 );
+                d.styled(
+                    rect[0] + 4 + m::ICON + space::SPACE_2,
+                    baseline(rect[1], m::ROW_H, Style::Value),
+                    &fit(&e.name, rect[2] - 32, Style::Value),
+                    c::INK,
+                    Style::Value,
+                );
+                o.hit(rect, Action::GraftDonor(i));
             }
             return;
         }
-        label_fit(
+        let edits = &self.graft_preview.edits;
+        let conflicts = &self.graft_preview.conflicts;
+        subhead(
             &mut o.canvas,
-            l + 12,
-            199,
+            x + space::SPACE_3,
+            list,
             w - 24,
-            "Field differences / target -> donor / source units",
-            c::INK_MUTED,
+            &format!(
+                "Changes \u{b7} {}",
+                count(edits.len() + conflicts.len(), "field", "fields")
+            ),
         );
-        let mut rows: Vec<(String, String, Rgb)> = self
-            .graft_preview
-            .conflicts
-            .iter()
-            .map(|s| {
-                (
-                    "CONFLICT / keep target or deselect aspect".into(),
-                    s.clone(),
-                    c::DANGER,
-                )
-            })
-            .collect();
-        rows.extend(self.graft_preview.edits.iter().map(|e| {
-            (
-                e.label.clone(),
-                format!("{} -> {}", e.before, e.after),
-                c::AMBER,
-            )
-        }));
-        if rows.is_empty() {
-            label_fit(
-                &mut o.canvas,
-                l + 12,
-                234,
-                w - 24,
-                "Select aspects on the right to preview changes",
-                c::INK_FAINT,
+        if edits.is_empty() && conflicts.is_empty() {
+            o.canvas.styled(
+                x + space::SPACE_3,
+                baseline(list + m::ROW_H, m::ROW_H, Style::Label),
+                &fit(
+                    if self.graft_donor.is_some() {
+                        "Select aspects to preview the values they change."
+                    } else {
+                        "Pin a donor to compare its values with this entry."
+                    },
+                    w - 24,
+                    Style::Label,
+                ),
+                c::INK_MUTED,
+                Style::Label,
             );
         }
-        for (i, (label, value, color)) in rows
-            .iter()
+        let vx = x + w * 55 / 100;
+        for (row, i) in (0..conflicts.len() + edits.len())
             .skip(self.graft_scroll)
-            .take(((bottom - 230) / 44).max(0) as usize)
+            .take(visible)
             .enumerate()
         {
-            let y = 211 + i as i32 * 44;
-            o.canvas.rect(l + 10, y, w - 20, 42, c::GM_900);
-            text_fit(&mut o.canvas, l + 18, y + 15, w - 36, label, c::INK_MUTED);
-            text_fit(&mut o.canvas, l + 18, y + 34, w - 36, value, *color);
-        }
-        label_fit(
-            &mut o.canvas,
-            l + 12,
-            bottom - 10,
-            w - 24,
-            "Wheel scroll / unselected aspects keep target values",
-            c::INK_FAINT,
-        );
-    }
-    pub(super) fn graft_inspector(&self, o: &mut Layout) {
-        let (r, w, h) = (self.right(), self.width - self.right(), self.height);
-        o.canvas.label(r + 12, 44, "ASPECTS TO CARRY OVER", c::INK);
-        let mut y = 65;
-        for (i, group) in ASPECTS.iter().enumerate() {
-            if !self.brf.as_ref().is_some_and(|b| {
-                b.fields
-                    .iter()
-                    .any(|f| definition::aspect(&f.label) == Some(*group))
-            }) {
+            let [rx, ry, rw, rh] = row_rect(row);
+            let d = &mut o.canvas;
+            d.rect(
+                rx,
+                ry,
+                rw,
+                rh,
+                if row % 2 == 0 { c::GM_800 } else { c::GM_900 },
+            );
+            let base = baseline(ry, rh, Style::Value);
+            if let Some(conflict) = conflicts.get(i) {
+                d.icon(rx + 4, ry + 2, Icon::Warning, c::AMBER, c::GM_800);
+                d.styled(
+                    rx + 4 + m::ICON + space::SPACE_2,
+                    baseline(ry, rh, Style::Label),
+                    &fit(conflict, rw - 32, Style::Label),
+                    c::INK,
+                    Style::Label,
+                );
                 continue;
             }
-            let count = self
-                .graft_preview
-                .edits
-                .iter()
-                .filter(|e| definition::aspect(&e.label) == Some(*group))
-                .count();
-            let on = self.graft_mask & group.bit() != 0;
-            o.button(
-                [r + 10, y, w - 20, 24],
-                &format!(
-                    "[{}] {} / {count}",
-                    if on { "x" } else { " " },
-                    group.label()
-                ),
-                Action::GraftGroup(i),
-                on,
-            );
-            y += 29;
-        }
-        for (i, line) in [
-            "Hardpoints: numeric station values.",
-            "Store references stay with target.",
-            "Geometry and animation are separate.",
-            "Matching field types/scaling required.",
-        ]
-        .iter()
-        .enumerate()
-        {
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                h - 176 + i as i32 * 22,
-                w - 24,
-                line,
-                c::INK_FAINT,
-            );
-        }
-        if self.graft_preview.conflicts.is_empty() && !self.graft_preview.edits.is_empty() {
-            o.button(
-                [r + 12, h - 64, w - 24, 28],
-                "Apply graft",
-                Action::ApplyGraft,
-                true,
-            );
-        } else {
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                h - 44,
-                w - 24,
-                "Choose compatible aspects to apply",
+            let e = &edits[i - conflicts.len()];
+            d.styled(
+                rx + 4,
+                base,
+                &fit(&e.label, vx - rx - 12, Style::Value),
                 c::INK_MUTED,
+                Style::Value,
+            );
+            let before = fit(&e.before, (rx + rw - vx) / 2 - 12, Style::Value);
+            d.styled(vx, base, &before, c::INK_MUTED, Style::Value);
+            let ax = vx + text_width(&before, Style::Value) + space::SPACE_1;
+            d.styled(ax, base, "\u{2192}", c::INK_MUTED, Style::Value);
+            let tx = ax + text_width("\u{2192}", Style::Value) + space::SPACE_1;
+            d.styled(
+                tx,
+                base,
+                &fit(&e.after, rx + rw - 4 - tx, Style::Value),
+                c::AMBER,
+                Style::Value,
+            );
+        }
+        o.canvas.styled(
+            x + space::SPACE_3,
+            baseline(
+                self.dock_y() - m::ROW_H - space::SPACE_1,
+                m::ROW_H,
+                Style::Label,
+            ),
+            &fit(
+                "Unselected aspects keep the target's values.",
+                w - 24,
+                Style::Label,
+            ),
+            c::INK_MUTED,
+            Style::Label,
+        );
+    }
+    /// Graft panel: one checkbox row per aspect with its icon and a diff
+    /// summary, conflicts as a Notice, Apply graft as the only primary button.
+    pub(super) fn graft_inspector(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{pane, Btn, Check, Tone};
+        self.inspector_header(o, None);
+        let foot = m::BUTTON_H + 2 * space::SPACE_2;
+        let mut s = self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, foot);
+        if self.pane(o, &mut s, pane::GRAFT, "Graft", Icon::Graft) {
+            o.stack_subhead(&mut s, "Aspects to carry over");
+            for (i, group) in ASPECTS.iter().enumerate() {
+                let total = self.brf.as_ref().map_or(0, |b| {
+                    b.fields
+                        .iter()
+                        .filter(|f| definition::aspect(&f.label) == Some(*group))
+                        .count()
+                });
+                if total == 0 {
+                    continue;
+                }
+                let on = self.graft_mask & group.bit() != 0;
+                let changed = self
+                    .graft_preview
+                    .edits
+                    .iter()
+                    .filter(|e| definition::aspect(&e.label) == Some(*group))
+                    .count();
+                let summary = if on && self.graft_donor.is_some() {
+                    format!("{changed} of {total} differ")
+                } else {
+                    count(total, "field", "fields")
+                };
+                let (label, icon) = aspect_view(*group);
+                if let Some(rect) = o.wide(&mut s, m::ROW_H) {
+                    o.checkbox_row(
+                        rect,
+                        Some(icon),
+                        label,
+                        &summary,
+                        if on { Check::On } else { Check::Off },
+                        Action::GraftGroup(i),
+                    );
+                }
+            }
+            if !self.graft_preview.conflicts.is_empty() {
+                o.stack_notice(
+                    &mut s,
+                    Tone::Warn,
+                    &format!(
+                        "{} not compatible. Keep the target's values by clearing the aspect.",
+                        count(self.graft_preview.conflicts.len(), "field is", "fields are")
+                    ),
+                );
+            }
+            o.stack_notice(
+                &mut s,
+                Tone::Neutral,
+                "Hardpoint values copy numeric station data; store references stay with the target. Geometry and animation are not grafted. Fields must match in type and scaling.",
+            );
+        }
+        o.panel_end(&mut s);
+        o.stack_end(s);
+        // Footer: Apply graft, the panel's one primary action.
+        let r = self.right();
+        let y = self.height - m::STATUSBAR_H - foot;
+        o.canvas.rect(r + 1, y, self.width - r - 1, 1, c::GM_1000);
+        let ready = self.graft_preview.conflicts.is_empty() && !self.graft_preview.edits.is_empty();
+        let apply = Btn::new("Apply graft").primary().enabled(ready);
+        let aw = apply.width();
+        o.button_ex(
+            [
+                self.width - space::SPACE_2 - aw,
+                y + space::SPACE_2,
+                aw,
+                m::BUTTON_H,
+            ],
+            apply,
+            Action::ApplyGraft,
+        );
+        if !ready {
+            o.canvas.styled(
+                r + 1 + space::SPACE_3,
+                widgets::baseline(y + space::SPACE_2, m::BUTTON_H, Style::Label),
+                &fit(
+                    "Select aspects with changes",
+                    self.width - space::SPACE_2 - aw - space::SPACE_2 - (r + 1 + space::SPACE_3),
+                    Style::Label,
+                ),
+                c::INK_MUTED,
+                Style::Label,
             );
         }
     }
+
     /// Flight inspector: field groups as a list, BRF issues as notices, and
     /// the graft entry points.
     pub(super) fn definition_inspector(&self, o: &mut Layout) {
@@ -400,16 +536,28 @@ impl App {
         self.doc.mark_saved();
         self.select_entry(self.doc.archive.find("TARGET.PT").unwrap());
         self.mode = Mode::Graft;
-        self.act(Action::GraftGroup(3));
+        let hit = |app: &App, predicate: &dyn Fn(Action) -> bool| {
+            app.layout()
+                .hits
+                .into_iter()
+                .find(|h| predicate(h.action))
+                .map(|h| h.rect)
+        };
+        // Apply graft is disabled (no hit region) until an aspect has changes.
+        assert!(hit(self, &|a| matches!(a, Action::ApplyGraft)).is_none());
+        let weights = hit(self, &|a| matches!(a, Action::GraftGroup(3))).expect("Weights row");
+        assert_eq!(weights[3], theme::metric::ROW_H);
+        self.click(weights[0] + weights[2] - 4, weights[1] + 4, 1, true);
+        assert_eq!(self.graft_mask, definition::Aspect::Weights.bit());
         assert_eq!(self.graft_preview.edits.len(), 1);
         assert!(self.graft_preview.conflicts.is_empty());
-        let hit = self
-            .layout()
-            .hits
-            .into_iter()
-            .find(|h| matches!(h.action, Action::ApplyGraft))
-            .unwrap();
-        self.click(hit.rect[0] + 4, hit.rect[1] + 4, 1, true);
+        assert!(self.draw().commands.iter().any(|d| matches!(d,
+            Draw::Text(_, _, s, color, _) if s == "1 of 2 differ" && *color == c::INK_MUTED.0)));
+        let apply = hit(self, &|a| matches!(a, Action::ApplyGraft)).expect("Apply graft");
+        // The primary button: amber fill.
+        assert!(self.draw().commands.iter().any(|d| matches!(d,
+            Draw::Rect(x, y, _, _, color) if *x == apply[0] + 1 && *y == apply[1] + 1 && *color == c::AMBER.0)));
+        self.click(apply[0] + 4, apply[1] + 4, 1, true);
         assert!(self.doc.dirty());
         assert_eq!(self.brf.as_ref().unwrap().fields[i].value, "10000");
         self.act(Action::Undo);
