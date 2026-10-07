@@ -3,6 +3,7 @@
 //! is not a valid PIC payload is never adopted, overwritten or removed as a backup.
 use crate::{
     archive::{Archive, Entry},
+    document::Document,
     invalid,
     picture::Pic,
     u16_at, u32_at, Result,
@@ -39,9 +40,12 @@ pub fn backup<'a>(archive: &'a Archive, pic: &str) -> Option<&'a Entry> {
 }
 /// Append a backup for every existing PIC these entries replace when it has no
 /// stored original yet. An existing `X.ORG` of any kind is left alone, so a
-/// first edit is captured once and later edits never touch it. `skip` names
-/// textures whose original is rebuilt elsewhere (generated panel sheets).
-pub fn with_originals(archive: &Archive, mut entries: Vec<Entry>, skip: &[String]) -> Vec<Entry> {
+/// first edit is captured once and later edits never touch it. The backup is
+/// the saved entry when this session already changed the PIC (for example
+/// after its original was removed), otherwise the current entry. `skip` names
+/// textures whose original is rebuilt elsewhere (new generated panel sheets).
+pub fn with_originals(doc: &Document, mut entries: Vec<Entry>, skip: &[String]) -> Vec<Entry> {
+    let archive = &doc.archive;
     let mut extra = Vec::new();
     for entry in &entries {
         let Some(name) = companion(&entry.name) else {
@@ -56,10 +60,14 @@ pub fn with_originals(archive: &Archive, mut entries: Vec<Entry>, skip: &[String
         let Some(current) = archive.find(&entry.name).map(|i| &archive.entries[i]) else {
             continue;
         };
-        if current.same_storage(entry) || !valid(current) {
+        if current.same_storage(entry) {
             continue;
         }
-        if let Ok(backup) = current.renamed(&name) {
+        let source = doc
+            .saved_entry(&current.name)
+            .filter(|s| !s.same_storage(current) && valid(s))
+            .or_else(|| valid(current).then_some(current));
+        if let Some(Ok(backup)) = source.map(|e| e.renamed(&name)) {
             extra.push(backup);
         }
     }
@@ -138,7 +146,7 @@ pub fn panel_sheet(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{document::Document, picture};
+    use crate::picture;
     fn texture() -> Vec<u8> {
         picture::demo()
     }
@@ -162,7 +170,7 @@ mod tests {
     fn paint(doc: &mut Document, name: &str, color: u8) {
         let at = doc.archive.find(name).unwrap();
         let bytes = painted(&doc.archive.entries[at].read().unwrap(), color);
-        let entries = with_originals(&doc.archive, vec![Entry::new(name, bytes).unwrap()], &[]);
+        let entries = with_originals(doc, vec![Entry::new(name, bytes).unwrap()], &[]);
         doc.transaction(entries, &[]).unwrap();
     }
     #[test]
@@ -193,17 +201,36 @@ mod tests {
         assert!(doc.archive.find("_F18.ORG").is_none());
         assert_eq!(doc.archive.bytes().unwrap(), before);
         // Unchanged, new or non-PIC entries never produce a backup.
-        let same = with_originals(&doc.archive, vec![original.clone()], &[]);
+        let same = with_originals(&doc, vec![original.clone()], &[]);
         assert_eq!(same.len(), 1);
         let new = Entry::new("NEW.PIC", texture()).unwrap();
-        assert_eq!(with_originals(&doc.archive, vec![new], &[]).len(), 1);
+        assert_eq!(with_originals(&doc, vec![new], &[]).len(), 1);
         let shape = Entry::new("DEMO.SH", vec![1]).unwrap();
-        assert_eq!(with_originals(&doc.archive, vec![shape], &[]).len(), 1);
+        assert_eq!(with_originals(&doc, vec![shape], &[]).len(), 1);
         let skipped = Entry::new("_F18.PIC", painted(&texture(), 3)).unwrap();
         assert_eq!(
-            with_originals(&doc.archive, vec![skipped], &["_F18.PIC".into()]).len(),
+            with_originals(&doc, vec![skipped], &["_F18.PIC".into()]).len(),
             1
         );
+    }
+    #[test]
+    fn a_removed_original_is_recreated_from_the_saved_entry_not_the_painted_one() {
+        let mut doc = document();
+        let saved = doc.archive.entries[1].clone();
+        paint(&mut doc, "_F18.PIC", 7);
+        doc.transaction(Vec::new(), &stored(&doc.archive)).unwrap();
+        assert!(doc.archive.find("_F18.ORG").is_none());
+        paint(&mut doc, "_F18.PIC", 9);
+        let org = backup(&doc.archive, "_F18.PIC").unwrap();
+        assert!(org.same_payload(&saved));
+        // A PIC added this session has no saved entry; its current state is kept.
+        doc.transaction(vec![Entry::new("NEW.PIC", texture()).unwrap()], &[])
+            .unwrap();
+        let added = doc.archive.entries[doc.archive.find("NEW.PIC").unwrap()].clone();
+        paint(&mut doc, "NEW.PIC", 9);
+        assert!(backup(&doc.archive, "NEW.PIC")
+            .unwrap()
+            .same_payload(&added));
     }
     #[test]
     fn existing_junk_org_is_never_overwritten_adopted_or_removed() {
@@ -297,7 +324,7 @@ mod tests {
             Entry::new("X.PIC", painted(&small, 7)).unwrap(),
             Entry::new("Y.PIC", painted(&small, 7)).unwrap(),
         ];
-        let out = with_originals(&doc.archive, edits, &[]);
+        let out = with_originals(&doc, edits, &[]);
         assert_eq!(out.len(), 3);
         assert_eq!(out[2].name, "X.ORG");
         assert_eq!(out[2].flag(), 4);

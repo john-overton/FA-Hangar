@@ -491,10 +491,11 @@ impl App {
             Action::Eraser => {
                 self.finish_stroke();
                 if self.mode == Mode::Model {
-                    self.eraser = !self.eraser;
-                    if self.eraser && !self.model_paint {
+                    let on = !self.eraser;
+                    if on && !self.model_paint {
                         self.act(Action::ModelPaint);
                     }
+                    self.eraser = on;
                 } else {
                     self.paint_enabled = !self.paint_enabled || !self.eraser;
                     self.eraser = self.paint_enabled;
@@ -533,6 +534,8 @@ impl App {
                 self.hp_tool = false;
                 self.media_tab = 0;
                 self.model_paint = !self.model_paint;
+                // The paint toggle always starts with the brush, not the eraser.
+                self.eraser = false;
                 self.perspective = false;
                 self.textured = true;
             }

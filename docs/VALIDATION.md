@@ -337,15 +337,18 @@ verification.
 
 ## Unreleased texture originals
 
-74 core tests pass, including synthetic `.ORG` coverage: one backup on the
-first edit and none on the second, undo removing both, a pre-existing non-PIC
+75 core tests pass, including synthetic `.ORG` coverage: one backup on the
+first edit and none on the second, undo removing both, a removed original
+recreated from the saved entry rather than the painted state, a pre-existing non-PIC
 `X.ORG` never adopted or overwritten, byte-exact restore that returns the entry
 to its saved storage, a literal-only DCL (flag 4) original keeping its flag,
 eraser circles restoring exact raster bytes, rename/duplicate/delete/copy/move
-carrying the companion, family clones and object export copying it, and
+carrying the companion (including onto an identical target PIC), family clones and object export copying it, and
 validation of orphan and mismatched originals. The UI smoke clicks Brush,
 Eraser, Restore texture and Remove stored originals, erases back to the saved
-bytes (texture reads unchanged), checks undo/redo, Esc, the read-only `.ORG`
+bytes (the session's `.ORG` is dropped and nothing reads as changed), keeps the
+`.ORG` after a partial erase, checks a same-color palette entry is a no-op,
+undo/redo, Esc, the read-only `.ORG`
 preview, Delete, decal and palette backups, the 3D eraser and a generated
 panel's return to its face color, and repacks/reopens with `.ORG` intact.
 
@@ -354,6 +357,6 @@ kept `_F18.ORG`, `_F16.ORG` and `_A10.ORG` once with flag 4 and their stored
 sizes, erased back to the exact saved bytes, restored byte for byte with no
 remaining changes, and passed undo/redo, validation and repack. The existing
 `--paint-check` still passes. Formatting, strict Clippy and both Windows
-release builds pass; the PE audit reports 712,192 bytes (32-bit) and 833,536
+release builds pass; the PE audit reports 714,240 bytes (32-bit) and 836,608
 bytes (64-bit) with the same 59 reviewed imports. Loading a LIB that contains
 `.ORG` entries in the original game has not been tested yet.

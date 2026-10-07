@@ -253,6 +253,7 @@ impl App {
             let generated = strokes.iter().filter(|s| s.original.is_none()).count();
             let r: Result<Option<Vec<String>>> = (|| {
                 let mut entries = Vec::new();
+                let mut removals = Vec::new();
                 for s in strokes {
                     if let Some(original) = &s.original {
                         if !self
@@ -268,24 +269,23 @@ impl App {
                         if original.read()? == s.bytes {
                             continue;
                         }
-                        let exact = self
-                            .doc
-                            .saved_entry(&s.name)
-                            .cloned()
-                            .into_iter()
-                            .chain(
-                                originals::backup(&self.doc.archive, &s.name)
-                                    .and_then(|o| o.renamed(&s.name).ok()),
-                            )
-                            .find(|e| e.read().is_ok_and(|b| b == s.bytes));
-                        if let Some(entry) = exact {
-                            entries.push(entry);
-                            continue;
+                        // Fully erased back to the saved bytes: a backup added this
+                        // session is no longer needed, so the LIB reads as unchanged.
+                        if let Some(org) = originals::backup(&self.doc.archive, &s.name) {
+                            if self.doc.saved_entry(&org.name).is_none()
+                                && self
+                                    .doc
+                                    .saved_entry(&s.name)
+                                    .is_some_and(|saved| saved.same_payload(org))
+                                && org.read()? == s.bytes
+                            {
+                                removals.push(org.name.clone());
+                            }
                         }
                     } else if self.doc.archive.find(&s.name).is_some() {
                         return Err("Generated texture name changed; stroke cancelled".into());
                     }
-                    entries.push(Entry::new(&s.name, s.bytes)?);
+                    entries.push(self.exact_entry(&s.name, s.bytes)?);
                 }
                 if let Some(plan) = plan {
                     if !self
@@ -308,7 +308,7 @@ impl App {
                     .filter(|e| self.doc.archive.find(&e.name).is_none())
                     .filter_map(|e| originals::texture_of(&e.name).map(|_| e.name.clone()))
                     .collect();
-                self.doc.transaction(entries, &[])?;
+                self.doc.transaction(entries, &removals)?;
                 Ok(Some(kept))
             })();
             self.painting = false;
@@ -972,7 +972,7 @@ impl App {
                 self.pick_color,
             );
             y += 30;
-            if let Some((note, restorable)) = self.original_note() {
+            if let Some((note, restorable)) = self.original_note.clone() {
                 label_fit(&mut o.canvas, r + 12, y + 12, w - 24, &note, c::INK_MUTED);
                 y += 20;
                 if restorable {
@@ -1099,20 +1099,34 @@ fn grouped(n: usize) -> String {
 /// Texture originals: `X.ORG` companions, generated panel colors and the
 /// session's saved entries. Edits stay entry-granular and one undo step each.
 impl App {
-    /// Append stored originals for the PICs these entries replace. Generated
-    /// panel sheets (original = face color) and returns to the saved entry skip it.
+    /// New bytes for `name`, reusing the saved entry's or stored original's exact
+    /// storage (and compression flag) when the bytes match one of them.
+    pub(super) fn exact_entry(&self, name: &str, bytes: Vec<u8>) -> Result<Entry> {
+        let candidates =
+            self.doc.saved_entry(name).cloned().into_iter().chain(
+                originals::backup(&self.doc.archive, name).and_then(|o| o.renamed(name).ok()),
+            );
+        for entry in candidates {
+            if entry.read().is_ok_and(|b| b == bytes) {
+                return Ok(entry);
+            }
+        }
+        Entry::new(name, bytes)
+    }
+    /// Append stored originals for the PICs these entries replace. A return to
+    /// the saved entry keeps none, nor does a panel sheet generated this session
+    /// (its original is the face color). Sheets from a saved LIB are backed up
+    /// like any texture, so a mistaken panel match never loses artwork.
     pub(super) fn with_originals(&self, entries: Vec<Entry>) -> Vec<Entry> {
         let skip: Vec<String> = entries
             .iter()
-            .filter(|e| {
-                self.doc
-                    .saved_entry(&e.name)
-                    .is_some_and(|s| s.same_storage(e))
-                    || self.panel_color(&e.name).is_some()
+            .filter(|e| match self.doc.saved_entry(&e.name) {
+                Some(saved) => saved.same_storage(e),
+                None => self.panel_color(&e.name).is_some(),
             })
             .map(|e| e.name.clone())
             .collect();
-        originals::with_originals(&self.doc.archive, entries, &skip)
+        originals::with_originals(&self.doc, entries, &skip)
     }
     /// A sheet Hangar generated for a flat-color panel (named after its SH,
     /// raw square layout) keeps that face's color byte in the SH record.
@@ -1156,8 +1170,9 @@ impl App {
         }
         color
     }
-    /// The selected PIC or ORG's original, for the Paint inspector.
-    pub(super) fn original_note(&self) -> Option<(String, bool)> {
+    /// The selected PIC or ORG's original for the Paint inspector, computed on
+    /// refresh so drawing never decodes payloads.
+    pub(super) fn compute_original_note(&self) -> Option<(String, bool)> {
         let e = self.doc.archive.entries.get(self.selected)?;
         if let Some(pic) = originals::texture_of(&e.name) {
             return Some(if originals::valid(e) {
@@ -1224,6 +1239,7 @@ impl App {
                 .ok_or("Select a PIC or a textured panel")?,
         };
         let at = self.doc.archive.find(&name);
+        let context = self.context_name();
         let status = if originals::backup(&self.doc.archive, &name).is_some() {
             let saved = self.doc.saved_entry(&name).cloned();
             let (entries, removals) = originals::restore(&self.doc.archive, &name, saved.as_ref())?;
@@ -1231,14 +1247,15 @@ impl App {
             self.doc.transaction(entries, &removals)?;
             format!("Restored {name} from {org} / one undo step")
         } else if let Some(color) = self.panel_color(&name) {
-            let at = at.unwrap();
+            let at = at.ok_or("Texture missing")?;
             let mut bytes = self.doc.archive.entries[at].read()?;
             let mut pic = Pic::parse(&bytes)?;
             let solid = vec![color; pic.pixels.len()];
             if pic.patch_indices(&mut bytes, &solid)? == 0 {
                 return Err(format!("{name} already shows its panel color {color}"));
             }
-            self.doc.transaction(vec![Entry::new(&name, bytes)?], &[])?;
+            self.doc
+                .transaction(vec![self.exact_entry(&name, bytes)?], &[])?;
             format!("Restored {name} to panel color {color} / one undo step")
         } else if let (Some(at), Some(saved)) = (at, self.doc.saved_entry(&name).cloned()) {
             if saved.same_storage(&self.doc.archive.entries[at]) {
@@ -1255,20 +1272,30 @@ impl App {
                 self.select_entry(i);
             }
         } else {
-            let face = self.selected_face;
-            self.selected = self.doc.archive.find(&selected).unwrap_or(self.selected);
-            self.refresh();
-            self.selected_face = face;
+            self.reselect(&selected, context);
         }
         self.status = status;
         Ok(())
+    }
+    fn context_name(&self) -> Option<String> {
+        self.context_entry
+            .and_then(|i| self.doc.archive.entries.get(i))
+            .map(|e| e.name.clone())
+    }
+    /// Removals shift indices: keep the selection and model context by name.
+    fn reselect(&mut self, selected: &str, context: Option<String>) {
+        self.selected = self.doc.archive.find(selected).unwrap_or(self.selected);
+        self.context_entry = context.and_then(|n| self.doc.archive.find(&n));
+        let face = self.selected_face;
+        self.refresh();
+        self.selected_face = face;
     }
     /// A stored original previews read-only; edits go to its PIC.
     fn original_inspector(&self, o: &mut Layout, pic: &str) {
         let r = self.right();
         let w = self.width - r;
         let mut y = 84;
-        if let Some((note, restorable)) = self.original_note() {
+        if let Some((note, restorable)) = self.original_note.clone() {
             let (title, size) = note.split_once(" / ").unwrap_or((note.as_str(), ""));
             label_fit(&mut o.canvas, r + 12, y, w - 24, title, c::INK);
             y += 22;
@@ -1323,9 +1350,9 @@ impl App {
             return Ok(());
         }
         let selected = self.name().to_string();
+        let context = self.context_name();
         self.doc.transaction(Vec::new(), &names)?;
-        self.selected = self.doc.archive.find(&selected).unwrap_or(self.selected);
-        self.refresh();
+        self.reselect(&selected, context);
         self.status = format!(
             "Removed {} stored original{} (.ORG) / textures unchanged / Ctrl+Z undo",
             names.len(),
@@ -1345,8 +1372,9 @@ impl App {
             .name
             .clone();
         let removals = originals::removals(&self.doc.archive, &name);
+        let context = self.context_name();
         self.doc.transaction(Vec::new(), &removals)?;
-        self.refresh();
+        self.reselect(&name, context);
         self.status = if removals.len() > 1 {
             format!(
                 "Removed {name} and its stored original {} | Ctrl+Z undo",
@@ -1703,11 +1731,25 @@ impl App {
         drag(&mut a, &[(0, 5), (31, 5), (20, 20)]);
         assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
         assert!(!a.doc.entry_changed(&a.doc.archive.entries[entry]));
-        assert_eq!(a.doc.changed_count(), 1, "only DEMO.ORG remains added");
+        // Fully erased: the session's DEMO.ORG goes too, so nothing reads as changed.
+        assert!(a.doc.archive.find("DEMO.ORG").is_none());
+        assert_eq!(a.doc.changed_count(), 0);
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.entries[entry].read().unwrap(), painted);
+        assert!(a.doc.archive.find("DEMO.ORG").is_some());
         a.act(Action::Redo);
         assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
+        // A partial erase keeps the stored original.
+        a.brush_radius = 1;
+        press(&mut a, |x| matches!(x, Action::PaintToggle));
+        drag(&mut a, &[(5, 5), (12, 5)]);
+        press(&mut a, |x| matches!(x, Action::Eraser));
+        drag(&mut a, &[(5, 5)]);
+        assert!(a.doc.archive.find("DEMO.ORG").is_some());
+        assert_ne!(a.doc.archive.entries[entry].read().unwrap(), original);
+        a.act(Action::Undo);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.changed_count(), 0);
         // Esc discards a stroke and keeps the tool active.
         press(&mut a, |x| matches!(x, Action::PaintToggle));
         let r = a.image_rect().unwrap();

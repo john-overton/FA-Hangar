@@ -120,6 +120,10 @@ impl App {
         let (entry, pic, _) = self.palette_target()?;
         let source = self.doc.archive.entries[entry].read()?;
         let bytes = material::palette_color(&source, pic, self.brush as usize, rgb)?;
+        if bytes == source {
+            self.status = "Palette color unchanged / nothing changed".into();
+            return Ok(());
+        }
         if pic {
             let name = self.doc.archive.entries[entry].name.clone();
             let entries = self.with_originals(vec![Entry::new(&name, bytes)?]);
@@ -711,10 +715,6 @@ impl App {
     }
 }
 
-#[inline(never)]
-fn material_app() -> Box<App> {
-    Box::new(App::new())
-}
 impl App {
     #[inline(never)]
     pub(super) fn smoke_material_tools(&mut self) {
@@ -777,6 +777,7 @@ impl App {
         assert!(a.doc.archive.find("DEMO.ORG").is_some());
         a.act(Action::Undo);
         assert!(a.doc.archive.find("DEMO.ORG").is_none());
+        smoke_same_palette_color(&mut a);
         let before = a.draw().commands;
         a.set_decal(
             Image::national(0).unwrap(),
@@ -908,4 +909,17 @@ impl App {
         }
         Ok(format!("PASS: {changed} changed pixels; PNG decode, metadata preservation, package reopen and one-step undo"))
     }
+}
+/// The App lives on the heap so the smoke frame stays small (no __chkstk on Win64).
+#[inline(never)]
+fn material_app() -> Box<App> {
+    Box::new(App::new())
+}
+/// Re-entering the current color is a no-op: no undo step, no backup.
+#[inline(never)]
+fn smoke_same_palette_color(a: &mut App) {
+    let [r, g, b] = a.palette_rgb().unwrap();
+    a.palette_edit(&format!("{r} {g} {b}")).unwrap();
+    assert!(!a.doc.dirty());
+    assert!(a.doc.archive.find("DEMO.ORG").is_none());
 }

@@ -509,9 +509,11 @@ is `X.ORG`, keeping the full stem and any `_`, `~`, `$` prefix, so every
 companion is a valid 8.3 LIB name. A companion is created only by
 `with_originals`, inside the same `Document::transaction` as the edit that
 replaces an existing, decodable PIC, and only when no entry named `X.ORG`
-exists. The backup is the pre-edit `Entry` renamed: it shares storage and keeps
-the compression flag, so nothing is decoded or re-encoded to keep it, and undo
-of the first edit removes both entries. A `.ORG` counts as a stored original
+exists. The backup is the pre-edit `Entry` renamed, or the saved `Entry` when
+this session already changed the PIC without a backup (for example after its
+original was removed). It shares storage and keeps the compression flag, so
+nothing is decoded or re-encoded to keep it, and undo of the first edit removes
+both entries. A `.ORG` counts as a stored original
 only when its payload parses as a PIC; any other `X.ORG` is never adopted,
 overwritten, restored from or removed.
 
@@ -522,12 +524,15 @@ unchanged. The eraser uses `Pic::paint_from`, the same bounded circle as the
 brush, writing original indices only through the per-pixel source offsets. It
 requires `Pic::same_layout` (dimensions and offset map), so headers, palettes,
 span tables and glyph data stay untouched. A stroke that ends byte-identical to
-the saved entry or the stored original reuses that entry's storage.
+the saved entry or the stored original reuses that entry's storage; erasing all
+the way back to the saved entry also drops an `X.ORG` added in the session.
 
 Generated panel sheets are recognized by Hangar's raw square sheet header, a
 name made of an SH stem (first six characters) and two hex digits, and the SH
 face records that name them. Their original is the face's color byte in the
-SH, so they keep no `.ORG`. The session's saved entries are only a fallback.
+SH, so a sheet generated in this session keeps no `.ORG`. A sheet already in
+the saved LIB is backed up like any PIC, so a mistaken match never loses
+artwork. The session's saved entries are only a fallback.
 
 Dependencies treat `ORG` as a leaf. Rename, delete, transfer and move keep the
 pair together: a companion follows its PIC's keep/take choice and stays in the

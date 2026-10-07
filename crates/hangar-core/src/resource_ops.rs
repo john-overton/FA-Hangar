@@ -43,7 +43,7 @@ impl Plan {
         originals::texture_of(&item.entry.name).is_some_and(|pic| {
             self.items
                 .iter()
-                .any(|i| i.entry.name == pic && i.choice == Choice::KeepTarget)
+                .any(|i| i.entry.name == pic && i.conflict && i.choice == Choice::KeepTarget)
         })
     }
     pub fn apply(&self, doc: &mut Document) -> Result<()> {
@@ -610,6 +610,19 @@ mod tests {
         assert!(plan.ready());
         plan.apply(&mut target).unwrap();
         assert!(target.archive.find("DEMO.ORG").is_none());
+        // An identical target PIC still receives the original; a move keeps the pair together.
+        let mut source = doc.clone();
+        let mut target = Archive::empty();
+        target
+            .entries
+            .push(Entry::new("DEMO.PIC", vec![9; 4]).unwrap());
+        let mut target = Document::new(target);
+        let plan = transfer(&source.archive, &target.archive, "DEMO.PIC", false).unwrap();
+        assert!(plan.items.iter().all(|i| !plan.follows_kept(i)));
+        move_between(&mut source, &mut target, &plan, "DEMO.PIC").unwrap();
+        assert!(target.archive.find("DEMO.ORG").is_some());
+        assert!(source.archive.find("DEMO.ORG").is_none());
+        assert!(source.archive.find("DEMO.PIC").is_none());
     }
     #[test]
     fn moving_a_shared_texture_keeps_its_original_in_the_source() {

@@ -372,15 +372,17 @@ Undoing that first edit removes both.
 - **Eraser** sits beside **Brush** in Paint, and in the Model inspector for 3D
   painting. It paints the original back under the same brush circle, one undo
   step per stroke, and changes raster bytes only. Erasing every painted pixel
-  returns the texture to its exact saved bytes.
+  returns the texture to its exact saved bytes; an `X.ORG` kept during this
+  session is then removed too, so the LIB reads as unchanged.
 - **Restore texture** replaces `X.PIC` with `X.ORG` byte for byte and removes
   `X.ORG`, as one undo step. The status reads, for example, "Restored _F18.PIC
   from _F18.ORG". If the original came from the opened file, the texture shows
   as unchanged again.
 - The Paint inspector shows the stored original, for example "Original kept:
   _F18.ORG / 14,476 B".
-- Generated panel sheets keep no `.ORG`. Their original is the panel's solid
-  face color, which the eraser and Restore texture paint back.
+- Panel sheets generated in this session keep no `.ORG`. Their original is the
+  panel's solid face color, which the eraser and Restore texture paint back.
+  Sheets that were already in the opened LIB are backed up like any texture.
 - Without an `X.ORG`, the eraser and Restore texture use the entry as it was at
   the last open or save, for this session only. Otherwise the status reads "No
   stored original for X.PIC".
@@ -391,8 +393,9 @@ Undoing that first edit removes both.
   shape**, family texture clones and **Export object** carry the stored
   original with its PIC. CLI `replace` also keeps it.
 - **Package > Remove stored originals** removes every `.ORG` as one undo step
-  for a distribution build. Later edits keep new originals, so remove them just
-  before packaging.
+  for a distribution build. A later edit keeps a new original, taken from the
+  entry as it was at the last open or save, so remove them just before
+  packaging.
 
 This is not retroactive: textures painted with earlier versions have no stored
 original. An existing `X.ORG` that is not a PIC is never used, overwritten or

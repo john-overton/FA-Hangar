@@ -266,6 +266,7 @@ pub struct App {
     last_paint: Option<(usize, usize)>,
     paint_enabled: bool,
     eraser: bool,
+    original_note: Option<(String, bool)>,
     pick_color: bool,
     textures: BTreeMap<String, Pic>,
     textured: bool,
@@ -413,6 +414,7 @@ impl App {
             last_paint: None,
             paint_enabled: false,
             eraser: false,
+            original_note: None,
             pick_color: false,
             textures: BTreeMap::new(),
             textured: false,
@@ -586,6 +588,7 @@ impl App {
     fn refresh(&mut self) {
         let camera = (self.zoom, self.pan, self.image_zoom, self.image_pan);
         self.refresh_data();
+        self.original_note = self.compute_original_note();
         (self.zoom, self.pan, self.image_zoom, self.image_pan) = camera;
     }
     fn refresh_data(&mut self) {

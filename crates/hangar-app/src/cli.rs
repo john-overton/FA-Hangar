@@ -152,7 +152,7 @@ pub fn run() -> Result<()> {
                 match cmd{
                     "inspect"=>{if ext=="SH"{let m=Model::parse(&bytes)?;println!("{} vertices, {} faces, writable={} {}",m.vertices.len(),m.faces.len(),m.writable,m.reason);}else{let b=Brf::parse(&bytes,ext)?;for (i,f) in b.fields.iter().enumerate(){println!("{i:4} {:36} {:7} {}{}",f.label,f.kind,if f.scaled{"^"}else{""},f.value);}}},
                     "extract"=>platform::write_new(argument(&args,3)?,&bytes)?,
-                    "replace"=>{let mut d=Document::new(a);let name=d.archive.entries[at].name.clone();let new=platform::read(argument(&args,3)?)?;if new!=bytes{let entries=hangar_core::originals::with_originals(&d.archive,vec![hangar_core::archive::Entry::new(&name,new)?],&[]);if let Some(org)=entries.get(1){println!("Original {name} kept as {}",org.name);}d.transaction(entries,&[])?;}crate::saving::library(argument(&args,4)?,&d.archive.bytes()?)?;},
+                    "replace"=>{let mut d=Document::new(a);let name=d.archive.entries[at].name.clone();let new=platform::read(argument(&args,3)?)?;if new!=bytes{let entries=hangar_core::originals::with_originals(&d,vec![hangar_core::archive::Entry::new(&name,new)?],&[]);if let Some(org)=entries.get(1){println!("Original {name} kept as {}",org.name);}d.transaction(entries,&[])?;}crate::saving::library(argument(&args,4)?,&d.archive.bytes()?)?;},
                     "set"=>{let b=Brf::parse(&bytes,ext)?;let index=argument(&args,3)?.parse().map_err(|_|"Invalid field index")?;let new=b.edit(&bytes,index,argument(&args,4)?,ext)?;let mut d=Document::new(a);d.replace(at,new)?;crate::saving::library(argument(&args,5)?,&d.archive.bytes()?)?;},_=>{}
                 }
             }
