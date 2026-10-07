@@ -14,6 +14,8 @@ pub(super) const TEX_RESTORE: u8 = 2;
 pub(super) const TEX_REMAP: u8 = 3;
 /// Remap dialog fills.
 const FILLS: [&str; 2] = ["Bake current look", "Blank"];
+/// The Remap dialog's note on the layout.
+const REMAP_NOTE: &str = "Laid out as this view shows them. Orbit first so the panels face you.";
 /// Why the per-face actions are disabled without a selection.
 pub(super) const NO_FACES: &str = "Select faces in Edit Mesh or pick a face to paint";
 /// List rows shown in the Assign texture dialog.
@@ -275,6 +277,10 @@ impl App {
             return Err(NO_FACES.into());
         }
         let entry = self.texture_shape()?;
+        if matches!(op, TEX_CLONE | TEX_ASSIGN | TEX_REMAP) {
+            let source = self.doc.archive.entries[entry].read()?;
+            self.ed.texture_refusal = tex::assign_refusal(&source, &faces);
+        }
         match op {
             TEX_CLONE => {
                 let from = self.shared_texture(&faces)?;
@@ -419,6 +425,14 @@ impl App {
         );
         Ok(())
     }
+    /// Why the open Clone, Assign or Remap dialog cannot apply: the refusal
+    /// found when it opened, else the last error. Shown as a wrapped notice.
+    pub(super) fn texture_problem(&self) -> Option<String> {
+        self.ed
+            .texture_refusal
+            .clone()
+            .or_else(|| self.status.strip_prefix("Error: ").map(String::from))
+    }
     /// Filtered rows of the Assign texture dialog: indices into `pics`.
     fn assign_rows(&self) -> Vec<usize> {
         let filter = self
@@ -551,11 +565,18 @@ impl App {
         };
         let d = &self.ed.assign;
         let w = (self.width - 48).min(560);
+        let refusals = self.assign_refusals();
+        let note = self.assign_note(&refusals);
+        let problem = self.texture_problem();
+        let inner = w - 2 * space::SPACE_4;
         let h = 2 * m::ROW_H
             + 26
             + ROWS as i32 * m::ROW_H
             + 3 * (m::BUTTON_H + space::SPACE_2)
-            + 2 * m::ROW_H
+            + widgets::notice_height(inner, &note)
+            + problem
+                .as_ref()
+                .map_or(0, |t| space::SPACE_2 + widgets::notice_height(inner, t))
             + super::view::DIALOG_HEAD
             + 3 * space::SPACE_4;
         let h = h.min(self.height - 24);
@@ -624,7 +645,6 @@ impl App {
             );
         }
         y += list[3] + space::SPACE_2;
-        let refusals = self.assign_refusals();
         let half = bw / 3;
         label(o, y, "UV mapping");
         let modes: Vec<(Btn, Action)> = MODES
@@ -656,63 +676,44 @@ impl App {
             o.segmented([bx + half, y, bw - half, m::BUTTON_H], &planes);
         }
         y += m::BUTTON_H + space::SPACE_2;
-        let to = self.assign_size();
-        let (tone, text) = match (to, refusals[0].as_ref()) {
-            (None, _) => (
-                Tone::Neutral,
-                "Choose the PIC these faces draw from.".to_string(),
-            ),
-            (Some(_), Some(why)) if d.mode != 0 => (Tone::Neutral, format!("{why}.")),
-            (Some(t), _) => (
-                Tone::Neutral,
-                match d.mode {
-                    0 => "Keep: stored UVs unchanged.".to_string(),
-                    1 => format!(
-                        "Scale: UVs from {} to {} \u{d7} {}.",
-                        d.from
-                            .map_or("?".into(), |f| format!("{} \u{d7} {}", f[0], f[1])),
-                        t[0],
-                        t[1]
-                    ),
-                    _ => format!(
-                        "Project: planar UVs fitted into {} \u{d7} {}, square texels.",
-                        t[0], t[1]
-                    ),
-                },
-            ),
-        };
-        notice(
-            &mut o.canvas,
-            bx,
-            y,
-            bw,
-            tone,
-            &fit(&text, bw - 32, Style::Label),
-        );
-        if let Some(error) = self.status.strip_prefix("Error: ") {
-            let ey = y + m::ROW_H + space::SPACE_2;
-            o.canvas
-                .icon(bx, ey + 2, Icon::Warning, c::DANGER, c::GM_800);
-            o.canvas.styled(
-                bx + m::ICON + space::SPACE_1,
-                baseline(ey, m::ROW_H, Style::Label),
-                &fit(error, bw - m::ICON - space::SPACE_1, Style::Label),
-                c::DANGER,
-                Style::Label,
-            );
+        y += notice(&mut o.canvas, bx, y, bw, Tone::Neutral, &note) + space::SPACE_2;
+        if let Some(text) = &problem {
+            notice(&mut o.canvas, bx, y, bw, Tone::Danger, text);
         }
         self.dialog_actions(
             o,
             rect,
             &[],
             Some("Cancel"),
-            Some(
-                Btn::new("Assign texture")
-                    .primary()
-                    .enabled(d.picked.is_some() && refusals[d.mode as usize].is_none()),
-            ),
+            Some(Btn::new("Assign texture").primary().enabled(
+                d.picked.is_some()
+                    && refusals[d.mode as usize].is_none()
+                    && self.ed.texture_refusal.is_none(),
+            )),
             Action::Apply,
         );
+    }
+    /// The Assign dialog's note on the picked PIC and UV mode.
+    fn assign_note(&self, refusals: &[Option<String>; 3]) -> String {
+        let d = &self.ed.assign;
+        match (self.assign_size(), refusals[0].as_ref()) {
+            (None, _) => "Choose the PIC these faces draw from.".to_string(),
+            (Some(_), Some(why)) if d.mode != 0 => format!("{why}."),
+            (Some(t), _) => match d.mode {
+                0 => "Keep: stored UVs unchanged.".to_string(),
+                1 => format!(
+                    "Scale: UVs from {} to {} \u{d7} {}.",
+                    d.from
+                        .map_or("?".into(), |f| format!("{} \u{d7} {}", f[0], f[1])),
+                    t[0],
+                    t[1]
+                ),
+                _ => format!(
+                    "Project: planar UVs fitted into {} \u{d7} {}, square texels.",
+                    t[0], t[1]
+                ),
+            },
+        }
     }
     /// Face texture rows and actions for an inspector stack: the texture of
     /// the selected faces, then Clone for selected faces (primary), Assign
@@ -948,6 +949,8 @@ impl App {
         };
         let d = &self.ed.remap;
         let w = (self.width - 48).min(520);
+        let inner = w - 2 * space::SPACE_4;
+        let problem = self.texture_problem();
         let h = super::view::DIALOG_HEAD
             + space::SPACE_3
             + m::ROW_H
@@ -957,8 +960,10 @@ impl App {
             + space::SPACE_2
             + m::BUTTON_H
             + space::SPACE_3
-            + 2 * m::ROW_H
-            + m::ROW_H
+            + widgets::notice_height(inner, REMAP_NOTE)
+            + problem
+                .as_ref()
+                .map_or(0, |t| space::SPACE_2 + widgets::notice_height(inner, t))
             + space::SPACE_2
             + m::BUTTON_H
             + 2 * space::SPACE_4;
@@ -1018,36 +1023,20 @@ impl App {
             .collect();
         o.segmented([bx + half, y, bw - half, m::BUTTON_H], &fills);
         y += m::BUTTON_H + space::SPACE_3;
-        notice(
-            &mut o.canvas,
-            bx,
-            y,
-            bw,
-            Tone::Neutral,
-            &fit(
-                "Laid out as this view shows them. Orbit first so the panels face you.",
-                bw - 32,
-                Style::Label,
-            ),
-        );
-        if let Some(error) = self.status.strip_prefix("Error: ") {
-            let ey = y + 2 * m::ROW_H;
-            o.canvas
-                .icon(bx, ey + 2, Icon::Warning, c::DANGER, c::GM_800);
-            o.canvas.styled(
-                bx + m::ICON + space::SPACE_1,
-                baseline(ey, m::ROW_H, Style::Label),
-                &fit(error, bw - m::ICON - space::SPACE_1, Style::Label),
-                c::DANGER,
-                Style::Label,
-            );
+        y += notice(&mut o.canvas, bx, y, bw, Tone::Neutral, REMAP_NOTE) + space::SPACE_2;
+        if let Some(text) = &problem {
+            notice(&mut o.canvas, bx, y, bw, Tone::Danger, text);
         }
         self.dialog_actions(
             o,
             rect,
             &[],
             Some("Cancel"),
-            Some(Btn::new("Remap").primary()),
+            Some(
+                Btn::new("Remap")
+                    .primary()
+                    .enabled(self.ed.texture_refusal.is_none()),
+            ),
             Action::Apply,
         );
     }
@@ -1769,6 +1758,93 @@ fn hits_apart(a: &mut App, what: &str) {
     }
 }
 impl App {
+    /// Clone, Assign and Remap on faces whose texture state cannot be
+    /// proved, through the Mesh menu: each dialog opens with the reason
+    /// whole in a wrapped notice and its primary action off, at both window
+    /// sizes, and Enter changes nothing. A proved face of the same shape
+    /// clones as before.
+    #[inline(never)]
+    pub(super) fn smoke_texture_refusals(&mut self) {
+        let mut a = texture_app();
+        let looped = hangar_core::shape_testkit::demo_looped_kit();
+        a.doc
+            .transaction(vec![Entry::new("LOOP.SH", looped.clone()).unwrap()], &[])
+            .unwrap();
+        a.doc.mark_saved();
+        a.select_entry(a.doc.archive.find("LOOP.SH").unwrap());
+        a.mode = Mode::Model;
+        a.textured = true;
+        a.yaw = 0;
+        a.pitch = 70;
+        let original = a.doc.archive.bytes().unwrap();
+        a.key(Key::Tab, false, false);
+        a.key(Key::Char('3'), false, false);
+        let visible = a.smoke_visible(true);
+        let refusal = |o: usize| tex::assign_refusal(&looped, &[o]);
+        let bad = *visible
+            .iter()
+            .find(|(f, _)| refusal(a.smoke_offset(*f)).is_some())
+            .expect("a face drawn under two textures in view");
+        let good = *visible
+            .iter()
+            .find(|(f, _)| refusal(a.smoke_offset(*f)).is_none())
+            .expect("a proved face in view");
+        let why = refusal(a.smoke_offset(bad.0)).unwrap();
+        assert!(why.contains("different textures reach it"), "{why}");
+        a.smoke_press(bad.1[0], bad.1[1], false);
+        for op in [TEX_CLONE, TEX_ASSIGN, TEX_REMAP] {
+            for (w, h) in [(800, 600), (1280, 800)] {
+                a.width = w;
+                a.height = h;
+                if op == TEX_ASSIGN {
+                    a.smoke_assign_open("SAME.PIC");
+                } else {
+                    a.smoke_menu_pick(
+                        chrome::MENU_MESH,
+                        &|x| matches!(x, Action::FaceTexture(o) if o == op),
+                    );
+                }
+                assert!(a.prompt.is_some(), "{op}: {}", a.status);
+                assert_eq!(a.ed.texture_refusal.as_deref(), Some(why.as_str()));
+                assert!(
+                    a.chrome_hit(&|x| matches!(x, Action::Apply)).is_none(),
+                    "the primary action is off"
+                );
+                // The notice wraps the whole reason; nothing is cut short.
+                let lines: Vec<String> = a
+                    .layout()
+                    .canvas
+                    .commands
+                    .iter()
+                    .filter_map(|d| match d {
+                        Draw::Text(_, _, s, _, _) => Some(s.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(lines.join(" ").contains(&why), "{op} at {w}x{h}");
+                assert!(lines
+                    .iter()
+                    .all(|l| !l.contains('\u{2026}')
+                        || !why.contains(l.trim_end_matches('\u{2026}'))));
+                hits_apart(&mut a, "refused texture dialog");
+                a.key(Key::Enter, false, false);
+                assert_eq!(a.doc.archive.bytes().unwrap(), original);
+                a.key(Key::Escape, false, false);
+                assert!(a.prompt.is_none());
+            }
+        }
+        // A face proved to draw from SAME.PIC clones as usual.
+        a.smoke_press(good.1[0], good.1[1], false);
+        a.smoke_menu_pick(chrome::MENU_MESH, &|x| {
+            matches!(x, Action::FaceTexture(TEX_CLONE))
+        });
+        assert!(a.ed.texture_refusal.is_none());
+        let apply = a.smoke_find(&|x| matches!(x, Action::Apply));
+        a.chrome_click(apply);
+        assert!(a.status.starts_with("Cloned SAME.PIC"), "{}", a.status);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+    }
     /// Root faces the raster picks at their own centres, below the header.
     fn smoke_visible(&self, textured: bool) -> Vec<(usize, [i32; 2])> {
         let m = self.model_for_paint().unwrap();

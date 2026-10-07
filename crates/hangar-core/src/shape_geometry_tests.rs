@@ -884,8 +884,8 @@ fn a_loop_that_changes_the_texture_is_not_proved() {
         "{e}"
     );
     assert_eq!(got[1], ok("OTHER.PIC"));
-    // Assign texture refuses it with the reason, naming the face once.
-    let g = Geometry::parse(&b).unwrap();
+    // Assign texture refuses it with the reason, naming the face once, and
+    // the dialogs' pre-check gives the same reason before anything is built.
     let f1 = face(&l, "F1");
     let err = crate::shape_texture::assign_texture(
         &b,
@@ -896,7 +896,14 @@ fn a_loop_that_changes_the_texture_is_not_proved() {
     .unwrap_err();
     assert!(err.starts_with(&format!("Face at {f1:X}: ")), "{err}");
     assert_eq!(err.matches("CODE+").count(), 2, "{err}");
-    let _ = g;
+    assert_eq!(
+        crate::shape_texture::assign_refusal(&b, &[f1]),
+        Some(err.clone())
+    );
+    assert_eq!(
+        crate::shape_texture::assign_refusal(&b, &[face(&l, "F2")]),
+        None
+    );
 }
 
 #[test]

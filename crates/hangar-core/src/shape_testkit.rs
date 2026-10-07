@@ -517,6 +517,54 @@ pub fn demo_textured_kit() -> Vec<u8> {
         .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
     a.finish()
 }
+/// The textured kit's box drawn in a loop that switches from KIT.PIC to
+/// SAME.PIC halfway (an AC branch back to the start): the first three faces
+/// may be drawn from either PIC, so no texture edit can prove their state;
+/// the last three always draw from SAME.PIC. Not a game asset.
+pub fn demo_looped_kit() -> Vec<u8> {
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x10, 0]);
+    a.b(&[0xe2, 0]).b(b"KIT.PIC\0\0\0\0\0\0\0");
+    let points: [[i16; 3]; 8] = core::array::from_fn(|i| {
+        [
+            if i & 1 == 0 { -5 } else { 5 },
+            if i & 2 == 0 { -40 } else { 40 },
+            if i & 4 == 0 { -4 } else { 4 },
+        ]
+    });
+    let sides: [(&[u16], [i32; 3]); 6] = [
+        (&[0, 1, 3, 2], [0; 3]),
+        (&[4, 5, 7, 6], [0; 3]),
+        (&[0, 1, 5, 4], [0; 3]),
+        (&[2, 3, 7, 6], [0; 3]),
+        (&[0, 2, 6, 4], [0; 3]),
+        (&[1, 3, 7, 5], [0; 3]),
+    ];
+    let region = |k: u16| -> Vec<[u16; 2]> {
+        let (u, v) = ((k % 2) * 16, (k / 2) * 10);
+        alloc::vec![[u, v], [u + 15, v], [u + 15, v + 9], [u, v + 9]]
+    };
+    a.label("top");
+    a.solid_uv(
+        0,
+        &points,
+        &sides[..3],
+        150,
+        &(0..3).map(region).collect::<Vec<_>>(),
+    );
+    a.b(&[0xe2, 0]).b(b"SAME.PIC\0\0\0\0\0\0");
+    a.solid_uv(
+        8,
+        &points,
+        &sides[3..],
+        150,
+        &(3..6).map(region).collect::<Vec<_>>(),
+    );
+    a.call(0xac, "top");
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    a.finish()
+}
 /// A flat quad drawn from both sides.
 fn plate(a: &mut Asm, slot: u16, p: [[i16; 3]; 4], color: u8) {
     let c: [i32; 3] = core::array::from_fn(|k| p.iter().map(|q| q[k] as i32).sum::<i32>() / 4);

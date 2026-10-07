@@ -66,6 +66,9 @@ pub(super) struct EditState {
     pub assign: super::texture_ui::AssignDraft,
     /// The Remap from view dialog.
     pub remap: super::texture_ui::RemapDraft,
+    /// Why the faces of the open Clone, Assign or Remap dialog cannot take
+    /// another texture, checked when it opened.
+    pub texture_refusal: Option<String>,
     /// Faces drawn from Hangar texture assignments in the shown shape.
     pub assigned: super::texture_ui::AssignedCache,
 }

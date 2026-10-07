@@ -2857,13 +2857,27 @@ impl App {
             )),
             _ => None,
         };
-        let h = limits.as_ref().map_or(196, |text| {
-            (DIALOG_HEAD
-                + widgets::notice_height(w - 2 * space::SPACE_4, text)
+        // Clone texture for selected faces says up front when it is refused;
+        // any error wraps in a notice below the hint.
+        let clone = matches!(p.kind, PromptKind::FaceClone);
+        let refused = clone && self.ed.texture_refusal.is_some();
+        let problem = if clone {
+            self.texture_problem()
+        } else {
+            self.status.strip_prefix("Error: ").map(String::from)
+        };
+        let inner = w - 2 * space::SPACE_4;
+        let h = match (&limits, &problem) {
+            (Some(text), _) => (DIALOG_HEAD
+                + widgets::notice_height(inner, text)
                 + m::BUTTON_H
                 + 3 * space::SPACE_4)
-                .clamp(196, self.height - 16)
-        });
+                .clamp(196, self.height - 16),
+            (None, Some(text)) => (196 + widgets::notice_height(inner, text) - m::ROW_H
+                + space::SPACE_1)
+                .clamp(196, self.height - 16),
+            (None, None) => 196,
+        };
         let rect = [(self.width - w) / 2, self.height / 2 - h / 2, w, h];
         o.hits.clear();
         let body = self.dialog_frame(o, rect, &p.title);
@@ -2935,16 +2949,14 @@ impl App {
             c::INK_MUTED,
             Style::Label,
         );
-        if let Some(error) = self.status.strip_prefix("Error: ") {
-            let ey = hy + m::ROW_H + space::SPACE_1;
-            o.canvas
-                .icon(bx, ey + 2, Icon::Warning, c::DANGER, c::GM_800);
-            o.canvas.styled(
-                bx + m::ICON + space::SPACE_1,
-                baseline(ey, m::ROW_H, Style::Label),
-                &fit(error, bw - m::ICON - space::SPACE_1, Style::Label),
-                c::DANGER,
-                Style::Label,
+        if let Some(text) = &problem {
+            notice(
+                &mut o.canvas,
+                bx,
+                hy + m::ROW_H + space::SPACE_1,
+                bw,
+                Tone::Danger,
+                text,
             );
         }
         let left: &[(&str, Action)] = match p.kind {
@@ -2966,7 +2978,8 @@ impl App {
                 } else {
                     "Apply"
                 })
-                .primary(),
+                .primary()
+                .enabled(!refused),
             ),
             Action::Apply,
         );
@@ -3008,6 +3021,7 @@ impl App {
         self.smoke_edit_mode();
         self.smoke_parts_panel();
         self.smoke_face_textures();
+        self.smoke_texture_refusals();
         self.smoke_panels();
         self.smoke_replace();
         self.demo();

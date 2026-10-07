@@ -504,6 +504,32 @@ fn origin(
     }
     Ok((i, Origin::Body(i)))
 }
+fn unproved(offset: usize, why: &str) -> String {
+    format!("Face at {offset:X}: Hangar cannot prove which texture draws it: {why}")
+}
+/// Why faces (file offsets) cannot take another texture, if one cannot: it
+/// is not a face record, its bytes are guarded, a part stub resumes at it,
+/// or its texture state cannot be proved. Clone, Assign and Remap refuse
+/// such a selection with this reason, so dialogs can say so before Apply.
+pub fn assign_refusal(source: &[u8], faces: &[usize]) -> Option<String> {
+    let g = match Geometry::parse(source) {
+        Ok(g) => g,
+        Err(e) => return Some(e),
+    };
+    let copies = copy_index(&assignments(&g));
+    for offset in faces.iter().take(4096) {
+        match origin(&g, &copies, *offset) {
+            Err(e) => return Some(e),
+            Ok((_, Origin::Body(i))) => {
+                if let Err(e) = g.material(i) {
+                    return Some(unproved(*offset, &e));
+                }
+            }
+            Ok(_) => {}
+        }
+    }
+    None
+}
 fn copy_index(found: &[Assignment]) -> BTreeMap<usize, (usize, usize)> {
     let mut out = BTreeMap::new();
     for (a, x) in found.iter().enumerate() {
@@ -964,9 +990,7 @@ fn assign(source: &[u8], faces: &[usize], name: &str, uvs: Uvs) -> Result<Assign
         let item = match from {
             Origin::Body(i) => {
                 let site = g.span(i);
-                let at = g.material(i).map_err(|e| {
-                    format!("Face at {offset:X}: Hangar cannot prove which texture draws it: {e}")
-                })?;
+                let at = g.material(i).map_err(|e| unproved(*offset, &e))?;
                 let restore = g.selector(at).to_vec();
                 let record = g.code[site.0..site.1].to_vec();
                 Item {
