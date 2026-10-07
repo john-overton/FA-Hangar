@@ -51,8 +51,9 @@ pub(super) fn dot(d: &mut Canvas, x: i32, y: i32, color: Rgb) {
 pub(super) fn baseline(y: i32, h: i32, style: Style) -> i32 {
     y + (h + style.spec().size * 3 / 4) / 2
 }
-/// Integer with thousands commas; `decimals` digits are fractional.
-pub(super) fn format_number(value: i64, decimals: u8) -> String {
+/// Integer with thousands commas (when `group`); `decimals` digits are
+/// fractional.
+pub(super) fn format_number(value: i64, decimals: u8, group: bool) -> String {
     let scale = 10i64.pow(decimals as u32);
     let whole = (value / scale).unsigned_abs();
     let digits = format!("{whole}");
@@ -61,7 +62,7 @@ pub(super) fn format_number(value: i64, decimals: u8) -> String {
         out.push('-');
     }
     for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
+        if group && i > 0 && (digits.len() - i) % 3 == 0 {
             out.push(',');
         }
         out.push(ch);
@@ -74,6 +75,23 @@ pub(super) fn format_number(value: i64, decimals: u8) -> String {
         ));
     }
     out
+}
+/// Whether a field's values are quantities (thousands grouped) rather than
+/// years, IDs, flags, types, classes or sizes, which read as codes.
+pub(super) fn grouped(label: &str) -> bool {
+    let name = label
+        .rsplit('.')
+        .next()
+        .unwrap_or(label)
+        .split('[')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    !(name.ends_with("id")
+        || name.ends_with("ids")
+        || ["year", "flag", "type", "class", "size", "code"]
+            .iter()
+            .any(|w| name.contains(w)))
 }
 /// Parse typed text ("20,900", "-4.25", "$1F") into the fixed-point value.
 pub(super) fn parse_number(text: &str, decimals: u8) -> Result<i64> {
@@ -543,6 +561,8 @@ pub(super) struct NumberSpec {
     pub decimals: u8,
     /// Show the `steel-deep` position bar between min and max.
     pub bounded: bool,
+    /// Thousands commas: physical quantities yes, years, IDs and flags no.
+    pub group: bool,
 }
 /// A NumberField to draw: label left (optional), value right with its unit.
 #[derive(Clone, Copy)]
@@ -991,7 +1011,7 @@ impl Layout {
             right -= m::ICON_SM + space::SPACE_1;
         }
         let changed = n.spec.disk.is_some_and(|disk| disk != value);
-        let text = format_number(value, n.spec.decimals);
+        let text = format_number(value, n.spec.decimals, n.spec.group);
         let unit_w = if n.unit.is_empty() {
             0
         } else {
@@ -1410,6 +1430,7 @@ impl App {
                 max,
                 decimals: 0,
                 bounded: false,
+                group: grouped(&f.label),
             })
         };
         match t {
@@ -1451,6 +1472,7 @@ impl App {
                     max: 32767,
                     decimals: 0,
                     bounded: false,
+                    group: true,
                 })
             }
             NumberTarget::Decal(key) => {
@@ -1470,6 +1492,7 @@ impl App {
                     max: max as i64,
                     decimals: 0,
                     bounded: key == 4,
+                    group: false,
                 })
             }
         }
@@ -1480,8 +1503,8 @@ impl App {
         if value < spec.min || value > spec.max {
             return Err(format!(
                 "Value outside {}..{}",
-                format_number(spec.min, spec.decimals),
-                format_number(spec.max, spec.decimals)
+                format_number(spec.min, spec.decimals, spec.group),
+                format_number(spec.max, spec.decimals, spec.group)
             ));
         }
         if value == spec.value {
@@ -1657,7 +1680,7 @@ impl App {
                     NumberTarget::Station(_) => format!("HP{} value", self.hp_selected + 1),
                     NumberTarget::Decal(_) => "Decal placement".into(),
                 },
-                value: format_number(spec.value, spec.decimals).replace(',', ""),
+                value: format_number(spec.value, spec.decimals, false),
                 axis: 0,
             });
         }
@@ -1812,8 +1835,11 @@ impl App {
                 "Component hit region outside its drawing"
             );
         }
-        assert_eq!(format_number(20900, 0), "20,900");
-        assert_eq!(format_number(-4250, 3), "-4.250");
+        assert_eq!(format_number(20900, 0, true), "20,900");
+        assert_eq!(format_number(1997, 0, false), "1997");
+        assert_eq!(format_number(-4250, 3, true), "-4.250");
+        assert!(!grouped("object.year") && !grouped("object.objId") && !grouped("flags"));
+        assert!(!grouped("hardpoint[0].typeId") && grouped("object.weight"));
         assert_eq!(parse_number("20,900", 0), Ok(20900));
         assert_eq!(parse_number("-4.25", 3), Ok(-4250));
         assert!(parse_number("1.2345", 3).is_err());

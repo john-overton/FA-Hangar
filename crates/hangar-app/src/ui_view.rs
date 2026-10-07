@@ -1494,7 +1494,7 @@ impl App {
                         .iter()
                         .filter(|e| category_of(&e.name) == *cat)
                         .count();
-                    let count = widgets::format_number(n as i64, 0);
+                    let count = widgets::format_number(n as i64, 0, true);
                     rx -= text_width(&count, Style::ValueSm);
                     d.styled(
                         rx,
@@ -1534,7 +1534,7 @@ impl App {
                     );
                     let ix = 4 + m::ICON_SM + space::SPACE_1;
                     d.icon(ix, mid, Icon::Lib, c::INK_MUTED, fill);
-                    let count = widgets::format_number(doc.archive.entries.len() as i64, 0);
+                    let count = widgets::format_number(doc.archive.entries.len() as i64, 0, true);
                     let mut rx = right - text_width(&count, Style::ValueSm);
                     d.styled(
                         rx,
@@ -1745,7 +1745,7 @@ impl App {
                 if selected { c::AMBER_BRIGHT } else { c::INK },
                 Style::Value,
             );
-            let size = widgets::format_number(e.stored_len() as i64, 0);
+            let size = widgets::format_number(e.stored_len() as i64, 0, true);
             d.styled(
                 bytes_right - text_width(&size, Style::Value),
                 base,
@@ -2022,13 +2022,13 @@ impl App {
                 o.info(
                     &mut s,
                     "Vertices",
-                    &widgets::format_number(model.vertices.len() as i64, 0),
+                    &widgets::format_number(model.vertices.len() as i64, 0, true),
                     "",
                 );
                 o.info(
                     &mut s,
                     "Faces",
-                    &widgets::format_number(model.faces.len() as i64, 0),
+                    &widgets::format_number(model.faces.len() as i64, 0, true),
                     "",
                 );
                 o.info(
@@ -2118,7 +2118,7 @@ impl App {
             o.info(
                 &mut s,
                 "Stored size",
-                &widgets::format_number(e.stored_len() as i64, 0),
+                &widgets::format_number(e.stored_len() as i64, 0, true),
                 "B",
             );
             let offset = if self.doc.entry_changed(e) {
@@ -2981,7 +2981,7 @@ impl App {
             self.smoke_drag(field, 20);
             assert_eq!(self.number_spec(t).unwrap().value, disk + 10);
             assert_eq!(self.doc.changed_count(), 1);
-            let shown = widgets::format_number(disk + 10, 0);
+            let shown = widgets::format_number(disk + 10, 0, true);
             assert!(self.draw().commands.iter().any(
                 |d| matches!(d, Draw::Text(_, _, s, color, _) if *s == shown && *color == c::AMBER.0)
             ));

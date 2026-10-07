@@ -658,7 +658,7 @@ impl App {
                 (
                     format!(
                         "{} pixels change \u{b7} shared UVs",
-                        widgets::format_number(d.changed as i64, 0)
+                        widgets::format_number(d.changed as i64, 0, true)
                     ),
                     true,
                 )

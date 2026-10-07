@@ -821,7 +821,7 @@ impl App {
                 &format!(
                     "{} Hz \u{b7} {} samples \u{b7} PCM8 mono",
                     p.rate,
-                    widgets::format_number(p.samples.len() as i64, 0)
+                    widgets::format_number(p.samples.len() as i64, 0, true)
                 ),
                 c::INK,
             );
