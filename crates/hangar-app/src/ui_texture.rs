@@ -1348,6 +1348,72 @@ impl App {
 /// A drawn face by CODE offset: texture, UVs and content flags.
 #[cfg(not(windows))]
 type DrawnFace = (usize, String, Vec<[i32; 2]>, u8);
+/// Texture, texel, changed screen pixels, their extent and the render.
+#[cfg(not(windows))]
+type DotTest = (String, [i32; 2], usize, [usize; 2], Vec<u8>);
+/// One SH of `--remap-check`: explicit faces (file offsets) and view.
+#[cfg(not(windows))]
+struct RemapSpec {
+    name: String,
+    faces: Vec<usize>,
+    /// Faces to clone first (default: `faces`).
+    clone: Vec<usize>,
+    view: Option<(i32, i32)>,
+}
+/// `ENTRY.SH [--faces HEX,...] [--clone HEX,...] [--view YAW,PITCH]`,
+/// repeated (an SH may be named again for its other side); a
+/// `--palette PATH` anywhere is read by the caller.
+#[cfg(not(windows))]
+fn remap_specs(args: &[String]) -> Result<Vec<RemapSpec>> {
+    let mut specs: Vec<RemapSpec> = Vec::new();
+    let mut k = 0;
+    while k < args.len() {
+        let flag = args[k].as_str();
+        if flag == "--palette" {
+            k += 2;
+        } else if flag == "--faces" || flag == "--clone" || flag == "--view" {
+            let value = args
+                .get(k + 1)
+                .ok_or_else(|| format!("{flag} needs a value"))?;
+            let spec = specs
+                .last_mut()
+                .ok_or_else(|| format!("{flag} follows an SH name"))?;
+            if flag != "--view" {
+                for x in value.split(',').take(4096) {
+                    let x = x.trim().trim_start_matches("0x");
+                    let o = usize::from_str_radix(x, 16)
+                        .map_err(|_| "Face offsets are hex file offsets, as refusals name them")?;
+                    if flag == "--faces" {
+                        spec.faces.push(o);
+                    } else {
+                        spec.clone.push(o);
+                    }
+                }
+            } else {
+                let (y, p) = value.split_once(',').ok_or("--view takes YAW,PITCH")?;
+                let parse = |v: &str| {
+                    v.trim()
+                        .parse::<i32>()
+                        .map_err(|_| "--view takes YAW,PITCH")
+                };
+                spec.view = Some((parse(y)?, parse(p)?));
+            }
+            k += 2;
+        } else {
+            specs.push(RemapSpec {
+                name: args[k].clone(),
+                faces: Vec::new(),
+                clone: Vec::new(),
+                view: None,
+            });
+            k += 1;
+        }
+    }
+    if specs.is_empty() {
+        return Err("Name at least one SH".into());
+    }
+    Ok(specs)
+}
 /// A raw indexed PIC with a full 6-bit palette, for smoke fixtures.
 fn raw_pic(w: usize, h: usize, seed: u8) -> Vec<u8> {
     let mut b = vec![0; 64 + w * h + 768];
@@ -2273,24 +2339,111 @@ pub(super) fn face_density(points: &[[i32; 3]], uv: &[[i32; 2]]) -> Option<[u64;
 fn q16(v: u64) -> String {
     density_text(v.min(u32::MAX as u64) as u32)
 }
+/// "stretch 1.2x", or that the UVs collapse to a line or point of the PIC
+/// (under 0.05 texels per unit across).
+#[cfg(not(windows))]
+fn stretch_text(d: [u64; 2]) -> String {
+    let (big, small) = (d[0].max(d[1]), d[0].min(d[1]));
+    if small < 3277 {
+        "UVs on a line of the PIC".into()
+    } else {
+        format!("stretch {}x", q16(big * 65536 / small))
+    }
+}
 #[cfg(not(windows))]
 impl App {
+    /// Paint one texel at the UV centre of model face `face` in the PIC it
+    /// draws from (in memory only, the farthest palette colour), render the
+    /// current view at `w` x `h` and count the screen pixels that change and
+    /// their extent. The PIC is put back. Returns the texture, the texel,
+    /// the changed pixels, their extent and the dotted render.
+    fn dot_test(&mut self, face: usize, w: usize, h: usize) -> Result<DotTest> {
+        let m = self.model_for_paint().ok_or("No model")?;
+        let f = m.faces.get(face).ok_or("No such face")?;
+        let n = f.uv.len().max(1) as i32;
+        let uv: [i32; 2] = core::array::from_fn(|k| f.uv.iter().map(|q| q[k]).sum::<i32>() / n);
+        let name = full(&f.texture);
+        let key = self
+            .textures
+            .keys()
+            .find(|k| full(k) == name)
+            .cloned()
+            .ok_or_else(|| format!("{name} is not loaded"))?;
+        let pic = self.textures[&key].clone();
+        let (pw, ph) = (pic.width as i32, pic.height as i32);
+        if !(0..pw).contains(&uv[0]) || !(0..ph).contains(&uv[1]) {
+            return Err(format!("UV {uv:?} lies outside {name}"));
+        }
+        // Stored V runs up: row 0 is the top of the PIC.
+        let at = ((ph - 1 - uv[1]) * pw + uv[0]) as usize;
+        let palette = pic.colors(&self.base_palette);
+        let old = palette[pic.pixels[at] as usize];
+        let dist =
+            |c: [u8; 3]| -> i32 { (0..3).map(|k| (c[k] as i32 - old[k] as i32).abs()).sum() };
+        let pick = (0..255u8)
+            .max_by_key(|i| dist(palette[*i as usize]))
+            .unwrap_or(0);
+        let base = self.render_rgba(w, h);
+        let mut dotted = pic.clone();
+        dotted.pixels[at] = pick;
+        self.textures.insert(key.clone(), dotted);
+        let after = self.render_rgba(w, h);
+        self.textures.insert(key, pic);
+        let (mut count, mut lo, mut hi) = (0, [usize::MAX; 2], [0usize; 2]);
+        for p in 0..w * h {
+            if base[4 * p..4 * p + 3] != after[4 * p..4 * p + 3] {
+                count += 1;
+                let xy = [p % w, p / w];
+                for k in 0..2 {
+                    lo[k] = lo[k].min(xy[k]);
+                    hi[k] = hi[k].max(xy[k]);
+                }
+            }
+        }
+        let extent = if count == 0 {
+            [0, 0]
+        } else {
+            [hi[0] - lo[0] + 1, hi[1] - lo[1] + 1]
+        };
+        Ok((name, uv, count, extent, after))
+    }
     /// Manual real-data check (`--remap-check`): on each SH, a stretch
     /// census of the textured faces (texels per unit along each face's
     /// vertical and horizontal axes), then Remap from view with Bake on the
     /// most stretched side-facing faces from the side they face, through
-    /// the panel selection and the dialog. Checks the retail texture
+    /// the panel selection and the dialog. `--faces HEX,...` after an SH
+    /// name picks the faces instead (file offsets, as refusals name them),
+    /// first cloned through Clone texture for selected faces and undone, and
+    /// `--view YAW,PITCH` sets the camera. Checks the retail texture
     /// layout, CODE coverage, bindings and stubs, every other face, the
-    /// re-parse and the stretch after; renders the side view before and
-    /// after and the new PIC as PNG; reverses with Use shape texture and
-    /// undoes that. The remaps stay and the LIB is written create-new.
-    pub fn check_remap(&mut self, out: &str, names: &[String]) -> Result<String> {
+    /// re-parse, the UV spans and the stretch after, and how far one painted
+    /// texel reaches on screen before and after; renders the side view
+    /// before and after, the dots and the new PIC as PNG; reverses with Use
+    /// shape texture and undoes that. The remaps stay and the LIB is written
+    /// create-new. `--palette PALETTE.PAL|LIB` supplies the game palette for
+    /// a LIB without one.
+    pub fn check_remap(&mut self, out: &str, args: &[String]) -> Result<String> {
         use hangar_core::shape_geometry::Geometry;
-        if !self.palette_loaded {
-            return Err("The LIB has no PALETTE.PAL".into());
+        if let Some(k) = args.iter().position(|a| a == "--palette") {
+            let path = args.get(k + 1).ok_or("--palette needs a PAL or LIB")?;
+            self.perform_file(FileAction::Palette, path)?;
         }
+        if !self.palette_loaded {
+            return Err(
+                "The LIB has no PALETTE.PAL; add --palette PALETTE.PAL or a LIB holding it".into(),
+            );
+        }
+        let specs = remap_specs(args)?;
         let mut report = String::new();
-        for name in names {
+        let names: Vec<String> = specs.iter().map(|s| s.name.clone()).collect();
+        for (pass, spec) in specs.iter().enumerate() {
+            let name = &spec.name;
+            // Output names: the SH stem, numbered when the SH comes again.
+            let again = names[..pass].iter().filter(|n| *n == name).count();
+            let stem = match again {
+                0 => name.trim_end_matches(".SH").to_string(),
+                k => format!("{}-{}", name.trim_end_matches(".SH"), k + 1),
+            };
             let entry = self.doc.archive.find(name).ok_or("SH not found")?;
             self.select_entry(entry);
             self.mode = Mode::Model;
@@ -2394,21 +2547,59 @@ impl App {
                     core::cmp::Reverse(*s),
                 )
             });
-            let first = side.first().ok_or("No stretched side-facing face")?;
-            let right = m0.faces[first.1].normal.is_some_and(|n| n[0] > 0);
-            let texture = m0.faces[first.1].texture.clone();
-            let mut picked: Vec<usize> = side
-                .iter()
-                .filter(|(_, i, _)| {
-                    let f = &m0.faces[*i];
-                    f.texture == texture && f.normal.is_some_and(|n| (n[0] > 0) == right)
-                })
-                .map(|(_, i, _)| *i)
-                .take(4)
-                .collect();
-            // Side view from the side the faces face.
-            self.yaw = if right { 90 } else { 270 };
-            self.pitch = 0;
+            let explicit = !spec.faces.is_empty();
+            let (texture, right, mut picked) = if explicit {
+                let mut picked = Vec::new();
+                for o in &spec.faces {
+                    let i = m0
+                        .faces
+                        .iter()
+                        .position(|f| f.offset == *o)
+                        .ok_or_else(|| format!("{name}: no face at {o:X} is drawn"))?;
+                    let f = &m0.faces[i];
+                    let d = face_density(&points(f), &f.uv).unwrap_or([0, 0]);
+                    report += &format!(
+                        "  picked {:X} {} {} at {:?} n {:?}, UVs {:?}: {} vertical, {} horizontal, {}\n",
+                        f.offset,
+                        full(&f.texture),
+                        match tag(f) {
+                            "" => "face",
+                            t => t,
+                        },
+                        centre(f),
+                        f.normal.unwrap_or([0; 3]),
+                        f.uv,
+                        q16(d[0]),
+                        q16(d[1]),
+                        stretch_text(d)
+                    );
+                    picked.push(i);
+                }
+                let f = &m0.faces[picked[0]];
+                (
+                    f.texture.clone(),
+                    f.normal.is_some_and(|n| n[0] > 0),
+                    picked,
+                )
+            } else {
+                let first = side.first().ok_or("No stretched side-facing face")?;
+                let right = m0.faces[first.1].normal.is_some_and(|n| n[0] > 0);
+                let texture = m0.faces[first.1].texture.clone();
+                let picked: Vec<usize> = side
+                    .iter()
+                    .filter(|(_, i, _)| {
+                        let f = &m0.faces[*i];
+                        f.texture == texture && f.normal.is_some_and(|n| (n[0] > 0) == right)
+                    })
+                    .map(|(_, i, _)| *i)
+                    .take(4)
+                    .collect();
+                (texture, right, picked)
+            };
+            // Side view from the side the faces face, unless one is given.
+            let (yaw, pitch) = spec.view.unwrap_or((if right { 90 } else { 270 }, 0));
+            self.yaw = yaw;
+            self.pitch = pitch;
             self.frame();
             self.zoom = 170;
             self.ed.mesh_faces.clear();
@@ -2418,15 +2609,71 @@ impl App {
                 crate::platform::write_new(&path, &bytes)?;
                 Ok(path)
             };
-            let stem = name.trim_end_matches(".SH");
             report += &format!(
-                "  before: {}\n",
+                "  view yaw {yaw} pitch {pitch}; before: {}\n",
                 png(
                     self,
                     &format!("{stem}-before.png"),
                     picture::rgba_png(640, 400, &self.render_rgba(640, 400))
                 )?
             );
+            if explicit {
+                // One painted texel on the first face before the remap.
+                let (t, uv, n, e, img) = self.dot_test(picked[0], 640, 400)?;
+                report += &format!(
+                    "  1 texel at {uv:?} of {t}: {n} screen pixels change, spanning {} x {} px: {}\n",
+                    e[0],
+                    e[1],
+                    png(
+                        self,
+                        &format!("{stem}-dot-before.png"),
+                        picture::rgba_png(640, 400, &img)
+                    )?
+                );
+                // Clone texture for selected faces, through the Mesh action
+                // and its name prompt, then undone.
+                let kept = self.doc.archive.bytes()?;
+                let clone = if spec.clone.is_empty() {
+                    &spec.faces
+                } else {
+                    &spec.clone
+                };
+                self.ed.mesh_faces.clear();
+                for (k, o) in clone.iter().enumerate() {
+                    let f = m0
+                        .faces
+                        .iter()
+                        .position(|f| f.offset == *o)
+                        .ok_or_else(|| format!("{name}: no face at {o:X} is drawn"))?;
+                    self.panel_click(Some(f), k > 0);
+                }
+                self.face_texture_action(TEX_CLONE);
+                if !self
+                    .prompt
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.kind, PromptKind::FaceClone))
+                    || self.ed.texture_refusal.is_some()
+                {
+                    return Err(format!(
+                        "{name}: Clone texture for selected faces refused: {}",
+                        self.ed
+                            .texture_refusal
+                            .clone()
+                            .unwrap_or(self.status.clone())
+                    ));
+                }
+                self.key(Key::Enter, false, false);
+                if !self.status.starts_with("Cloned") {
+                    return Err(format!("{name}: {}", self.status));
+                }
+                report += &format!("  clone: {}\n", self.status);
+                self.act(Action::Undo);
+                if self.doc.archive.bytes()? != kept {
+                    return Err(format!("{name}: undo did not restore the clone"));
+                }
+                self.ed.mesh_faces.clear();
+                self.selected_face = None;
+            }
             let mut refused = Vec::new();
             let to = loop {
                 if picked.is_empty() {
@@ -2437,11 +2684,20 @@ impl App {
                     self.panel_click(Some(*f), k > 0);
                 }
                 self.face_texture_action(TEX_REMAP);
+                if explicit && self.ed.texture_refusal.is_some() {
+                    return Err(format!(
+                        "{name}: Remap refused: {}",
+                        self.ed.texture_refusal.clone().unwrap_or_default()
+                    ));
+                }
                 let Some(p) = self
                     .prompt
                     .as_ref()
                     .filter(|p| matches!(p.kind, PromptKind::RemapView))
                 else {
+                    if explicit {
+                        return Err(format!("{name}: {}", self.status));
+                    }
                     // Drop the face the refusal names and try again.
                     let at = self.status.split("Face at ").nth(1).and_then(|s| {
                         usize::from_str_radix(s.split(':').next()?.split(' ').next()?, 16).ok()
@@ -2484,16 +2740,17 @@ impl App {
                     self.status
                 );
                 for f in &picked {
-                    let s = census.iter().find(|c| c.1 == *f).map_or(0, |c| c.0);
+                    let face = &m0.faces[*f];
+                    let d = face_density(&points(face), &face.uv).unwrap_or([0, 0]);
                     report += &format!(
-                        "    {:X} {} at {:?}, stretch {}x\n",
-                        m0.faces[*f].offset,
-                        match tag(&m0.faces[*f]) {
+                        "    {:X} {} at {:?}, was {}\n",
+                        face.offset,
+                        match tag(face) {
                             "" => "face",
                             t => t,
                         },
-                        centre(&m0.faces[*f]),
-                        q16(s)
+                        centre(face),
+                        stretch_text(d)
                     );
                 }
                 break to;
@@ -2539,18 +2796,34 @@ impl App {
                 m0.faces.len(),
                 m1.faces.len()
             );
+            let mut layout_ok = true;
             for f in m1.faces.iter().filter(|f| moved.contains(&f.offset)) {
                 let p: Vec<[i32; 3]> = f.indices.iter().map(|i| m1.vertices[*i].point).collect();
+                let span: [i32; 2] = core::array::from_fn(|k| {
+                    let v = f.uv.iter().map(|q| q[k]);
+                    v.clone().max().unwrap_or(0) - v.min().unwrap_or(0)
+                });
                 if let Some(d) = face_density(&p, &f.uv) {
                     let (big, small) = (d[0].max(d[1]), d[0].min(d[1]).max(1));
+                    let stretch = big * 65536 / small;
+                    // A real layout spans texels both ways, nearly square.
+                    layout_ok &= !explicit || (span[0] >= 2 && span[1] >= 2 && stretch < 3 << 15);
                     report += &format!(
-                        "    {:X} now {} vertical, {} horizontal, stretch {}x\n",
+                        "    {:X} now UVs {:?} (U span {}, V span {}): {} vertical, {} horizontal, stretch {}x\n",
                         f.offset,
+                        f.uv,
+                        span[0],
+                        span[1],
                         q16(d[0]),
                         q16(d[1]),
-                        q16(big * 65536 / small)
+                        q16(stretch)
                     );
                 }
+            }
+            if !layout_ok {
+                return Err(format!(
+                    "{name}: a remapped face is still stretched\n{report}"
+                ));
             }
             if !retail
                 || !coverage
@@ -2585,6 +2858,25 @@ impl App {
                     Pic::parse(&pic_bytes)?.png(&self.base_palette)
                 )?
             );
+            if explicit {
+                // The same painted texel test on the remapped first face.
+                let first = m1
+                    .faces
+                    .iter()
+                    .position(|f| moved.first() == Some(&f.offset))
+                    .ok_or("Remapped face not drawn")?;
+                let (t, uv, n, e, img) = self.dot_test(first, 640, 400)?;
+                report += &format!(
+                    "  after: 1 texel at {uv:?} of {t}: {n} screen pixels change, spanning {} x {} px: {}\n",
+                    e[0],
+                    e[1],
+                    png(
+                        self,
+                        &format!("{stem}-dot-after.png"),
+                        picture::rgba_png(640, 400, &img)
+                    )?
+                );
+            }
             // Use shape texture returns every drawn face; undo keeps the remap.
             let kept = self.doc.archive.bytes()?;
             self.ed.mesh_faces = moved.clone();
