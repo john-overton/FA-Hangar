@@ -28,6 +28,27 @@ pub(super) struct Library {
     scroll: usize,
     table_scroll: usize,
 }
+/// A press on an outliner entry; `live` once it moves past `DRAG_THRESHOLD`.
+#[derive(Clone, Copy)]
+pub(super) struct ResourceDrag {
+    pub library: u64,
+    pub entry: usize,
+    pub start: [i32; 2],
+    pub live: bool,
+}
+/// Manhattan distance a press travels before it becomes a drag.
+pub(super) const DRAG_THRESHOLD: i32 = 6;
+/// What releasing a live drag at the pointer would do.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum DropTarget {
+    /// Review a copy into this LIB.
+    Copy(u64),
+    /// Open Graft with the dragged entry as donor and this entry as target.
+    Graft(usize),
+    /// Nothing; the reason shows in the drag chip.
+    Invalid(&'static str),
+}
+pub(super) type Row = (u64, Option<usize>, Option<usize>);
 pub(super) struct Clipboard {
     pub archive: Archive,
     additional: Vec<Archive>,
@@ -882,6 +903,177 @@ impl App {
                 .into();
         Ok(())
     }
+    /// Stored file name of open LIB `id`.
+    pub(super) fn library_name(&self, id: u64) -> &str {
+        if id == self.library_id {
+            return self.lib_name();
+        }
+        self.libraries
+            .iter()
+            .find(|l| l.id == id)
+            .map_or("", |l| l.path.rsplit(['/', '\\']).next().unwrap_or(&l.path))
+    }
+    /// The outliner row drawn under (x, y).
+    pub(super) fn outliner_row_at(&self, x: i32, y: i32) -> Option<Row> {
+        let top = self.tree_start();
+        let bottom = self.height - theme::metric::STATUSBAR_H - super::view::OUTLINER_FOOTER;
+        if self.mode == Mode::Package || x < 0 || x >= self.left() || y < top || y >= bottom {
+            return None;
+        }
+        let row = ((y - top) / theme::metric::ROW_H) as usize;
+        if row >= self.outliner_rows() {
+            return None;
+        }
+        self.library_rows().get(self.scroll + row).copied()
+    }
+    pub(super) fn drag_live(&self) -> bool {
+        self.resource_drag.is_some_and(|d| d.live)
+    }
+    /// What releasing `drag` at (x, y) would do. Other LIBs take copies;
+    /// same-type definitions in the dragged entry's LIB take a graft.
+    pub(super) fn drop_target_at(&self, drag: ResourceDrag, x: i32, y: i32) -> DropTarget {
+        let Some((id, _, entry)) = self.outliner_row_at(x, y) else {
+            return DropTarget::Invalid("Drop on a LIB in the outliner");
+        };
+        if drag.library != self.library_id {
+            return DropTarget::Invalid("Source LIB is no longer active");
+        }
+        if id != drag.library {
+            return DropTarget::Copy(id);
+        }
+        let ext = |i: usize| self.doc.archive.entries.get(i).map(|e| extension(&e.name));
+        match entry {
+            Some(to) if to == drag.entry => DropTarget::Invalid("Drop on another LIB"),
+            Some(to) if ext(to) == ext(drag.entry) => {
+                if self.selected == drag.entry && self.brf.is_some() {
+                    DropTarget::Graft(to)
+                } else {
+                    DropTarget::Invalid("Graft takes definitions only")
+                }
+            }
+            _ => DropTarget::Invalid("Already in this LIB"),
+        }
+    }
+    pub(super) fn drop_target(&self) -> Option<DropTarget> {
+        let drag = self.resource_drag.filter(|d| d.live)?;
+        Some(self.drop_target_at(drag, self.mouse[0], self.mouse[1]))
+    }
+    /// Release a live drag at (x, y).
+    pub(super) fn drop_resource(&mut self, drag: ResourceDrag, x: i32, y: i32) -> Result<()> {
+        match self.drop_target_at(drag, x, y) {
+            DropTarget::Copy(id) => {
+                self.selected = drag.entry;
+                self.prepare_drop(id)?;
+            }
+            DropTarget::Graft(to) => {
+                self.selected = drag.entry;
+                self.pin_donor()?;
+                self.select_entry(to);
+                self.mode = Mode::Graft;
+            }
+            DropTarget::Invalid(reason) => self.status = format!("Not dropped: {reason}"),
+        }
+        Ok(())
+    }
+    /// Status bar text for a live drag: what releasing would do.
+    pub(super) fn drag_status(&self) -> Option<String> {
+        let drag = self.resource_drag.filter(|d| d.live)?;
+        let name = self.doc.archive.entries.get(drag.entry)?.name.as_str();
+        Some(match self.drop_target()? {
+            DropTarget::Copy(id) => {
+                let lib = self.library_name(id);
+                if hangar_core::save::protected_name(lib).is_some() {
+                    format!("Release to copy {name} to {lib}; it saves only under a new name")
+                } else {
+                    format!("Release to copy {name} to {lib}")
+                }
+            }
+            DropTarget::Graft(to) => format!(
+                "Release to graft {name} onto {}",
+                self.doc.archive.entries[to].name
+            ),
+            DropTarget::Invalid(reason) => format!("{reason}; release does nothing"),
+        })
+    }
+    /// Fill and outline for outliner `row` under a live drag: the hovered
+    /// copy target and its LIB root in amber, a graft target in steel.
+    pub(super) fn drop_row_look(&self, row: Row, hovered: Option<Row>) -> Option<(Rgb, Rgb)> {
+        match self.drop_target()? {
+            DropTarget::Copy(id)
+                if row.0 == id
+                    && (Some(row) == hovered || (row.1.is_none() && row.2.is_none())) =>
+            {
+                Some((c::AMBER_DEEP, c::AMBER))
+            }
+            DropTarget::Graft(to) if row.0 == self.library_id && row.2 == Some(to) => {
+                Some((c::STEEL_DEEP, c::STEEL))
+            }
+            _ => None,
+        }
+    }
+    /// The drag chip beside the pointer: type icon, entry name and what a
+    /// release would do (or why it would not).
+    pub(super) fn drag_ghost(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        let Some(drag) = self.resource_drag.filter(|d| d.live) else {
+            return;
+        };
+        let (Some(target), Some(entry)) =
+            (self.drop_target(), self.doc.archive.entries.get(drag.entry))
+        else {
+            return;
+        };
+        let (label, color) = match target {
+            DropTarget::Copy(id) => (format!("Copy to {}", self.library_name(id)), c::INK),
+            DropTarget::Graft(to) => (
+                format!("Graft with {}", self.doc.archive.entries[to].name),
+                c::STEEL,
+            ),
+            DropTarget::Invalid(reason) => (reason.to_string(), c::INK_MUTED),
+        };
+        let name_w = text_width(&entry.name, Style::Value);
+        let w = space::SPACE_2
+            + m::ICON
+            + space::SPACE_1
+            + name_w
+            + space::SPACE_3
+            + text_width(&label, Style::Label)
+            + space::SPACE_2;
+        let w = w.min(self.width - 2);
+        let h = m::BUTTON_H;
+        let x = (self.mouse[0] + space::SPACE_3)
+            .min(self.width - w - 1)
+            .max(0);
+        let y = (self.mouse[1] + space::SPACE_3)
+            .min(self.height - m::STATUSBAR_H - h - 1)
+            .max(0);
+        let d = &mut o.canvas;
+        widgets::notched(d, [x, y, w, h], Some(c::GM_800), Some(c::LINE_STRONG));
+        let mut tx = x + space::SPACE_2;
+        d.icon(
+            tx,
+            y + (h - m::ICON) / 2,
+            super::view::group_icon(&entry.name),
+            c::INK_MUTED,
+            c::GM_800,
+        );
+        tx += m::ICON + space::SPACE_1;
+        d.styled(
+            tx,
+            widgets::baseline(y, h, Style::Value),
+            &entry.name,
+            c::INK,
+            Style::Value,
+        );
+        tx += name_w + space::SPACE_3;
+        d.styled(
+            tx,
+            widgets::baseline(y, h, Style::Label),
+            &fit(&label, x + w - space::SPACE_2 - tx, Style::Label),
+            color,
+            Style::Label,
+        );
+    }
     pub(super) fn toggle_library(&mut self, id: u64) {
         if id == self.library_id {
             self.root_collapsed = !self.root_collapsed;
@@ -895,6 +1087,182 @@ impl App {
     }
 }
 
+impl App {
+    /// SOURCE.LIB (the demo plus DEMO2.PT, DEMO.PT selected) beside MYMOD.LIB
+    /// holding MYJET.PT; returns MYMOD.LIB's id with SOURCE.LIB active.
+    pub(super) fn drag_fixture(&mut self) -> Result<u64> {
+        self.libraries.clear();
+        self.demo();
+        let mut source = self.doc.archive.clone();
+        source.entries.push(Entry::new(
+            "DEMO2.PT",
+            hangar_core::brf::demo_with_records(),
+        )?);
+        self.doc = Document::new(source);
+        self.path = "SOURCE.LIB".into();
+        let id = self.library_id;
+        let mut target = Archive::empty();
+        target
+            .entries
+            .push(Entry::new("MYJET.PT", hangar_core::brf::demo())?);
+        self.install_library(Document::new(target), "MYMOD.LIB".into())?;
+        let target = self.library_id;
+        self.refresh();
+        self.switch_library(id)?;
+        self.select_entry(1);
+        self.collapsed[0] = false;
+        self.scroll = 0;
+        self.status.clear();
+        Ok(target)
+    }
+    /// Drag feedback through real pointer events: the threshold, the chip,
+    /// amber copy targets, steel graft targets, invalid reasons, the status
+    /// bar, Esc, and release opening the review with Copy.
+    #[inline(never)]
+    pub(super) fn smoke_drag_feedback(&mut self) {
+        let texts = |app: &App| -> Vec<(i32, i32, String)> {
+            app.draw()
+                .commands
+                .into_iter()
+                .filter_map(|d| match d {
+                    Draw::Text(x, y, s, _, _) => Some((x, y, s)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let fills = |app: &App, color: Rgb| -> Vec<[i32; 4]> {
+            app.draw()
+                .commands
+                .into_iter()
+                .filter_map(|d| match d {
+                    Draw::Rect(x, y, w, h, c) if c == color.0 => Some([x, y, w, h]),
+                    _ => None,
+                })
+                .collect()
+        };
+        let outlined = |app: &App, color: Rgb| {
+            app.draw()
+                .commands
+                .iter()
+                .filter_map(|d| match d {
+                    Draw::Line(x0, y0, x1, y1, c) if *c == color.0 && y0 == y1 && *x0 == 0 => {
+                        Some((*y0, *x1))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        for (w, h) in [(800, 600), (1280, 800)] {
+            let target = self.drag_fixture().unwrap();
+            self.width = w;
+            self.height = h;
+            self.mode = Mode::Model;
+            let source = self.library_id;
+            let row = |app: &App, action: &dyn Fn(Action) -> bool| app.chrome_hit(action).unwrap();
+            let entry = row(self, &|a| matches!(a, Action::Entry(1)));
+            let (x, y) = (entry[0] + 70, entry[1] + 8);
+            // Under the threshold the press is still a click: no chip.
+            self.motion(x, y, false);
+            self.pointer(x, y, 1, true, false);
+            self.motion(x + 3, y + 2, false);
+            assert!(!self.drag_live());
+            assert!(self.drag_status().is_none());
+            // Over another LIB root: amber fill and outline, chip, status.
+            let root = row(self, &|a| matches!(a, Action::Library(id) if id == target));
+            self.motion(root[0] + 40, root[1] + 8, false);
+            assert!(self.drag_live());
+            assert_eq!(self.drop_target(), Some(DropTarget::Copy(target)));
+            assert!(fills(self, c::AMBER_DEEP)
+                .iter()
+                .any(|r| r[1] == root[1] && r[0] + r[2] == self.left()));
+            assert!(outlined(self, c::AMBER).contains(&(root[1], self.left() - 1)));
+            let t = texts(self);
+            let chip = t.iter().find(|(_, _, s)| s == "Copy to MYMOD.LIB").unwrap();
+            assert!(chip.0 + text_width(&chip.2, Style::Label) <= w);
+            assert!(t
+                .iter()
+                .any(|(_, ty, s)| *ty > h - 22 && s == "Release to copy DEMO.PT to MYMOD.LIB"));
+            // Outliner hover does not compete with the drag highlight.
+            assert!(fills(self, c::GM_700)
+                .iter()
+                .all(|r| r[0] + r[2] != self.left() || r[3] != theme::metric::ROW_H));
+            // A group row of that LIB is a target too; release opens Copy.
+            self.motion(x, root[1] + 28, false);
+            assert_eq!(self.drop_target(), Some(DropTarget::Copy(target)));
+            self.pointer(x, root[1] + 28, 1, false, false);
+            assert_eq!(self.library_id, target);
+            assert!(matches!(
+                self.prompt.as_ref().map(|p| &p.kind),
+                Some(PromptKind::TransferReview)
+            ));
+            assert!(!self.transfer_move, "Drops open the review with Copy");
+            self.key(Key::Escape, false, false);
+            assert!(self.doc.archive.find("DEMO.PT").is_none());
+            self.switch_library(source).unwrap();
+            // Esc cancels a live drag; the release then does nothing.
+            let entry = row(self, &|a| matches!(a, Action::Entry(1)));
+            self.motion(x, entry[1] + 8, false);
+            self.pointer(x, entry[1] + 8, 1, true, false);
+            self.motion(root[0] + 40, root[1] + 8, false);
+            assert!(self.drag_live());
+            self.key(Key::Escape, false, false);
+            assert!(!self.drag_live() && self.drag_status().is_none());
+            self.pointer(root[0] + 40, root[1] + 8, 1, false, false);
+            assert!(self.prompt.is_none() && self.library_id == source);
+            // Invalid targets: no highlight, the reason in the chip.
+            let entry = row(self, &|a| matches!(a, Action::Entry(1)));
+            self.motion(x, entry[1] + 8, false);
+            self.pointer(x, entry[1] + 8, 1, true, false);
+            let sh = row(self, &|a| matches!(a, Action::Entry(0)));
+            self.motion(x, sh[1] + 8, false);
+            assert_eq!(
+                self.drop_target(),
+                Some(DropTarget::Invalid("Already in this LIB"))
+            );
+            assert!(texts(self)
+                .iter()
+                .any(|(_, _, s)| s == "Already in this LIB"));
+            assert!(outlined(self, c::AMBER).is_empty() && outlined(self, c::STEEL).is_empty());
+            assert!(fills(self, c::GM_700)
+                .iter()
+                .all(|r| r[0] + r[2] != self.left() || r[3] != theme::metric::ROW_H));
+            // The chip stays in the window at the far corner.
+            self.motion(w - 2, h - 2, false);
+            let t = texts(self);
+            let chip = t
+                .iter()
+                .find(|(_, _, s)| s == "Drop on a LIB in the outliner")
+                .unwrap();
+            assert!(chip.0 + text_width(&chip.2, Style::Label) <= w && chip.1 < h - 22);
+            self.pointer(w - 2, h - 2, 1, false, false);
+            assert!(self.prompt.is_none() && self.status.starts_with("Not dropped"));
+            // A same-type definition is a graft target in steel.
+            let entry = row(self, &|a| matches!(a, Action::Entry(1)));
+            self.motion(x, entry[1] + 8, false);
+            self.pointer(x, entry[1] + 8, 1, true, false);
+            let to = self.doc.archive.find("DEMO2.PT").unwrap();
+            let graft = row(self, &|a| matches!(a, Action::Entry(i) if i == to));
+            self.motion(x, graft[1] + 8, false);
+            assert_eq!(self.drop_target(), Some(DropTarget::Graft(to)));
+            assert!(fills(self, c::STEEL_DEEP).iter().any(|r| r[1] == graft[1]));
+            assert!(outlined(self, c::STEEL).contains(&(graft[1], self.left() - 1)));
+            let t = texts(self);
+            assert!(t.iter().any(|(_, _, s)| s == "Graft with DEMO2.PT"));
+            assert!(t
+                .iter()
+                .any(|(_, _, s)| s == "Release to graft DEMO.PT onto DEMO2.PT"));
+            self.pointer(x, graft[1] + 8, 1, false, false);
+            assert!(self.mode == Mode::Graft);
+            assert_eq!(self.selected, to);
+            assert_eq!(self.graft_donor.as_ref().unwrap().name, "DEMO.PT");
+            self.graft_donor = None;
+        }
+        self.libraries.clear();
+        self.width = 1280;
+        self.height = 800;
+        self.demo();
+    }
+}
 #[inline(never)]
 fn library_test_app() -> Box<App> {
     Box::new(App::new())
@@ -1005,5 +1373,7 @@ impl App {
         assert!(!a.root_collapsed);
         a.switch_library(source).unwrap();
         assert!(a.root_collapsed);
+        let mut d = library_test_app();
+        d.smoke_drag_feedback();
     }
 }

@@ -408,7 +408,7 @@ pub struct App {
     transfer_source: Option<u64>,
     transfer_move: bool,
     include_dependencies: bool,
-    resource_drag: Option<(u64, usize, [i32; 2])>,
+    resource_drag: Option<libraries_ui::ResourceDrag>,
     scroll: usize,
     field_scroll: usize,
     field_selected: usize,
@@ -1510,6 +1510,13 @@ impl App {
             }
             return;
         }
+        if self.drag_live() {
+            if matches!(key, Key::Escape) {
+                self.resource_drag = None;
+                self.status = "Drag cancelled; nothing changed".into();
+            }
+            return;
+        }
         if self.mesh_drag.is_some()
             && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
         {
@@ -2057,43 +2064,12 @@ impl App {
                 return;
             }
             self.decal_dragging = false;
-            if let Some((library, entry, start)) = self.resource_drag.take() {
-                if self.prompt.is_none()
-                    && library == self.library_id
-                    && (x - start[0]).abs() + (y - start[1]).abs() > 6
-                {
-                    let target = self
-                        .layout()
-                        .hits
-                        .into_iter()
-                        .rev()
-                        .find(|h| h.contains(x, y))
-                        .map(|h| h.action);
-                    let result = (|| {
-                        match target {
-                            Some(
-                                view::Action::Library(id)
-                                | view::Action::LibraryToggle(id)
-                                | view::Action::LibraryCategory(id, _)
-                                | view::Action::LibraryEntry(id, _),
-                            ) if id != library => {
-                                self.selected = entry;
-                                self.prepare_drop(id)?;
-                            }
-                            Some(view::Action::Entry(to))
-                                if to != entry
-                                    && extension(&self.doc.archive.entries[to].name)
-                                        == extension(&self.doc.archive.entries[entry].name) =>
-                            {
-                                self.selected = entry;
-                                self.pin_donor()?;
-                                self.select_entry(to);
-                                self.mode = Mode::Graft;
-                            }
-                            _ => {}
-                        }
-                        Ok(())
-                    })();
+            if let Some(drag) = self.resource_drag.take() {
+                let live = drag.live
+                    || (x - drag.start[0]).abs() + (y - drag.start[1]).abs()
+                        > libraries_ui::DRAG_THRESHOLD;
+                if live && self.prompt.is_none() && drag.library == self.library_id {
+                    let result = self.drop_resource(drag, x, y);
                     self.result(result);
                 }
             }
@@ -2238,7 +2214,10 @@ impl App {
         }
         if button == 3 {
             self.menu = None;
-            if self.prompt.is_some() {
+            if self.drag_live() {
+                self.resource_drag = None;
+                self.status = "Drag cancelled; nothing changed".into();
+            } else if self.prompt.is_some() {
                 self.key(Key::Escape, false, false);
             }
             return;
@@ -2258,15 +2237,22 @@ impl App {
             return;
         }
         if let Some(action) = action {
-            self.resource_drag = if x < self.left() {
-                match action {
-                    view::Action::Entry(i) => Some((self.library_id, i, [x, y])),
-                    view::Action::LibraryEntry(id, i) => Some((id, i, [x, y])),
-                    _ => None,
-                }
-            } else {
-                None
-            };
+            self.resource_drag =
+                if x < self.left() && self.prompt.is_none() && self.mode != Mode::Package {
+                    match action {
+                        view::Action::Entry(i) => Some((self.library_id, i)),
+                        view::Action::LibraryEntry(id, i) => Some((id, i)),
+                        _ => None,
+                    }
+                    .map(|(library, entry)| libraries_ui::ResourceDrag {
+                        library,
+                        entry,
+                        start: [x, y],
+                        live: false,
+                    })
+                } else {
+                    None
+                };
             self.act(action);
         } else {
             self.menu = None;
@@ -2306,12 +2292,9 @@ impl App {
             self.mouse = [x, y];
             return;
         }
-        if let Some((_, _, start)) = self.resource_drag {
-            if (x - start[0]).abs() + (y - start[1]).abs() > 6 {
-                self.status =
-                    "Drop on a LIB to review a copy or move, or on a same-type entry to graft"
-                        .into();
-            }
+        if let Some(d) = &mut self.resource_drag {
+            d.live |=
+                (x - d.start[0]).abs() + (y - d.start[1]).abs() > libraries_ui::DRAG_THRESHOLD;
         }
 
         if self.painting {

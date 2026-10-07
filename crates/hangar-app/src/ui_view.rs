@@ -863,6 +863,33 @@ impl App {
             return Ok(());
         }
 
+        // Outliner drag states over SOURCE.LIB and MYMOD.LIB.
+        if name.starts_with("drag-") {
+            let target = self.drag_fixture()?;
+            self.mode = Mode::Model;
+            let x = 70;
+            let at = |app: &App, row: libraries_ui::Row| {
+                app.library_rows()
+                    .iter()
+                    .skip(app.scroll)
+                    .position(|r| *r == row)
+                    .map(|i| app.tree_start() + i as i32 * theme::metric::ROW_H + 8)
+                    .ok_or("Row not visible")
+            };
+            let from = at(self, (self.library_id, Some(0), Some(1)))?;
+            self.motion(x, from, false);
+            self.pointer(x, from, 1, true, false);
+            let (tx, ty) = match name {
+                "drag-graft" => {
+                    let to = self.doc.archive.find("DEMO2.PT").ok_or("DEMO2.PT")?;
+                    (x + 20, at(self, (self.library_id, Some(0), Some(to)))?)
+                }
+                "drag-invalid" => (self.left() + 160, 300),
+                _ => (x + 20, at(self, (target, Some(0), None))?),
+            };
+            self.motion(tx, ty, false);
+            return Ok(());
+        }
         // "menu-N" snapshots dropdown N open over the Model workspace.
         if let Some(n) = name.strip_prefix("menu-") {
             self.mode = Mode::Model;
@@ -1187,7 +1214,8 @@ impl App {
     }
     pub(super) fn layout(&self) -> Layout {
         // Underlying controls do not show hover while a menu or dialog covers them.
-        let covered = self.menu.is_some() || self.prompt.is_some();
+        // A live entry drag draws its own target feedback instead of hover.
+        let covered = self.menu.is_some() || self.prompt.is_some() || self.drag_live();
         let mut out = Layout {
             mouse: if covered { [i32::MIN; 2] } else { self.mouse },
             pressed: self.pressed,
@@ -1247,6 +1275,7 @@ impl App {
             out.canvas.line(r, 26, r, h - 22, c::GM_1000);
         }
         self.statusbar(&mut out);
+        self.drag_ghost(&mut out);
         out.mouse = self.mouse;
         if let Some(menu) = self.menu {
             self.menu_layout(&mut out, menu);
@@ -1385,6 +1414,11 @@ impl App {
         let bottom = h - m::STATUSBAR_H - OUTLINER_FOOTER;
         let visible = self.outliner_rows();
         let indent = m::TREE_INDENT;
+        let hovered = if self.drag_live() {
+            self.outliner_row_at(self.mouse[0], self.mouse[1])
+        } else {
+            None
+        };
         for (row, (id, cat, entry)) in rows.iter().skip(self.scroll).take(visible).enumerate() {
             let active = *id == self.library_id;
             let (doc, path, root_collapsed, collapsed, filter) = if active {
@@ -1422,7 +1456,10 @@ impl App {
                 (_, Some(i)) => (false, self.external_model == Some((*id, *i))),
                 _ => (false, false),
             };
-            let fill = if is_active || is_selected {
+            let look = self.drop_row_look((*id, *cat, *entry), hovered);
+            let fill = if let Some((fill, _)) = look {
+                fill
+            } else if is_active || is_selected {
                 c::AMBER_DEEP
             } else if o.over(rect) {
                 c::GM_700
@@ -1436,6 +1473,9 @@ impl App {
             let split = if cat.is_none() { 4 + m::ICON_SM + 2 } else { 0 };
             d.rect(0, y, split, m::ROW_H, fill);
             d.rect(split, y, l - split, m::ROW_H, fill);
+            if let Some((_, edge)) = look {
+                border(d, 0, y, l, m::ROW_H, edge);
+            }
             let mid = y + (m::ROW_H - m::ICON) / 2;
             let twisty = y + (m::ROW_H - m::ICON_SM) / 2;
             let right = l - space::SPACE_2;

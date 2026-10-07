@@ -483,8 +483,18 @@ impl App {
             );
             right -= space::SPACE_4;
         }
-        // Left group: the last message, or key hints for the current mode.
+        // Left group: a live drag's release action, the last message, or key
+        // hints for the current mode.
         let x = space::SPACE_2;
+        if let Some(text) = self.drag_status() {
+            let cancel = keycap_width("Esc") + space::SPACE_1 + text_width("Cancel", Style::Hint);
+            let text = fit(&text, right - x - cancel - space::SPACE_3, Style::Hint);
+            d.styled(x, base, &text, c::INK, Style::Hint);
+            let kx = x + text_width(&text, Style::Hint) + space::SPACE_3;
+            let kx = kx + keycap(d, kx, y + (h - m::KEYCAP_H) / 2, "Esc") + space::SPACE_1;
+            d.styled(kx, base, "Cancel", c::INK_MUTED, Style::Hint);
+            return;
+        }
         let message = !self.status.starts_with("Opened ")
             && !self.status.starts_with("Ready")
             && !self.status.starts_with("Synthetic demo")
