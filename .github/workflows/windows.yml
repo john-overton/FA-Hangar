@@ -1,23 +1,58 @@
 name: Windows executables
+# Runs only on demand (Actions -> Run workflow) or when a GitHub release is
+# published. A release's tag must be v<version> from the root Cargo.toml
+# [workspace.package]; see docs/RELEASING.md.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
 permissions:
   contents: read
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read workspace version and check the release tag
+        id: version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $inPackage = $false
+          $version = $null
+          foreach ($line in Get-Content Cargo.toml) {
+            if ($line -match '^\s*\[(.+)\]\s*$') { $inPackage = ($Matches[1] -eq 'workspace.package'); continue }
+            if ($inPackage -and $line -match '^\s*version\s*=\s*"([^"]+)"') { $version = $Matches[1]; break }
+          }
+          if (-not $version -or $version -notmatch '^\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$') {
+            throw "Cannot read a version from [workspace.package] in Cargo.toml (got '$version')"
+          }
+          if ($env:GITHUB_EVENT_NAME -eq 'release' -and $env:RELEASE_TAG -ne "v$version") {
+            throw "Release tag '$($env:RELEASE_TAG)' must be 'v$version' to match Cargo.toml. Bump the version or retag."
+          }
+          Write-Host "Version $version"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "version=$version"
   windows:
+    needs: version
     runs-on: windows-2022
+    # Write access is for attaching the zips to a release; only that step
+    # reads GITHUB_TOKEN.
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: i686-pc-windows-msvc
-            package: tore-hangar-win98-me-pentium4
+            variant: win98-me-pentium4
             legacy: '--legacy'
           - target: x86_64-pc-windows-msvc
-            package: tore-hangar-win64
+            variant: win64
             legacy: ''
     steps:
       - uses: actions/checkout@v7
@@ -53,13 +88,31 @@ jobs:
       - name: Make portable package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force package | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/tore-hangar.exe package/
-          Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md package/
-          Copy-Item docs/MANUAL.md,docs/COMPATIBILITY.md,docs/WINDOWS-TEST.md package/
-          Get-FileHash package/tore-hangar.exe -Algorithm SHA256 | Format-List | Out-File package/SHA256.txt
+          $package = "tore-hangar-$env:VERSION-${{ matrix.variant }}"
+          $exe = "tore-hangar-$env:VERSION.exe"
+          New-Item -ItemType Directory -Force $package | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/tore-hangar.exe "$package/$exe"
+          Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md $package/
+          Copy-Item docs/MANUAL.md,docs/COMPATIBILITY.md,docs/WINDOWS-TEST.md $package/
+          # sha256sum format: "<hash>  <file>"
+          $hash = (Get-FileHash "$package/$exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $exe" | Out-File "$package/SHA256.txt" -Encoding ascii
+          Add-Content -Path $env:GITHUB_ENV -Value "PACKAGE=$package"
       - uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.package }}
-          path: package/
+          name: ${{ env.PACKAGE }}
+          path: ${{ env.PACKAGE }}/
           if-no-files-found: error
+      - name: Zip package and attach it to the release
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $zip = "$env:PACKAGE.zip"
+          # The folder is the zip's top level, so it unpacks into one directory.
+          Compress-Archive -Path $env:PACKAGE -DestinationPath $zip
+          gh release upload "$env:TAG" "$zip" --clobber
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
