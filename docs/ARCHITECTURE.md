@@ -109,19 +109,43 @@ original capacity. Texture/cockpit suffix families and store/icon stem pairs
 remain consistent. All output names are checked against the complete scanned
 catalog, then resolved output references are checked again against the package.
 
+In SH modules an `E2 00` pair counts as a texture operand only when
+`shape_code::Inventory` places an E2 record exactly there; the record's static
+reachability travels with the reference. The same bytes inside any other
+decoded record (face indices and texture coordinates, vertex words) are data,
+not names. Opaque spans, and modules the inventory cannot parse, keep the
+bounded byte heuristic. Retail `FA_2.LIB` shapes held 90 such phantom
+one-to-four character names (for example `B.PIC` inside a reached FC face
+record of `F14_C.SH`) that the byte heuristic had reported.
+
 Extensionless module strings with no catalog match are not invented as files.
 Unresolved names in reviewed HUD fields, such as ~F104_W in the A-10's donor
-HUD, are reported and preserved. Required explicit filenames must resolve.
-This verifies a stored resource graph, not every dynamically generated lookup
-in the original executable. A second aircraft definition in the graph is
-rejected rather than exporting an incomplete second damage family.
+HUD, are reported and preserved. A referenced name absent from the document
+and every searched catalog, including a missing damage-family member or a
+stored main/shadow/HUD root, is *unresolved in source*. The build takes an
+explicit `clone_aircraft::Policy` and refuses by default, listing each name
+and its referencing resource. `Keep` leaves the stored bytes untouched: the
+name is not renamed, copied or mapped, and it is added to the reserved name
+set so no generated private name can take it (a kept name equal to a fixed
+private name is a collision error). `Substitute(PIC)` applies only to PIC
+references: the substitute must be in a searched catalog, joins the package
+and is written into the copied resource's existing slot by the same bounded
+rewrite (BRF string, 14-byte E2 field, 13-byte HUD field) under that slot's
+capacity budget. A substitute for a name that is not unresolved is an error.
+The output audit accepts exactly the kept names as unresolved. This verifies a
+stored resource graph, not every dynamically generated lookup in the original
+executable. A second aircraft definition in the graph is rejected rather than
+exporting an incomplete second damage family.
 
-The source catalog uses directory-only reads and bounded range reads. Current
+The source catalog uses directory-only reads and bounded range reads, in the
+GUI wizard and in the `export-object`/`clone-aircraft` CLI alike. Current
 in-memory entries win, then explicitly added source LIBs; conflicting sibling
 copies require an explicit choice. Limits are 64 extra LIBs, 131072 catalog
-names, 4096 copied resources and 128 MiB decoded output. The source files can
-be up to 2 GiB without being loaded wholesale. The editor's private palette is
-named `<new ID>.PAL`; game-global palette lookup is not overridden.
+names, 4096 copied resources, 4096 unresolved references and 128 MiB decoded
+output. The source files can be up to 2 GiB without being loaded wholesale;
+opening a LIB as the edited document still loads it whole and is limited to
+128 MiB. The editor's private palette is named `<new ID>.PAL`; game-global
+palette lookup is not overridden.
 
 The References dock indexes the current document with optional directory-only
 source catalogs (64 LIBs / 131072 catalog entries). It shares the clone scanner

@@ -19,6 +19,7 @@ the game. No game data ships.
 - [Protected LIBs and saving](#protected-libs-and-saving)
 - [Command line](#command-line)
 - [Export an object and its resources](#export-an-object-and-its-resources)
+  - [Unresolved in source](#unresolved-in-source)
 - [Work across LIBs](#work-across-libs)
 - [Flight envelope table](#flight-envelope-table)
 - [Paint a livery](#paint-a-livery)
@@ -260,6 +261,8 @@ repair have CLI forms, described in
 3. Review the filename map. Hangar copies the resolved resource graph and
    assigns private names that do not collide with any scanned source entry.
    Use Back to change names, or Add source LIB when dependencies are elsewhere.
+   Names no searched LIB provides are listed under
+   [Unresolved in source](#unresolved-in-source).
 4. Click **Export new LIB**, choose a destination, and save the suggested
    `A10V1.LIB` or another new filename. The exported object opens for editing.
 5. Reopen the LIB, inspect its model/fields, and test it in Fighters Anthology.
@@ -286,12 +289,44 @@ Geometry, numeric characteristics and leaf image/audio bytes remain unchanged.
 This is a private **resource** package, not proof of complete original-game
 runtime behavior. Game procedures and dynamically generated names remain
 outside the file graph. Unresolved HUD name candidates are shown in the review
-and preserved; required missing resource filenames block export. The tool
+and preserved. SH texture names count only when they are E2 texture records;
+bytes inside face or vertex data that happen to look like a name (retail
+`F14_C.SH` has one that reads as `B.PIC`) are not references. The tool
 supports the reviewed `_S.SH` aircraft damage-family convention. Other
 recognized objects follow their stored references and known companion-file
 conventions. Opaque binary resources can be copied, but their unknown
 references are not renamed or invented. Display names change only in
 recognized identity records.
+
+### Unresolved in source
+
+A referenced name that is in neither the source LIB nor any searched LIB is
+*unresolved in source*. Some retail resources ship that way: `MIG31.PT` names
+`Y141.HUD`, and `~BGUN.PT`'s `EJECT_S.SH` shadow implies `EJECT_A.SH` to
+`EJECT_D.SH`, none of which exist in any retail LIB. The game runs without
+them, so the export can too, but only once you say so.
+
+First check whether a source LIB is missing: names from another disc LIB
+resolve as soon as that LIB is added with **Add source LIB**. Anything still
+absent is listed in the review's **Unresolved in source** section with the
+resource that references it and how it is stored (BRF string, texture record,
+HUD texture name, module filename or damage-family convention). A texture
+record that no SH traversal reaches is marked *not drawn by any pose*.
+
+- **Keep as in source** (the default) copies the referencing resource with the
+  name unchanged, byte for byte. The name is not renamed, copied or counted as
+  a private resource, and no private name may take it, so the export behaves
+  exactly like the source. A missing damage-family member stays absent.
+- **Use texture…** retargets one texture reference to a PIC instead: one already
+  in the package (the referencing shape's own skin is listed first), or **Other
+  PIC in a source LIB…** by name. The substitute joins the package under a
+  private name, written into the copied shape's fixed 13-character name slot.
+  Only the copied resource changes; the source LIB and other aircraft keep the
+  stored name. Non-texture names can only be kept.
+
+While any name is kept, **Export new LIB** stays disabled until **Export with
+N unresolved references, as in the source LIB** is ticked. Changing a row back
+to Keep asks again. Validation lists the kept names as warnings.
 
 For an externally authored shape, use **Lib > From loose SH file**. That older
 workflow requires a real SH file and retains shared stock dependencies. It is
@@ -302,7 +337,18 @@ The CLI equivalent accepts additional source LIBs explicitly:
 ```sh
 cargo run --locked -- export-object FA_2.LIB A10.PT A10V1 "My A-10" A10V1.LIB FA_1.LIB
 cargo run --locked -- export-object FA_2.LIB AIM9M.JT MYAIM9 "My missile" MYAIM9.LIB FA_1.LIB
+cargo run --locked -- export-object FA_2.LIB MIG31.PT MIG31X "My MiG-31" MIG31X.LIB FA_1.LIB --keep-unresolved
+cargo run --locked -- export-object FA_2.LIB F14.PT F14X "My F-14" F14X.LIB FA_1.LIB --substitute OLD.PIC=_F14.PIC
 ```
+
+Without a flag, an unresolved name refuses the export and lists each name with
+its resource. `--keep-unresolved` keeps every unresolved name as in the source.
+`--substitute OLD.PIC=NEW.PIC` (repeatable) retargets every reference to
+`OLD.PIC` in the copied resources to `NEW.PIC`, which must be in a searched
+LIB; a substitute for a name that is not unresolved is an error. Source LIBs
+are read like the GUI reads them, directory first and then only the payloads
+the export needs, so the 140–186 MiB disc LIBs (`FA_7.LIB`, `FA_10.LIB`,
+`FA_11.LIB` and their `B` copies) work as sources.
 
 See [the Windows test checklist](WINDOWS-TEST.md).
 
@@ -817,6 +863,9 @@ Opaque binary definitions can be exported or replaced but are not guessed.
 The References dock indexes observed BRF strings and bounded module filename
 literals, including names outside the displayed pose. It also identifies the
 reviewed PT damage family, same-name default HUD and available store icons.
+Each link names its evidence: BRF string, texture record (an SH E2 record
+confirmed against the shape's record inventory), HUD texture name, module
+filename or a naming convention.
 Use **Package > Add source LIB catalog** to locate dependencies in other LIBs;
 these catalogs are directory-only and do not load their payloads. Multiple
 external providers are reported as ambiguous. **Export report** writes the

@@ -25,6 +25,28 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   submenus listing the other open LIBs, Copy, Paste, Duplicate, Rename,
   Export entry, Export object and Delete; right-click a LIB root for Paste,
   Collapse, Package LIB and Close LIB. Unavailable items are dimmed.
+- **Fewer phantom texture names.** SH texture names count only when they are
+  E2 texture records in the shape's record inventory. Bytes in face or vertex
+  data that looked like `B.PIC` (in `F14_C.SH`), `!.PIC` (in the MiG-29
+  shapes) and similar no longer appear as references; they blocked exporting
+  32 of the 145 aircraft in `FA_2.LIB`. The References dock labels each link
+  with its evidence.
+- **Unresolved in source.** A name that no searched LIB provides no longer
+  stops **Export object** outright. The review lists each one with its
+  resource and kind (and *not drawn by any pose* for unreached texture
+  records). Keep it as in the source, byte for byte, or retarget a texture
+  reference to a PIC in the package or a source LIB. Export stays disabled
+  until **Export with N unresolved references, as in the source LIB** is
+  ticked. Missing damage-family members and HUD names take the same path, so
+  `MIG31.PT` (`Y141.HUD`) and `~BGUN.PT` (`EJECT_A.SH` to `EJECT_D.SH`) export
+  with them kept.
+- **CLI export flags and large source LIBs.** `export-object` and
+  `clone-aircraft` accept `--keep-unresolved` and repeatable
+  `--substitute OLD.PIC=NEW.PIC`, and refuse with the list of names
+  otherwise. Their source LIBs are read directory-first with bounded range
+  reads, as in the GUI, so `FA_7.LIB`, `FA_10.LIB`, `FA_10B.LIB`, `FA_11.LIB`
+  and `FA_11B.LIB` (140 to 186 MiB) work as sources instead of failing with
+  "File exceeds 128 MiB limit".
 
 ## 0.9.0
 

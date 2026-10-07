@@ -31,7 +31,8 @@ the game. No game data ships.
   saved-vs-current values, structured groups and an envelope table.
 - Graft characteristic groups from a donor definition as one undo step.
 - Export an aircraft, weapon or other object with its resources into a new,
-  privately named LIB.
+  privately named LIB. Names no LIB provides are kept as in the source, or a
+  texture is retargeted, after an explicit review.
 - View SH static poses and place hardpoints. Edit Mesh selects vertices or
   faces (click, box, part) and moves, scales, deletes, flips, duplicates,
   extrudes and adds geometry on retail aircraft, region by region.

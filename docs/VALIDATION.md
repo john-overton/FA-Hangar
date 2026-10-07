@@ -480,3 +480,62 @@ audit reports 1,158,656 bytes (32-bit, was 1,127,936) and 1,320,960 bytes
 
 The icon has not yet been seen in Explorer, a title bar or a Properties
 dialog on Windows 98/ME or current Windows; steps are in WINDOWS-TEST.md.
+
+## Unreleased unresolved-in-source exports
+
+Reproduced the report: `export-object FA_2.LIB F14.PT ...` with FA_1, FA_4B,
+FA_4D, swpatch, FA_4C and FA_3 as sources stopped at "F14_C.SH references
+missing B.PIC". `B.PIC` is not a stored reference. The scanner took the bytes
+`E2 00 42 00` at CODE offset 0x1ED5 for an E2 texture operand; they lie inside
+the 39-byte FC face record at 0x1EC6, which the static traversal reaches. The
+shape's only texture record is the E2 at 0x0070 (`_f14_c.PIC`). Across
+FA_2.LIB and swpatch.lib, the record inventory rejected 90 such E2-like
+patterns inside FC, F6, 38, 78, 82 and C8 records (tokens such as `B`, `l`,
+`!`, `9T9A`); 1,602 genuine E2 records were kept, 130 of them unreached.
+
+Census: every FA_2.LIB `.PT` (145) exported with FA_1, FA_4B, FA_4D,
+swpatch, FA_4C, FA_3, FA_7, FA_10, FA_10B, FA_11 and FA_11B as sources.
+
+- With the byte heuristic, 33 refused; 32 of them only or also because of
+  phantom names (A310, AF1, AH1, ALPH, ATL, AURORA, B707, C5, DRAK, E8, F104,
+  F111, F14, F31, F31F, F4, F5E, F5EE, IL76, M2000, MF1, MI24, MIG21F, MIG29,
+  MIG31, SEAHAR, SFR, SFRV, SU25, TU160, TU95, UH60).
+- With the inventory check, 143 export without flags. Two have names that are
+  in no retail LIB under the game folder, including FA_7/FA_10/FA_11 and the
+  LHX LIBs: `MIG31.PT` -> `Y141.HUD` (BRF string, hudName) and `~BGUN.PT` ->
+  `EJECT_A.SH` to `EJECT_D.SH` (damage-family convention from its
+  `EJECT_S.SH` shadow). Root names used to be read unconditionally, so even
+  with the inventory check both failed with "Missing referenced resource".
+  With `--keep-unresolved` all 145 export.
+- F14X (56 resources, 1,734,006 bytes) exports with no flags; `validate`
+  passes with 0 errors (one existing HUD note, `~F14_W`), and `references`
+  on `F14X_C.SH` shows only `_F14X0_C.PIC` (texture record, local).
+- MIG31X (`--keep-unresolved`, 36 resources) reopens and validates with 0
+  errors; `Y141.HUD` is a warning, and `references MIG31X.PT` shows it as a
+  BRF string not in the LIB. BGUNX (28 resources) validates with the four
+  family members as warnings. `--substitute EJECT_A.SH=_F14.PIC` is refused
+  (not a texture); `--substitute B.PIC=_F14_C.PIC` on F14 is refused (not
+  unresolved).
+- The five disc LIBs of 140 to 186 MiB are read as sources through the
+  directory index and range reads; before, the CLI failed with "File exceeds
+  128 MiB limit". The GUI wizard already indexed its sources this way and was
+  not affected; opening such a LIB as the edited document is still limited to
+  128 MiB.
+- `--clone-check` through the GUI wizard (automatic sibling sources) exports
+  and reopens F14 without acknowledgement and MIG31 after ticking the
+  checkbox.
+
+Core tests cover refusal by default, Keep preserving bytes, Substitute
+changing only the 14-byte name slot of the copy, a second aircraft and the
+source LIB keeping the stored name, kept names reserved from private names
+and fixed-name collisions, missing family members, substitute validation and
+E2 reachability. The smoke test drives a synthetic dangling texture through
+the review's hit regions: blocked, substituted from the picker, kept again,
+a typed missing PIC refused, acknowledged, exported and reopened, then the
+substitute path exported and reopened. The review was rendered at 800x600
+and 1280x800 with the picker open.
+
+Formatting, strict Clippy, all tests and the smoke test pass; the PE audit
+reports 1,219,584 bytes (32-bit, was 1,180,672) and 1,391,104 bytes (64-bit,
+was 1,346,048) with the same 60 reviewed imports. No exported aircraft has
+been flown in the original game yet; steps are in WINDOWS-TEST.md.

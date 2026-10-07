@@ -349,6 +349,19 @@ In-game checks:
 3. Right-click the EXE, **Properties**: the Version tab (98/ME) or Details tab
    shows TORE Hangar, the release version and the GPL-3.0-only notice.
 
+## Unresolved in source exports (unreleased)
+
+1. Open FA_2.LIB, select `F14.PT` and click **Export object**. The review has
+   no Unresolved in source section; export it as `F14X` and fly it: the
+   damaged (C) model and every livery texture must look as on the stock F-14.
+2. Select `MIG31.PT`, click **Export object**: the review lists `Y141.HUD`
+   (BRF string) and **Export new LIB** is disabled. Tick **Export with 1
+   unresolved reference, as in the source LIB**, export, and fly the new
+   aircraft: the cockpit should behave as the stock MiG-31's.
+3. On a synthetic or modded aircraft with a missing texture, choose **Use
+   texture…** and pick its own skin; after export the face that used the
+   missing name shows that skin in game.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window
