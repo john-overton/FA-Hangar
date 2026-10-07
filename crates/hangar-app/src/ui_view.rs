@@ -2194,11 +2194,11 @@ impl App {
             d.rect(x, y + m::EDITOR_HEADER_H - 1, w, 1, c::GM_1000);
             let title = self
                 .field_group
-                .map_or("All fields".into(), |g| format!("{} fields", g.label()));
+                .map_or("All fields", |g| grafting_ui::aspect_view(g).0);
             d.styled(
                 x + space::SPACE_3,
                 baseline(y, m::EDITOR_HEADER_H, Style::Strong),
-                &fit(&title, w - 2 * space::SPACE_3, Style::Strong),
+                &fit(title, w - 2 * space::SPACE_3, Style::Strong),
                 c::INK,
                 Style::Strong,
             );

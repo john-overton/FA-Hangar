@@ -1,7 +1,25 @@
-use super::view::{border, label_fit, text_fit, Action, Layout};
+use super::view::{border, label_fit, text_fit, Action, Icon, Layout};
 use super::*;
 use hangar_core::definition::{self, ASPECTS};
 
+/// UI name and icon of a definition aspect (noun labels, no slashes).
+pub(super) fn aspect_view(a: definition::Aspect) -> (&'static str, Icon) {
+    use definition::Aspect as A;
+    match a {
+        A::Envelope => ("Flight envelope", Icon::Flight),
+        A::Propulsion => ("Propulsion", Icon::Engine),
+        A::Handling => ("Handling", Icon::Sliders),
+        A::Weights => ("Weights", Icon::Measure),
+        A::Damage => ("Damage", Icon::Damage),
+        A::Hardpoints => ("Hardpoint values", Icon::Hardpoint),
+        A::Systems => ("Systems", Icon::Info),
+        A::Seeker => ("Seeker", Icon::Eye),
+        A::Motor => ("Motor", Icon::Engine),
+        A::Warhead => ("Warhead", Icon::Weapon),
+        A::Movement => ("Movement", Icon::Move),
+        A::Engagement => ("Engagement and firing", Icon::Weapon),
+    }
+}
 pub(super) struct Donor {
     pub path: String,
     pub name: String,
@@ -269,50 +287,100 @@ impl App {
             );
         }
     }
+    /// Flight inspector: field groups as a list, BRF issues as notices, and
+    /// the graft entry points.
     pub(super) fn definition_inspector(&self, o: &mut Layout) {
-        let (r, w) = (self.right(), self.width - self.right());
-        o.canvas.label(r + 12, 44, "DEFINITION GROUPS", c::INK);
-        o.button(
-            [r + 10, 65, w - 20, 24],
-            "All fields / raw",
-            Action::FieldGroup(usize::MAX),
-            self.field_group.is_none(),
-        );
-        let mut y = 99;
-        for (i, group) in ASPECTS.iter().enumerate() {
-            if !self.brf.as_ref().is_some_and(|b| {
-                b.fields
-                    .iter()
-                    .any(|f| definition::aspect(&f.label) == Some(*group))
-            }) {
-                continue;
+        use theme::{metric as m, space};
+        use widgets::{baseline, pane, Btn, Tone};
+        self.inspector_header(o, None);
+        let mut s = self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, 0);
+        if self.pane(o, &mut s, pane::GROUPS, "Field groups", Icon::Sliders) {
+            let mut groups: Vec<(Option<definition::Aspect>, &str, Icon, usize)> = vec![(
+                None,
+                "All fields",
+                Icon::Sliders,
+                self.brf.as_ref().map_or(0, |b| b.fields.len()),
+            )];
+            for group in ASPECTS {
+                let n = self.brf.as_ref().map_or(0, |b| {
+                    b.fields
+                        .iter()
+                        .filter(|f| definition::aspect(&f.label) == Some(group))
+                        .count()
+                });
+                if n > 0 {
+                    let (label, icon) = aspect_view(group);
+                    groups.push((Some(group), label, icon, n));
+                }
             }
-            o.button(
-                [r + 10, y, w - 20, 24],
-                group.label(),
-                Action::FieldGroup(i),
-                self.field_group == Some(*group),
-            );
-            y += 29;
-        }
-        if let Some(b) = &self.brf {
-            for issue in b.issues.iter().take(3) {
-                label_fit(&mut o.canvas, r + 12, y + 22, w - 24, issue, c::AMBER);
-                y += 26;
+            for (group, label, icon, n) in groups {
+                let Some(rect) = o.wide(&mut s, m::ROW_H) else {
+                    continue;
+                };
+                let [x, y, w, h] = rect;
+                let on = self.field_group == group;
+                let fill = if on {
+                    c::AMBER_DEEP
+                } else if o.over(rect) {
+                    c::GM_700
+                } else {
+                    c::GM_800
+                };
+                let d = &mut o.canvas;
+                widgets::notched(d, rect, Some(fill), None);
+                d.icon(
+                    x + 4,
+                    y + 2,
+                    icon,
+                    if on { c::AMBER } else { c::INK_MUTED },
+                    fill,
+                );
+                let count = format!("{n}");
+                let cx = x + w - space::SPACE_2 - text_width(&count, Style::ValueSm);
+                d.styled(
+                    cx,
+                    baseline(y, h, Style::ValueSm),
+                    &count,
+                    c::INK_MUTED,
+                    Style::ValueSm,
+                );
+                let tx = x + 4 + m::ICON + space::SPACE_2;
+                d.styled(
+                    tx,
+                    baseline(y, h, Style::Label),
+                    &fit(label, cx - space::SPACE_2 - tx, Style::Label),
+                    if on { c::AMBER_BRIGHT } else { c::INK },
+                    Style::Label,
+                );
+                o.hit(
+                    rect,
+                    Action::FieldGroup(group.map_or(usize::MAX, |g| {
+                        ASPECTS.iter().position(|a| *a == g).unwrap()
+                    })),
+                );
             }
         }
-        o.button(
-            [r + 10, self.height - 86, w - 20, 24],
-            "Use as graft donor",
-            Action::PinDonor,
-            false,
-        );
-        o.button(
-            [r + 10, self.height - 54, w - 20, 24],
-            "Graft characteristics",
-            Action::Mode(Mode::Graft),
-            false,
-        );
+        o.panel_end(&mut s);
+        if let Some(b) = self.brf.as_ref().filter(|b| !b.issues.is_empty()) {
+            if self.pane(o, &mut s, pane::ISSUES, "Diagnostics", Icon::Warning) {
+                for issue in b.issues.iter().take(3) {
+                    o.stack_notice(&mut s, Tone::Warn, issue);
+                }
+            }
+            o.panel_end(&mut s);
+        }
+        if self.pane(o, &mut s, pane::GRAFT, "Graft", Icon::Graft) {
+            for (title, action) in [
+                ("Use as graft donor", Action::PinDonor),
+                ("Graft characteristics", Action::Mode(Mode::Graft)),
+            ] {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.button_ex(rect, Btn::new(title), action);
+                }
+            }
+        }
+        o.panel_end(&mut s);
+        o.stack_end(s);
     }
 }
 

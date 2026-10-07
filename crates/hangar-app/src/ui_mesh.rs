@@ -475,13 +475,26 @@ impl App {
         assert_eq!(rows.len(), 3);
         let index = rows[0][4];
         let original = a.doc.archive.bytes().unwrap();
+        // Envelope cells are NumberFields: a click types, a drag scrubs.
+        let t = super::widgets::NumberTarget::Field(index);
         let hit = a
             .layout()
             .hits
             .into_iter()
-            .find(|h| matches!(h.action,Action::Field(i) if i==index) && h.rect[1] < a.dock_y())
+            .find(|h| matches!(h.action, Action::Number(n) if n == t) && h.rect[1] < a.dock_y())
             .unwrap();
-        a.click(hit.rect[0] + 4, hit.rect[1] + 4, 1, true);
+        let (x, y) = (hit.rect[0] + hit.rect[2] / 2, hit.rect[1] + hit.rect[3] / 2);
+        let before = a.number_spec(t).unwrap().value;
+        a.motion(x, y, false);
+        a.click(x, y, 1, true);
+        a.motion(x - 10, y, false);
+        a.click(x - 10, y, 1, false);
+        assert_eq!(a.number_spec(t).unwrap().value, before - 5);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        a.click(x, y, 1, true);
+        a.click(x, y, 1, false);
+        assert!(a.prompt.is_some(), "Click types an envelope value");
         a.key(Key::Char('a'), true, false);
         for c in "125".chars() {
             a.key(Key::Char(c), false, false);
@@ -490,7 +503,13 @@ impl App {
         assert_eq!(a.brf.as_ref().unwrap().fields[index].value, "125");
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
-        a.act(Action::EnvelopeStep(1));
+        let next = a
+            .layout()
+            .hits
+            .into_iter()
+            .find(|h| matches!(h.action, Action::EnvelopeStep(1)))
+            .unwrap();
+        a.click(next.rect[0] + 4, next.rect[1] + 4, 1, true);
         assert_eq!(a.envelope_selected, 1);
         a.doc.replace(0, model::demo_shape()).unwrap();
         a.doc.mark_saved();

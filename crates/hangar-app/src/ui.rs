@@ -2342,7 +2342,7 @@ impl App {
             && self.mouse[0] < self.right()
             && self.mouse[1] < self.dock_y()
         {
-            let visible = ((self.dock_y() - 26 - 164) / 26).max(1) as usize;
+            let visible = self.envelope_visible();
             self.envelope_scroll = (self.envelope_scroll as i32 - delta * 3)
                 .clamp(0, 20usize.saturating_sub(visible) as i32)
                 as usize;
