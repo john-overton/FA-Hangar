@@ -829,3 +829,69 @@ state, so `App` stays 2,680 bytes. No Win32 API was added; the PE audit
 reports 1,561,600 bytes (32-bit) and 1,767,424 bytes (64-bit) with the same
 60 reviewed imports. Remapped textures have not been loaded in the original
 game yet; steps are in WINDOWS-TEST.md.
+
+## Unreleased FA crash fixes: texture layout and loader limits
+
+2026-10-07. The user's `TopGun.LIB` crashed FA in the F-5's external view
+(access violation at 0x4CAF0D, the per-row pointer lookup in polygon texture
+setup) and FA crashed at startup writing the resource table (0x478F69) with
+Hangar backups in the folder. Evidence is FA.EXE disassembly and the retail
+LIBs (read-only); nothing from them is committed.
+
+- **Texture census.** The textures retail shapes draw on textured faces
+  (model reader): 1,063 in FA_2.LIB and 7 in SWPATCH.LIB, 1,070 in all; every
+  one is kind 0, 256 wide, row table `64 + 256 r`, no palette, span pointer 0
+  with capacity `10 × (rows + 1)`, length `64 + 260 × rows`. FA_2.LIB's 1,170
+  SH texture-record links name 1,160 PICs; 1,156 have that layout and four
+  are drawn only by sprite records (`_MOON.PIC` 41 × 41 for MOON.SH,
+  `CATB.PIC`/`CATF.PIC` 640 × 480, `SOLDIER.PIC` 320 × 200). 25 FA_2 shapes do
+  not decode in the model reader; the check falls back to their record
+  inventory. `validate` reports no texture-layout error on FA_1, FA_2, FA_3,
+  FA_4B, FA_4C, FA_4D or SWPATCH (FA_7, FA_10, FA_10B, FA_11 and FA_11B
+  exceed the 128 MiB archive limit and were not opened).
+- **TopGun.LIB repair** (a copy in `/tmp/claude-1000/crashfix/`; the file in
+  Downloads was not written and its SHA-256 is unchanged). `validate`: 14
+  errors, `F5EV00.PIC` to `F5EV0D.PIC`, each "64 pixels wide, not 256, no
+  row-offset table, embedded 768-byte palette. Drawn by F5EV.SH". Header
+  before: kind 0, 64 × 64, row table none, palette 768 B, span size 0. Their
+  embedded palette equals FA_2.LIB's `PALETTE.PAL` at all 256 indices (used
+  indices 58 and 147). `repair-textures TopGun.LIB TopGun-repaired.LIB
+  FA_2.LIB` rewrote all 14: kind 0, 256 × 64, row table at 16,448 (256 B),
+  palette 0 B, span size 650, "embedded palette equals the game palette;
+  indices kept". All 18 SH entries are byte-identical (F5EV.SH compared
+  extracted), `validate` on the result reports 0 errors (the 15 HUD-name
+  warnings were there before), and the result is
+  `/tmp/claude-1000/crashfix/TopGun-repaired.LIB` (1,087,729 bytes; repaired
+  PICs are stored uncompressed). `--texture-repair-check TopGun.LIB F5EV.SH
+  FA_2.LIB`: 14 errors before, the Package repair left every SH byte and the
+  textured orthographic viewport pixels unchanged, no texture-layout error
+  after, one undo restored the archive and redo the repair.
+- **Game folder.** A folder of links to the installed retail LIBs and
+  FA.EXE: saving `TopGun.LIB` there reports "Game folder: 6 of 20 LIBs, 7,614
+  of 9,950 resources" (7,520 retail entries, 93 TopGun entries, FA.EXE).
+  With a copy of `TopGun.LIB.bak` beside it the CLI refused the save:
+  "TOPGUN.LIB.BAK is 14 characters; FA's LIB name slot holds 13", 7 LIBs and
+  7,707 resources.
+
+Core tests cover the reasons `retail_texture_check` gives, conversion
+keeping every texel at its UV (and the rendered colors) with the palette
+equal, different (nearest color, flagged) or missing (flagged), span holes,
+refusals of wider and glyph PICs, every generated panel sheet in the retail
+layout, the Package error and repair (SH unchanged, `.ORG` converted, sprite
+texture ignored, one undo), backup and stage names without `.LIB`, the
+99-backup limit, and the game-folder counts (20 LIBs, 9,950 resources, 13
+characters, legacy backups, an existing target and its `.BAK`). The smoke
+test, through rendered controls at 800x600 and 1280x800, runs Package checks
+on the demo's legacy DEMO.PIC, clicks **Repair textures for FA** (textured
+viewport and DEMO.SH unchanged, the button gone, undo exact), checks the
+Assign texture warning, and saves into a synthetic game folder (a temp folder
+on Linux, scratch names in the current folder on Windows) with FA.EXE and a
+legacy `HGFOLD.LIB.bak`: the loader-limit dialog, Enter not confirming,
+Cancel writing nothing, Save anyway saving with the warning, and a later save
+without the legacy file creating `HGFOLD.BAK` with no dialog.
+
+Formatting, strict Clippy (also for both Windows targets), 165 core tests
+and the smoke test pass. `App` is 2,688 bytes. No Win32 API was added; the
+PE audit reports 1,592,832 bytes (32-bit) and 1,807,360 bytes (64-bit) with
+the same 60 reviewed imports. The repaired LIB has not been loaded in the
+original game yet; steps are in WINDOWS-TEST.md.

@@ -302,6 +302,16 @@ link/unlink. Failures preserve the old bytes; failed rollback reports both
 recovery paths. This is recoverable replacement, not a crash-atomic transaction.
 No background backup pruning or retail unlock switch is provided.
 
+Companion names come from `save::companion`: the stage is `<STEM>.TMP` (then
+`.T01`..`.T99`) and the backup `<STEM>.BAK` (then `.B01`..`.B99`), where
+`<STEM>` is the path without its final `.LIB`. They never contain `.LIB`,
+because FA loads any such file as a LIB (below); a destination with `.LIB`
+before its end is refused for the same reason. Before a GUI save,
+`saving::game_folder` lists the destination folder with the existing
+`list_dir` (FindFirstFileA/FindNextFileA) and reads seven header bytes of each
+`.LIB`-named file with `read_range`; no Win32 import was added.
+`save::game_folder` then models the folder after the save.
+
 ## Multi-library transaction boundaries
 
 Opening a LIB adds a document; path normalization reselects an already-open
@@ -341,7 +351,9 @@ The original 0.7 shape_edit.rs added a bounded panel continuation writer
 opaque FC polygon site with a relative jump to an appended E2/FC sequence,
 restores its known E0/E2 material selector, and returns to the old successor.
 All original instruction RVAs remain stable. New byte UVs use dominant-axis
-planar projection. The private 64x64 PIC embeds the loaded palette and starts
+planar projection. The private PIC started as a 64x64 raster with the loaded
+palette embedded; that layout crashes FA, and sheets are now retail textures
+(see [FA loader limits and the SH texture layout](#fa-loader-limits-and-the-sh-texture-layout)),
 filled with the old polygon color. Special shading and unresolved inherited
 material state are refused, as are overlapping relocations, exhausted virtual
 space and out-of-range relative jumps.
@@ -956,12 +968,66 @@ table of `64 + row × 256`, at most 1,280 rows. FA.EXE indexes that table
 while setting up textured polygons (`mov ecx,[ecx+ebp*4]` at 0x4CAF0D with a
 0x500 row bound); a generated 64 × 64 sheet without it crashed the game in
 the external view. `is_retail_texture` checks the layout on every remap.
-Generated panel sheets still use their own writer; their fix is separate.
+Generated panel sheets use the same writer (see below).
 
 App side, the panel selection outside Edit Mesh is `EditState::mesh_faces`
 (face file offsets), the same list Edit Mesh's face select uses, pruned on
 refresh to the offsets the shown model draws; `selected_face` stays the
 active panel for Panel lock and the Paint panel.
+
+## FA loader limits and the SH texture layout
+
+Two crashes in FA.EXE with Hangar output set hard rules; the evidence is
+FA.EXE disassembly and the retail LIBs.
+
+**Texture layout.** Polygon texture setup bounds the V row by 0x500 and then
+reads a per-row pointer at 0x4CAF0D (`mov ecx,[ecx+ebp*4]`, the table from the
+PIC header's row offset at 34). A PIC with no row table (row offset and size
+0) faults there. A census of the textures retail SH textured faces draw (by
+the model reader's textured faces: 1,063 in FA_2.LIB plus 7 in SWPATCH.LIB,
+1,070 in all) found one layout: kind 0, width 256, `row_size = 4 × height`,
+`row[r] = 64 + 256 r`, no palette (size at 22 is 0), span pointer 0 with the
+unused capacity `10 × (height + 1)`, length `64 + 260 × height`. E2 records
+also name four PICs no textured face draws (`_MOON.PIC` 41 × 41, `CATB.PIC`
+and `CATF.PIC` 640 × 480, `SOLDIER.PIC` 320 × 200, each with a row table at
+its own stride and no palette), used by sprite records.
+
+`picture::retail_texture` writes that layout and `is_retail_texture` checks
+it; `retail_texture_check` adds the reasons, and `to_retail_texture` converts
+a PIC of at most 256 columns: every pixel keeps its (u, v) (the height is
+unchanged, so V-flipped UVs still address the same row), extra columns repeat
+the row's last pixel, span holes take a neighbouring opaque pixel, the
+palette is dropped, and indices are mapped to the nearest game colour only
+where the embedded palette differs from the game palette (`PaletteCheck`).
+Generated panel sheets (`shape_edit::panels`) are `retail_texture` sheets 256
+wide and as tall as the planar panel size, with the panel's UVs unchanged in
+the sub-rectangle at the left edge; the face's colour byte was always a
+game-palette index, so dropping the old embedded copy of the base PAL
+changes no index. `originals::panel_sheet` recognizes both the legacy and the
+retail sheets so Restore texture and the Eraser keep the panel colour.
+
+`validation::texture_layout_problems` takes each SH's E2 texture links from
+the dependency index (operands confirmed against the record inventory), and
+reports a local PIC that fails `retail_texture_check` when a textured face of
+that SH draws it; when the model reader cannot decode the shape, any textured
+FC record in its inventory counts, and when neither reader can, the E2
+record alone does. Retail LIBs report none. `repair_textures` converts those
+PICs and their stored originals (when not already retail) in one transaction
+and never touches an SH.
+
+**Loader limits.** `_LibStartUp` enumerates `*.*` in the game folder and
+skips directories (the find wrapper at 0x479E10 tests attribute 0x10). It
+upper-cases each `name.ext` and skips names it already loaded (14-byte slots
+at 0x54A530). A name that contains `.LIB` (`strstr` against 0x4F7FD4) is
+opened and kept as a LIB when its header is `EALIB`, otherwise closed; its
+name is copied into the slot without a length check, its handle stored at
+0x54A648 and the count at 0x54A698 incremented: 20 handles fit before the
+count. Each directory entry becomes a 35-byte record in the global resource
+table (the write at 0x478F69); a file without `.LIB` becomes one record. The
+table is allocated as 0x5505A bytes, 9,950 records. `save::MAX_LIBS`,
+`MAX_RESOURCES` and `MAX_LIB_NAME` hold these limits and `save::game_folder`
+counts a folder the same way. The installed retail LIBs hold 7,520 entries
+(FA_1 2,001, FA_2 5,405, FA_4B 77, FA_4D 22, SWPATCH 15).
 
 ## Identity, rename and duplicate ownership
 

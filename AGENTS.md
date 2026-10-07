@@ -79,6 +79,15 @@ committing.
   `sort_by`) can also pull in a large stack buffer; prefer `sort_unstable*`. After growing `App`,
   `Model` or other large structs, run
   `cargo build --release --locked --target x86_64-pc-windows-msvc`.
+- **SH textures Hangar writes must use the retail texture layout (kind 0,
+  256 wide, row table, no palette)**: `picture::retail_texture`, checked by
+  `is_retail_texture`/`retail_texture_check`. FA.EXE dereferences the row
+  table while drawing textured faces; anything else crashes the game.
+- **FA's loader limits.** FA loads every file in its folder whose upper-cased
+  name contains `.LIB` (and starts with `EALIB`) as a LIB: at most 20 LIBs,
+  9,950 resources (all LIB entries plus every other file) and 13-character
+  LIB names (`save::MAX_LIBS`, `MAX_RESOURCES`, `MAX_LIB_NAME`). Never write a
+  companion file whose name contains `.LIB`.
 - **No game data in the repo.** `.gitignore` excludes LIB/SH/PT/EXE files;
   never commit retail payloads, extracted resources or screenshots of them.
   `.local/` is a git-ignored scratch area for local probes.

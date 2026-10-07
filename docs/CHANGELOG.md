@@ -7,6 +7,29 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Fix: FA crashed drawing Hangar's generated panel textures** (for example
+  the external view of a painted F-5). Generated panel sheets were raw PICs
+  with an embedded palette and no row table, which FA's texture mapper reads
+  through. They are now retail SH textures: 256 wide, as tall as the panel,
+  with the panel at the left edge, a row table and no palette.
+- **Package checks flag textures FA cannot map** as errors ("Would crash FA's
+  texture mapper") with the reasons and the shapes that draw them. **Repair
+  textures for FA** (Package) and `repair-textures INPUT.LIB NEW_OUTPUT.LIB
+  [PALETTE]` rewrite them in the retail layout without changing any SH: each
+  pixel keeps its UV, the palette is dropped (colors are mapped only when it
+  differs from the game palette, and the status says so), and stored
+  originals follow. One undo step. **Assign texture…** warns when the PIC it
+  assigns is not an FA texture.
+- **Fix: FA crashed at startup with Hangar backups in its folder.** FA loads
+  every file whose name contains `.LIB` as a LIB, including `X.LIB.bak`.
+  Backups are now `<STEM>.BAK`, then `<STEM>.B01` to `.B99`, and the save
+  stage `<STEM>.TMP`; no companion name contains `.LIB`.
+- **Game folder checks on save.** Saving into a folder with `FA.EXE` or a
+  retail LIB counts what FA would load: at most 20 LIBs, 9,950 resources in
+  all and 13-character LIB names. The status shows the totals, old
+  `X.LIB.bak` backups get a warning to move them, and a save past a limit
+  asks for **Save anyway** (the CLI refuses it with the numbers).
+
 - **Select panels outside Edit Mesh.** In the Model viewport and the Paint
   workspace's model preview, click picks a panel and Shift+click adds or
   removes one; Esc or a click on empty space clears. With the brush,

@@ -460,6 +460,24 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    aircraft is drawn (the new PIC has the retail texture layout). Repeat
    with **Blank**.
 
+## FA crash fixes: textures and the game folder (unreleased)
+
+1. Copy `TopGun-repaired.LIB` (made by `repair-textures` from the user's
+   `TopGun.LIB`) into a test copy of the game folder in place of
+   `TopGun.LIB`, and move every `*.LIB.bak*` file out of that folder.
+   Launch FA: it must start. Fly the F-5 and switch to the external view:
+   it must not crash, and the generated panels show their colors as before.
+2. Open `TopGun.LIB` in Hangar, run Package checks: 14 ERROR rows "Would
+   crash FA's texture mapper". Click **Repair textures for FA**: the rows go,
+   the model looks the same, Ctrl+Z brings them back.
+3. Create a new generated panel (paint an untextured panel) on a copy of an
+   aircraft, save, and view it in FA's external view.
+4. Save a custom LIB into the game folder twice: `MYMOD.BAK`, then
+   `MYMOD.B01` appear; the status ends with "Game folder: … of 20 LIBs, … of
+   9,950 resources". Put a copy named `MYMOD.LIB.bak` there and save again:
+   the dialog names the 14-character LIB name; Cancel writes nothing, Save
+   anyway saves and the status says to move it out. Remove it afterwards.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

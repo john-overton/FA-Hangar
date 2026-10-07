@@ -17,6 +17,9 @@ the game. No game data ships.
   - [Workspaces](#workspaces)
 - [What works](#what-works)
 - [Protected LIBs and saving](#protected-libs-and-saving)
+- [Game limits](#game-limits)
+  - [The game folder](#the-game-folder)
+  - [SH textures](#sh-textures)
 - [Command line](#command-line)
 - [Export an object and its resources](#export-an-object-and-its-resources)
   - [Unresolved in source](#unresolved-in-source)
@@ -240,6 +243,86 @@ create-new. Retail name protection does not affect reading from game discs.
 
 A packaging error leaves edits in memory and displays its cause. The app writes
 only when explicitly asked.
+
+## Game limits
+
+Fighters Anthology crashes, rather than reporting an error, when its folder or
+a texture breaks one of the limits below. They come from FA.EXE itself;
+[ARCHITECTURE.md](ARCHITECTURE.md#fa-loader-limits-and-the-sh-texture-layout)
+gives the addresses.
+
+### The game folder
+
+At startup FA reads **every file in its folder** (subfolders are skipped). It
+upper-cases each name; a name that contains `.LIB` and whose file starts with
+`EALIB` is opened as a LIB, and every other file is one resource. So
+`swpatch.lib`, `MYMOD.LIB.bak` or `OLD.LIB.copy` all load as LIBs.
+
+| Limit | Value | What breaks |
+| --- | --- | --- |
+| LIB files | 20 | FA keeps 20 LIB handles; a 21st overruns them |
+| Resources (every LIB entry plus every other file) | 9,950 | FA's resource table holds 9,950; the installed retail LIBs use about 7,520 |
+| LIB file name | 13 characters | the name is copied into a 14-byte slot; `TOPGUN.LIB.BAK` (14) overflows it |
+
+When you save a LIB into a folder that holds `FA.EXE` or a retail LIB name,
+Hangar counts what FA would load after the save (the saved LIB, its new
+`.BAK`, every other LIB and file) and the status ends with, for example,
+"Game folder: 6 of 20 LIBs, 7,614 of 9,950 resources". Old Hangar backups
+named `X.LIB.bak`, `X.LIB.bak.1` or `X.LIB.tmp` get a warning: "FA loads
+TopGun.LIB.bak as a LIB; move it out of the game folder". If the save would
+break a limit, a dialog lists each one with the numbers; **Cancel** writes
+nothing and **Save anyway** saves. The CLI refuses such a save and prints the
+numbers. Every backup (`MYMOD.BAK`, `MYMOD.B01`, …) in the game folder is a
+resource too, so keep few of them there.
+
+### SH textures
+
+Every texture a retail shape draws on its textured faces (all 1,070 across
+the retail LIBs) has one layout, and FA's texture mapper depends on it:
+
+- kind 0, a raw raster (not span-coded);
+- exactly 256 pixels wide, 1 to 1,280 rows;
+- a row-offset table after the raster (`64 + row × 256`);
+- no embedded palette: pixels are indices into the game palette.
+
+A texture without the row table crashes FA as soon as a face using it is
+drawn (the external view of an aircraft, for example). Hangar writes this
+layout for every SH texture it creates: generated panel sheets, **Remap
+selected panels from view…** and **Repair textures for FA**. Clones and
+exports copy retail bytes. **Assign texture…** can point faces at any PIC in
+the LIB; when that PIC is not an FA texture the status says so.
+
+**Package checks** report each PIC that a textured face draws and that is
+not in this layout as an **ERROR**, "Would crash FA's texture mapper", with
+the reasons (for example "64 pixels wide, not 256, no row-offset table,
+embedded 768-byte palette") and the shapes that draw it. Retail LIBs report
+none: `MOON.SH`'s 41-wide `_MOON.PIC` is drawn as a sprite, not by a
+textured face. While such errors are listed, **Repair textures for FA**
+appears in the Package output column. It rewrites each of those PICs, and its
+stored original `X.ORG` when that has the old layout too, so Restore texture
+and the Eraser keep working:
+
+- the PIC is widened to 256 columns with every existing pixel at the same
+  (u, v), so the SH UVs stay valid and no SH changes; the new columns repeat
+  each row's last pixel (a generated sheet's panel color);
+- the row table is added and the embedded palette dropped. Indices are kept
+  when the embedded palette equals the loaded base PAL; where it differs,
+  the used colors are mapped to the nearest base PAL color and the status
+  says so. Without a base PAL the indices are kept and the status says they
+  are unverified.
+
+The repair is one undo step. A PIC wider than 256 pixels cannot keep its UVs
+and is reported, not changed. The CLI form writes a new LIB and prints each
+texture's header before and after:
+
+```sh
+cargo run --locked -- repair-textures MYMOD.LIB MYMOD2.LIB FA_2.LIB
+```
+
+The last argument (a PAL, or a LIB with `PALETTE.PAL`) is the game palette
+when the input has no `PALETTE.PAL`. `--texture-repair-check MYMOD.LIB
+F5EV.SH FA_2.LIB` runs the Package repair through the app and checks that
+every SH byte and the textured viewport stay the same, with undo and redo.
 
 ## Command line
 
@@ -581,14 +664,19 @@ Generated panel sheets follow the panel. The polygon is projected onto its
 own plane, its longer side along the sheet's width, and the sheet takes the
 panel's proportions at the shape's own texel density (the texels per unit its
 textured faces already use; 3 per unit when it has none), so pixels are square
-on the model and a 4:1 panel gets a 4:1 sheet. Each side is kept between 8 and
-256 pixels, scaling both sides together. With **Panel lock** off, flat panels
+on the model and a 4:1 panel gets a 4:1 panel area. Each side is kept between
+8 and 256 pixels, scaling both sides together. The PIC itself is an FA texture
+(see [SH textures](#sh-textures)): 256 pixels wide and as tall as the panel
+area, which sits at its left edge; the rest is filled with the panel's color.
+It carries no palette, so the base PAL must be loaded to paint it. With
+**Panel lock** off, flat panels
 of the same color that share an edge and lie in one plane get one sheet sized
 to all of them, so a stroke crosses them without a seam; with Panel lock on,
 only the panel under the brush is converted. The status names the sheet and
-its size, for example "Created F1800.PIC, 42 × 8, mapped to 2 coplanar
-panels". Sheets made by earlier versions stay 64 × 64; nothing is converted
-retroactively.
+its size, for example "Created F1800.PIC, a 256 × 8 FA texture with a 42 × 8
+panel area, mapped to 2 coplanar panels". Sheets made by earlier versions
+(64 × 64 or sized to the panel, with a palette and no row table) crash FA;
+Package checks flag them and **Repair textures for FA** converts them.
 
 Automatic mapping supports ordinary opaque polygons with a known material
 state. Special shading, unresolved state, insufficient CODE space or jump
@@ -1237,9 +1325,8 @@ texture clones within a LIB and an exact Restore texture keep their stored
 bytes and compression flag. **Export object** writes its copies uncompressed.
 
 Every texture a retail FA_2.LIB shape uses is 256 pixels wide (heights vary
-from 11 to 1,037). Generated panel sheets are 8 to 256 pixels wide, sized to
-the panel; like the earlier 64 × 64 sheets, a width other than 256 has not
-yet been confirmed in the original game (see [WINDOWS-TEST.md](WINDOWS-TEST.md)).
-Assigned textures can be any PIC in the LIB. Textures made by **Remap
-selected panels from view…** always have the retail layout: 256 wide, up to
-1,280 rows, a row table and no palette.
+from 11 to 1,037), with a row table and no palette; see
+[SH textures](#sh-textures). Generated panel sheets and textures made by
+**Remap selected panels from view…** or **Repair textures for FA** always
+have that layout. Assigned textures can be any PIC in the LIB; Package checks
+flag one FA cannot map.
