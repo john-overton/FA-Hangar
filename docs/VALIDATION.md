@@ -1145,6 +1145,60 @@ is in the boxed `EditState`). No Win32 API was added; the PE audit reports
 reviewed imports. No hidden, reassigned or paintable marking has been
 loaded in the original game.
 
+## Unreleased handle precision, shown vertices, Add vertex, split and connect
+
+2026-10-07. Linux only; nothing here has been loaded in the original game
+yet ([WINDOWS-TEST.md](WINDOWS-TEST.md)). Renders and checks ran on a copy
+in `/tmp/claude-1000/vfix/` of the user's `TOPGUNFX.LIB`; the file in
+Downloads was not written and nothing from it is committed.
+
+- Reproduced the report first: `--native-snapshot … F5EV.SH
+  edit-vertices@800` drew the handles on a regular 24 px screen lattice
+  (at 250% about 7 px at 1280x800 and 11 px at 1920x1080); handles were up
+  to 30 px off their drawn corners at 800%. Cause: `hp_project` and the
+  wireframe turned unscaled source points through the integer camera, so
+  camera space was truncated to whole units before zooming, while the
+  raster scales by 256 first. After the shared `ViewFrame` every handle is
+  within 1 px of its rasterized corner at 100%, 250% and 800% (1280x800 and
+  1920x1080), and the renders show the handles on the panel corners, the
+  hidden ones gone, and X-ray showing every corner.
+- `--edit-check` on F5EV.SH and F14.SH: add vertex at a face centre and an
+  edge midpoint, split a face at its centre (3 and 5 triangles) and connect
+  two corners each pass with undo restoring the bytes. Splitting at an edge
+  midpoint is refused on both because a face sharing that edge is shaded
+  per vertex; F14's first four-corner face repeats a corner, which the cut
+  refuses as a face with no area.
+- Renders (`vertex-add`, `vertex-placed`, `vertex-split`,
+  `vertex-split-edge`, `vertex-connect`): the preview on an F-5 wing panel's
+  trailing-edge midpoint labelled **Edge midpoint**, the vertex placed
+  there, a fuselage panel split into 4 triangles, three faces sharing an
+  edge split into 10 triangles, and one face cut in two.
+- Core tests: barycentric location and UV interpolation (inside, outside
+  clamped onto an edge, tilted 3D faces), snap targets and the in-plane rule
+  (midpoint, centre, corner, out of reach, off the plane), on-edge tests,
+  split fans with retail normals and centres, textured splits (UV 15.75
+  rounds to 16, texture kept), a split edge shared by two faces with no
+  crack, a sliver edge whose UV follows the edge, every split refusal,
+  diagonal cuts with copied UVs and normals, and the adjacent, out-of-range,
+  concave and no-area refusals.
+- Smoke test at 800x600 and 1280x800 through rendered hit regions: handles
+  within 1 px of their raster corners and on a face pixel at three zooms
+  with each corner panned to the centre; a selected face's amber handles on
+  its corners at 800%; hidden vertices draw nothing until X-ray; the Add
+  vertex button, hover preview, edge-midpoint snap and label, Alt bypass,
+  click placement at the exact midpoint with undo, Esc, right-click and an
+  empty-space click; Shift+click splitting a face into one triangle per
+  edge and the Mesh menu's Split edge, each undone to the exact bytes;
+  Connect through J, the Mesh menu, the inspector button and the viewport
+  menu, each undone, and its adjacent, single-vertex (disabled with its
+  badge) and unshared refusals. Hit geometry is checked in each state.
+
+Formatting, strict Clippy (also for both Windows targets), 216 core tests
+and the smoke test pass. `App` stays 2,744 bytes (the tool state is boxed
+in the edit state). No Win32 API was added; the PE audit reports 1,988,096
+bytes (32-bit) and 2,221,056 bytes (64-bit) with the same 60 reviewed
+imports.
+
 ## Unreleased transform gizmo, magnetic snap and X-ray
 
 2026-10-07. Linux only; the gizmo has not been used on Windows or in the

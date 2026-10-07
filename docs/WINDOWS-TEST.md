@@ -585,6 +585,29 @@ Use a copy of a LIB with an editable aircraft shape (or the synthetic demo).
    become pickable; Alt+Z again turns it off and no window menu opens.
 6. Repeat at 800x600: the X-ray and magnet toggles are in the shading menu.
 
+## Vertex handles, Add vertex, split and connect (unreleased)
+
+Use a copy of a LIB with an editable aircraft shape (the F-5's F5EV.SH, or
+the synthetic demo).
+
+1. Edit Mesh, vertex select, Solid shading. Zoom in to about 250% and 800%:
+   every handle sits on a panel corner, none floats in empty space, and
+   corners behind the aircraft show no handle. Alt+Z shows them all.
+2. **Mesh > Add vertex**. Hover a wing panel: it is outlined and a ring
+   follows the pointer on it. Near an edge's middle the ring doubles and
+   reads **Edge midpoint**; hold Alt and it moves freely. Click: one vertex
+   is added and selected; Ctrl+Z removes it.
+3. Turn Add vertex on again and Shift+click inside a flat or textured panel:
+   the status reads **Split 1 face into N triangles**; the panel looks the
+   same, its texture unbroken. Ctrl+Z restores it. Esc and right-click turn
+   the tool off.
+4. Select two opposite corners of a four-corner panel and press **J**: the
+   status reads **Connected 2 vertices**. Two neighbouring corners give
+   **Already connected by an edge of face …**.
+5. Save the split and connected shape to a new custom LIB and fly it in the
+   game: the panels draw where they did, with their textures, and nothing
+   flickers or vanishes. Report any difference.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

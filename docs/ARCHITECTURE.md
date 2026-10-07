@@ -803,6 +803,45 @@ qualifies a target. Vertex occlusion reuses the shaded raster's face and
 depth buffers (`render_model` now keeps its depth buffer), cached by a hash
 of the view and the shown points.
 
+One projection serves every view: `model::ViewFrame` (camera, zoom, pan,
+framing bounds, view size) scales points by `VIEW_FIXED` (256) before the
+camera turn and yields 1/16-px positions (`project16`); the shaded raster
+takes its corners from the same frame scaled to the raster size
+(`raster16`), and `hp_project` (overlays, picking, box select, gizmo, snap
+targets, stations), the wireframe and the station cursor (`unproject16`)
+use it at the viewport size. Earlier the overlays and the wireframe turned
+unscaled points, which truncated camera space to whole source units: on a
+small shape at high zoom every handle snapped to a screen lattice. A vertex
+gets a handle in shaded views only when a face using it has pixels in the
+face buffer and the vertex is on such a face's drawn boundary (within one
+raster pixel) or passes the depth test at its pixel (two raster pixels of
+depth, `ViewFrame::units_per_px`).
+
+## Add vertex, split and connect
+
+`hangar_core::surface` locates a view position in a face's fan
+`(0, j, j + 1)` with integer edge-function barycentrics (the renderer's and
+Bake's fan) and interpolates corners or UVs with the weights; outside every
+triangle (a border pixel) the least-negative triangle is used with negative
+weights clamped. Snap targets are the corners, rounded edge midpoints and
+the truncated corner average (the stored face centre), chosen by
+`gizmo::snap_search` under the view-plane constraint along the face normal.
+
+`shape_geometry::replace_faces` replaces up to eight faces of one frame, one
+after another, each through `append_geometry` with itself as host and
+`Base::Remove`: its record becomes a same-size jump into a continuation that
+draws the new faces (and, for a split, a one-vertex `82` buffer) where it
+was drawn, so material state and frame are inherited. CODE offsets of
+untouched records do not move (continuations go before the import tail),
+which lets each step find the next face; the whole result is then verified
+against the source (coverage, bindings, every other face unchanged).
+`split_faces` plans a fan around the point, skipping the edge it lies on
+(within one unit: a rounded midpoint may be 0.87 off the line), with the
+point's UV from barycentrics or, on an edge, along the edge (exact on
+slivers). `connect_corners` plans the two polygons either side of a
+diagonal, refused unless both are convex with the face's winding and have
+area in the face's dominant plane.
+
 ## Texture originals boundary
 
 `hangar-core/src/originals.rs` owns stored originals. The companion of `X.PIC`

@@ -7,6 +7,41 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Vertex handles sit on their corners at every zoom.** In Edit Mesh the
+  handles (and picking, box select, the gizmo pivot, snap targets and the
+  other overlay markers) turned whole source units through the camera
+  before zooming, so on a small shape such as the F-5 at 250% they sat on a
+  regular screen lattice, some in empty space, while the shaded view drew
+  the corners elsewhere. The raster, the wireframe and every overlay now
+  share one integer projection with 1/256-unit precision; a handle is
+  within a pixel of its drawn corner at 100%, 250% and 800%.
+- **Only shown vertices get handles.** In Solid and Textured shading a
+  vertex shows when a face using it is drawn and nothing nearer hides it;
+  hidden vertices and those outside the view draw nothing (they were dim
+  dots). X-ray still shows every corner of a drawn face. Box select, picking
+  and **L** follow what is shown; **L** in vertex select also works on the
+  face under the pointer.
+- **Add vertex is a click tool.** Hover a panel to preview the point under
+  the pointer, snapped with the magnet to the panel's corners, edge
+  midpoints or centre (shown as Corner, Edge midpoint or Face centre; Alt
+  places freely); click to add the vertex there, selected and ready for F or
+  G. It replaces Add vertex at median.
+- **Split face at point and Split edge at midpoint.** Shift+click with Add
+  vertex (or the Split face tool) replaces the panel by a fan of triangles
+  around the new vertex, keeping its colour and texture with interpolated
+  UVs; a point on an edge also splits the panels sharing it. Split edge at
+  midpoint does this for two selected vertices.
+- **Connect vertices (J).** Two selected corners of a panel that are not
+  neighbours cut it along that diagonal into two faces, as Blender's J;
+  from the Mesh menu, the inspector, the right-click menu or J. Adjacent
+  corners, corners with no shared panel and concave cuts are refused with
+  the reason.
+- A refused Edit Mesh operation now shows its reason directly under the
+  Mesh panel. `--edit-check` also adds vertices, splits faces and connects
+  vertices; snapshot states take an `@ZOOM` suffix and `vertex-add`,
+  `vertex-placed`, `vertex-split`, `vertex-split-edge` and `vertex-connect`
+  states show the new tools.
+
 - **CI runs on demand or when a release is published, and names builds by
   version.** The Windows workflow no longer runs on every push and pull
   request. It reads the version from `Cargo.toml`, requires a release tag of

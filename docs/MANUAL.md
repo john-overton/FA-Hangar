@@ -42,6 +42,7 @@ the game. No game data ships.
 - [Hide, move and paint runtime markings](#hide-move-and-paint-runtime-markings)
 - [Ship, ground and animation tools](#ship-ground-and-animation-tools)
 - [Edit shapes](#edit-shapes)
+  - [Add vertex, split and connect](#add-vertex-split-and-connect)
   - [Vertex handles and X-ray](#vertex-handles-and-x-ray)
   - [Transform gizmo](#transform-gizmo)
   - [Magnetic snap](#magnetic-snap)
@@ -1359,7 +1360,10 @@ offset.
 | Duplicate, then move | **Shift+D**, then a move as for G | **Mesh > Duplicate** |
 | Extrude, then move | **E**, then a move as for G | **Mesh > Extrude** |
 | Make a face from the selected vertices | **F** | **Mesh > Make face** |
-| Add a vertex at the median | | **Mesh > Add vertex at median** |
+| Add a vertex on a face, where you click | | **Mesh > Add vertex** (a click tool) |
+| Split a face into a fan around a point | Shift+click with **Add vertex** | **Mesh > Split face at point** |
+| Split the faces at an edge's midpoint | | **Mesh > Split edge at midpoint** (two vertices selected) |
+| Connect two vertices across a face | **J** | **Mesh > Connect vertices** |
 | Give the selected faces a copy of their PIC | | **Mesh > Clone texture for selected faces** |
 | Draw the selected faces from another PIC | | **Mesh > Assign texture…** |
 | Return faces to the shape's texture | | **Mesh > Use shape texture** |
@@ -1387,10 +1391,68 @@ offset.
   face through them. They take free vertex slots below 640, the largest slot
   count of any retail shape.
 
+### Add vertex, split and connect
+
+**Add vertex** (Mesh menu or the inspector's Mesh panel; the button stays
+amber while the tool is on) places a vertex on a panel where you click:
+
+- Hover a face: it is outlined in amber and a ring marks the 3D point under
+  the pointer, on that face. The face is the one the viewport draws under
+  the pointer; the point comes from the face's corners by integer
+  barycentrics over the same triangle fan the renderer draws. The status
+  bar gives the coordinates and the face.
+- With **Snap to vertices** on, the point snaps to the face's **Corner**s,
+  **Edge midpoint**s and **Face centre** (the average of its corners, as
+  the stored face centre) when one is within the snap reach, by the same
+  in-plane rule as [vertex drags](#magnetic-snap): the target nearest the
+  pointer's point, measured in the face's plane. The ring doubles and the
+  kind is written beside it. Hold **Alt** to place freely.
+- Click: the vertex is stored in the face's part frame and drawn where the
+  face is drawn, as one undo step. It becomes the selection, ready for
+  **F** (make a face with other selected vertices) or **G**. A new vertex no
+  face uses yet keeps its handle while it is selected.
+- **Shift+click** (or **Mesh > Split face at point**, where a plain click
+  splits and Shift+click only adds) replaces the face by a fan of
+  triangles around the new vertex: one per edge, with the face's colour,
+  shading and texture, the point's UV interpolated by the same
+  barycentrics, and each triangle's normal and centre computed as retail
+  faces store them. A point on an edge (an edge midpoint snap, or within one
+  unit of the edge) skips that edge's triangle and splits every face that
+  shares the edge too, so no crack opens.
+- **Esc** or right-click turns the tool off; clicking empty space places
+  nothing.
+
+**Split edge at midpoint** (Mesh menu) does the same for two selected
+vertices that are an edge of a face: every face with that edge splits around
+its midpoint.
+
+**Connect vertices** (**J**, the Mesh menu, the inspector's **Connect**
+button or the viewport's right-click menu) joins two selected vertices.
+SH shapes have no free-standing edges, only faces, so, as Blender's J
+(connect vertex path), it cuts every face that has both vertices as
+corners that are not neighbours along that diagonal into two faces. Both
+keep the face's style and texture, each corner keeps its UV, and the
+normals are computed as retail faces store them. It is disabled (the menu
+says **Select 2 vertices**) unless exactly two vertex positions are
+selected in vertex select, and it refuses, changing nothing:
+
+- two neighbouring corners: **Already connected by an edge of face …**;
+- no face with both as corners: **No panel has both vertices as corners.
+  Select 3 or more vertices and press F to make a face**;
+- a diagonal outside the face, or one that would leave a concave face or a
+  face with no area.
+
+The original face is removed and the new faces drawn in its place through
+the same appended-geometry writer as new faces (its record becomes a
+same-size jump into them), so every rule under [Refusals and
+limits](#refusals-and-limits) applies; per-vertex shaded faces are refused
+because new faces cannot carry per-vertex shading. Each operation is one
+undo step. See [Shape geometry](#shape-geometry) for the limits.
+
 ### Vertex handles and X-ray
 
-In vertex select every corner of a drawn face has a square handle with a
-dark keyline, so it reads on light and dark surfaces:
+In vertex select every shown corner has a square handle with a dark keyline,
+so it reads on light and dark surfaces:
 
 - unselected handles are ink, 7 px; where another handle sits within 6 px
   they draw at 5 px so dense meshes stay readable;
@@ -1402,11 +1464,20 @@ A click picks the handle nearest the pointer within 9 px; when handles
 overlap, the vertex nearer the viewer wins. Only corners of faces drawn in
 the current pose get handles, and copies of a vertex at the same point and
 screen position (the same corner stored in several frames) share one.
+Handles, picking, box select, the gizmo, snap targets and every marker are
+placed by the same integer projection as the shaded and wireframe views, at
+1/256 of a source unit before zoom, so a handle sits on the pixel where its
+corner is drawn at any zoom.
 
-In **Solid** and **Textured** shading, vertices behind faces are small dim
-dots: they are not picked, boxed or used by **L**. **X-ray** (**Alt+Z**, the
-header button beside the shading control, or the shading menu) makes them
-pickable and boxable, as in Blender. In **Wireframe** every vertex counts.
+In **Solid** and **Textured** shading a handle shows only for a vertex the
+view shows: a face using it has pixels in the shaded view, and the vertex
+is not hidden behind another face (it lies on the drawn edge of such a
+face, or nothing nearer is drawn at its pixel). Hidden vertices and
+vertices outside the view draw nothing and are not picked, boxed or used by
+**L**; **L** in vertex select also works on the face under the pointer.
+**X-ray** (**Alt+Z**, the header button beside the shading control, or the
+shading menu) shows every corner of a drawn face, pickable and boxable, as
+in Blender. In **Wireframe** every corner counts.
 
 ### Transform gizmo
 
@@ -1452,8 +1523,9 @@ one undo step through the same writers as **G**, **R** and **S**.
   snapping](#transform-gizmo-and-snapping).
 
 The right-click menu (idle, in the Edit Mesh viewport) holds **Move**,
-**Rotate**, **Scale**, **Snap to vertices**, **Pivot: Median**, **Pivot:
-Individual** and **Cancel**. During a drag right-click cancels instead.
+**Rotate**, **Scale**, **Connect vertices**, **Snap to vertices**, **Pivot:
+Median**, **Pivot: Individual** and **Cancel**. During a drag right-click
+cancels instead, and with **Add vertex** on it turns the tool off.
 
 ### Magnetic snap
 
@@ -1628,6 +1700,9 @@ folds the other way in the viewport. Whether the game agrees is listed in
 | Vertex / face select | 1 / 3 in Edit Mesh (numpad 1 and 3 still change the view) |
 | Select in Edit Mesh | Click, Shift+click, A, B or drag for a box (Ctrl removes), L for the part under the pointer |
 | Delete / flip / duplicate / extrude / make face | X or Delete / Alt+N / Shift+D / E / F |
+| Add a vertex on a face / split the face there | Mesh > Add vertex (or the inspector), then click / Shift+click a face; Alt places without snapping; Esc or right-click ends the tool |
+| Split faces at an edge's midpoint | Select the edge's two vertices, Mesh > Split edge at midpoint |
+| Connect two vertices across a face | Select the two vertices, J (or Mesh > Connect vertices, the inspector's Connect, or the right-click menu) |
 | Preview a moving part's state | Parts: Pose preview buttons and fields (never saved) |
 | Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |
 | Transform gizmo mode | Edit Mesh tool strip (Select, Move, Rotate, Scale), header control, or right-click in the viewport |
@@ -1841,6 +1916,11 @@ panel](#fixing-a-stretched-panel) for panels whose texture smears.
 | Appended faces draw in the order of their host face | BSP placement of new faces is not recomputed. | Choose a host drawn where the new faces should appear. |
 | Records never grow in place; a byte face centre that would overflow is refused | Growing a record would move every later byte. | Smaller moves, or delete and add the face. |
 | Same-size in-place edits (move, flip, delete as a same-size stub, scale of a writable face) | Have none of the appending limits above. | |
+| There are no free-standing edges: **Connect vertices** cuts a face, it never draws a line | An SH draws faces only (FC records); an edge exists only as the side of a face, so a two-vertex "edge" has nothing to be stored as. | Select 3 or more vertices and press **F** to make a face. |
+| **Split face**, **Split edge** and **Connect vertices** refuse per-vertex shaded faces | The new faces would need per-vertex shading, and new slots carry no F6 vertex records. | Split or connect a flat or textured neighbour. |
+| **Split** and **Connect** edit at most eight faces at a time, all in one part | Each face gets its own appended continuation, all in one undo step; faces of different parts have different local frames for the new vertex. | Work part by part. |
+| A point within one unit of an edge counts as on that edge | Coordinates are whole source units, so a rounded edge midpoint can sit up to 0.87 units off the line; treating it as on the edge keeps the neighbours joined. A point placed one unit inside a face near an edge is split as if on the edge. | Zoom in and place the point further inside, or use **Alt** for a free point. |
+| **Connect vertices** refuses a diagonal outside the face and any cut that leaves a concave face or one with no area | The game draws each face as one convex polygon; a concave face would draw wrongly. Retail faces that repeat a corner leave a half with no area. | Add a vertex (Shift+click to split) and connect smaller pieces. |
 
 The model view is a static-pose projection, not the game's full drawing
 interpreter. Resource code is never executed. OBJ exports drop materials and
@@ -1859,7 +1939,10 @@ animation and cannot be imported back as a lossless SH edit.
 | A target must lie within the reach (8 px at the current zoom, in source units) of the drag's line or plane | Snapping by screen distance alone would pull a vertex onto one far behind or in front of it that only looks close. | Orbit until the target lies in the drag plane, or drag an arrow towards it. |
 | An arrow snap is exact only when the target lies exactly on the arrow's line | Only the arrow's axis is free, so the other two coordinates keep their start values; the status says how far off the target is. | Use a square or the centre to land on all coordinates. |
 | On Linux, Alt+drag may move the window instead | Many X11 window managers take Alt+drag for themselves before Hangar sees it. | Turn **Snap to vertices** off, or change the window manager's modifier. On Windows a bare Alt never opens the system menu. |
-| Hidden vertices in **Solid** and **Textured** are judged from the shaded raster (at most 512 px wide) | A vertex counts as shown when the raster around it is empty, is drawn by a face with a corner at that point, or is no more than 2 source units deeper; vertices near silhouettes or on very thin parts can be judged either way. | **X-ray** (Alt+Z), or **Wireframe**. |
+| Hidden vertices in **Solid** and **Textured** are judged from the shaded raster (at most 512 px wide) | A vertex shows when a face using it has pixels in that raster and the vertex is not occluded: a pixel within one raster pixel of it belongs to such a face, or nothing nearer than it (with two raster pixels of depth tolerance at the current zoom) is drawn at its pixel. A face too small to cover a raster pixel centre at this zoom hides its corners unless another shown face shares them; corners on very thin parts can be judged either way. | Zoom in, **X-ray** (Alt+Z), or **Wireframe**. |
+| A new vertex no face uses shows its handle only while it is selected | Retail shapes store many vertices no drawn face uses; showing them all would put handles in empty space. | Make a face with it (**F**) before deselecting it, or undo. |
+| **Add vertex** needs an orthographic view in **Wireframe** | The point is interpolated in screen space, which matches the face only in a flat projection (Solid and Textured are always orthographic). | Press 5, or switch to Solid. |
+| The added point is as precise as the pointer's pixel | The point is the face under the pixel's centre; at low zoom one pixel spans several source units, and the shaded view picks the face at its raster resolution (at most 512 px wide). | Zoom in, or let it snap to a corner, an edge midpoint or the centre. |
 | A click selects one stored vertex even when copies of it share the point | The copies are separate stored vertices (in different frames or buffers), and Hangar edits only what was selected. | Box select takes every copy. |
 | Plain vertex drags need an orthographic view | They place the vertex under the pointer, which needs a flat projection. | Press 5, or use the gizmo, which works in perspective. |
 
