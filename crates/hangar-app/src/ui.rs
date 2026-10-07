@@ -304,6 +304,8 @@ enum PromptKind {
     CloneId,
     CloneTitle,
     CloneReview,
+    /// Type a source PIC for one Unresolved in source review row.
+    CloneTexture(usize),
     Recolor,
     BaseColor(bool),
     /// Colour for new faces in Edit Mesh (the base colour dialog).
@@ -441,6 +443,7 @@ pub struct App {
     clone_sources: Vec<String>,
     clone_title: String,
     clone_scroll: usize,
+    clone_unresolved: cloning_ui::Unresolved,
     suggested_output: Option<String>,
     variant_shape: Vec<u8>,
     variant_id: String,
@@ -594,6 +597,7 @@ impl App {
             clone_sources: Vec::new(),
             clone_title: String::new(),
             clone_scroll: 0,
+            clone_unresolved: Default::default(),
             suggested_output: None,
             variant_shape: Vec::new(),
             variant_id: String::new(),
@@ -1577,6 +1581,19 @@ impl App {
         if self.prompt.is_some() {
             match key {
                 Key::Escape => {
+                    // The texture picker and the typed-texture prompt return to the review.
+                    if self.clone_unresolved.pick.take().is_some() {
+                        return;
+                    }
+                    if self
+                        .prompt
+                        .as_ref()
+                        .is_some_and(|p| matches!(p.kind, PromptKind::CloneTexture(_)))
+                    {
+                        self.clone_review_prompt();
+                        self.status = "Texture unchanged".into();
+                        return;
+                    }
                     if self.prompt.as_ref().is_some_and(|p| {
                         matches!(p.kind, PromptKind::File(FileAction::CloneSource))
                     }) {
@@ -1772,22 +1789,36 @@ impl App {
                         },
                         PromptKind::CloneTitle => {
                             self.clone_title = p.value.clone();
+                            // Sources or names may have changed: choices start over.
+                            self.clone_unresolved = Default::default();
                             match self.build_clone() {
                                 Ok(package) => {
                                     self.clone_draft = Some(package);
                                     self.clone_scroll = 0;
-                                    self.prompt = Some(Prompt {
-                                        kind: PromptKind::CloneReview,
-                                        title: "Export object: review private resources".into(),
-                                        value: String::new(),
-                                        axis: 0,
-                                    });
+                                    self.clone_review_prompt();
                                     Ok(())
                                 }
                                 Err(e) => Err(e),
                             }
                         }
+                        PromptKind::CloneTexture(row) => {
+                            let r = self.clone_choose(row, Some(p.value.clone()));
+                            if r.is_ok() {
+                                self.clone_review_prompt();
+                            }
+                            r
+                        }
                         PromptKind::CloneReview => (|| {
+                            if !self.clone_exportable() {
+                                return Err(format!(
+                                    "Tick Export with {}, or choose textures for them",
+                                    view::count(
+                                        self.clone_kept(),
+                                        "unresolved reference",
+                                        "unresolved references"
+                                    )
+                                ));
+                            }
                             if let Some(package) = self.clone_draft.take() {
                                 let count = package.archive.entries.len();
                                 self.install_library(
@@ -2355,6 +2386,9 @@ impl App {
             .as_ref()
             .is_some_and(|p| matches!(p.kind, PromptKind::CloneReview))
         {
+            if self.clone_unresolved_wheel(delta) {
+                return;
+            }
             let len = self.clone_draft.as_ref().map_or(0, |p| p.mapping.len());
             self.clone_scroll = (self.clone_scroll as i32 - delta * 3)
                 .clamp(0, len.saturating_sub(1) as i32) as usize;

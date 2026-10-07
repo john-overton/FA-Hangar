@@ -71,6 +71,16 @@ pub(super) enum Action {
     Apply,
     Cancel,
     CloneBack,
+    /// Export review, Unresolved in source row: keep the stored name.
+    CloneKeep(usize),
+    /// Open or close the texture picker for a row.
+    ClonePick(usize),
+    /// Picker item: retarget the open row to this package PIC.
+    CloneTexture(usize),
+    /// Picker item: type the name of another source PIC.
+    ClonePickOther,
+    /// Acknowledge exporting with kept unresolved names.
+    CloneAck,
     BrowserUp,
     BrowserRoots,
     BrowserPick(usize),
@@ -225,6 +235,15 @@ impl App {
         }
         if !matches!(a, Action::Filter) {
             self.filter_focus = false;
+        }
+        if !matches!(
+            a,
+            Action::ClonePick(_)
+                | Action::CloneTexture(_)
+                | Action::ClonePickOther
+                | Action::MenuPad
+        ) {
+            self.clone_unresolved.pick = None;
         }
         match a {
             Action::BrowserUp => {
@@ -381,6 +400,54 @@ impl App {
                     ),
                     axis: 0,
                 });
+            }
+            Action::CloneKeep(row) => {
+                let r = self.clone_choose(row, None);
+                self.result(r);
+            }
+            Action::ClonePick(row) => {
+                self.clone_unresolved.pick =
+                    (self.clone_unresolved.pick != Some(row)).then_some(row);
+            }
+            Action::CloneTexture(i) => {
+                if let Some(row) = self.clone_unresolved.pick {
+                    let pick = self.clone_picks(row).into_iter().nth(i);
+                    let r = match pick {
+                        Some(name) => self.clone_choose(row, Some(name)),
+                        None => Err("No such texture".into()),
+                    };
+                    self.result(r);
+                }
+            }
+            Action::ClonePickOther => {
+                if let Some(row) = self.clone_unresolved.pick.take() {
+                    let target = self
+                        .clone_draft
+                        .as_ref()
+                        .and_then(|p| p.unresolved.get(row))
+                        .map_or(String::new(), |u| u.target.clone());
+                    self.prompt = Some(Prompt {
+                        kind: PromptKind::CloneTexture(row),
+                        title: format!("Texture for {target}: a PIC in this LIB or a source LIB"),
+                        value: String::new(),
+                        axis: 0,
+                    });
+                }
+            }
+            Action::CloneAck => {
+                self.clone_unresolved.ack = !self.clone_unresolved.ack;
+                self.status = if self.clone_unresolved.ack {
+                    format!(
+                        "{} kept as in the source LIB; Export new LIB is available",
+                        count(
+                            self.clone_kept(),
+                            "unresolved reference",
+                            "unresolved references"
+                        )
+                    )
+                } else {
+                    "Export waits for the unresolved references to be acknowledged".into()
+                };
             }
             Action::CloneBack => {
                 if self
@@ -1164,6 +1231,12 @@ impl App {
                 value: String::new(),
                 axis: 0,
             });
+            return Ok(());
+        }
+        if name == "clone-unresolved" {
+            // Synthetic dangling texture; the picker is open on its row.
+            self.smoke_ghost_review("GHJET");
+            self.clone_unresolved.pick = Some(0);
             return Ok(());
         }
         self.mode = match name {

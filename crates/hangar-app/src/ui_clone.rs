@@ -3,8 +3,22 @@ use super::*;
 use alloc::collections::BTreeSet;
 use hangar_core::{
     archive::{self, IndexedEntry},
-    clone_aircraft,
+    clone_aircraft::{self, Resolution},
 };
+/// Review choices for names no searched LIB provides. The draft is built with
+/// every such name kept; Export stays disabled until `ack` while any is kept.
+#[derive(Default)]
+pub(super) struct Unresolved {
+    /// (referencing resource, unresolved name) -> substitute PIC.
+    pub substitutes: BTreeMap<(String, String), String>,
+    pub ack: bool,
+    /// Review row whose texture picker is open.
+    pub pick: Option<usize>,
+    pub scroll: usize,
+}
+/// Rows of the review's Unresolved in source list shown at once.
+const UNRESOLVED_ROWS: usize = 3;
+const PICKS: usize = 12;
 struct Source {
     path: String,
     entries: Vec<IndexedEntry>,
@@ -41,6 +55,7 @@ impl App {
     pub(super) fn begin_clone(&mut self) {
         self.clone_draft = None;
         self.clone_scroll = 0;
+        self.clone_unresolved = Unresolved::default();
         self.clone_sources.clear();
         self.browser = None;
         let stem = self.name().split('.').next().unwrap_or("NEW");
@@ -143,7 +158,12 @@ impl App {
             self.name(),
             &self.variant_id,
             &self.clone_title,
-            &Default::default(),
+            // Built with every unresolved name kept so the review can list
+            // them; the Export button stays gated on the acknowledgement.
+            &clone_aircraft::Policy {
+                keep_unresolved: true,
+                substitutes: self.clone_unresolved.substitutes.clone(),
+            },
             |name| {
                 if let Some(i) = self.doc.archive.find(name) {
                     return self.doc.archive.entries[i].read();
@@ -243,7 +263,14 @@ impl App {
             c::INK,
             Style::Label,
         );
-        let head = by + m::ROW_H + space::SPACE_2;
+        let mut head = by + m::ROW_H + space::SPACE_2;
+        let mut picker = None;
+        if !package.unresolved.is_empty() {
+            let (used, anchor) = self.clone_unresolved_section(o, [bx, head, bw]);
+            head += used + space::SPACE_2;
+            picker = anchor;
+        }
+        let d = &mut o.canvas;
         d.rect(bx, head, bw, m::ROW_H, c::GM_900);
         let nx = bx + bw / 2;
         for (hx, label) in [(bx + 8, "FROM DONOR"), (nx, "IN NEW LIB")] {
@@ -329,10 +356,287 @@ impl App {
             Some(
                 Btn::new("Export new LIB")
                     .with_icon(Icon::Package)
-                    .primary(),
+                    .primary()
+                    .enabled(self.clone_exportable()),
             ),
             Action::Apply,
         );
+        // The texture picker floats over the dialog; its hits are checked first.
+        if let (Some(row), Some((px, py))) = (self.clone_unresolved.pick, picker) {
+            let picks = self.clone_picks(row);
+            let mut items: Vec<widgets::Item> = picks
+                .iter()
+                .enumerate()
+                .map(|(i, name)| {
+                    widgets::Item::new(name, Action::CloneTexture(i)).icon(Icon::Image)
+                })
+                .collect();
+            if !items.is_empty() {
+                items.push(widgets::Item::sep());
+            }
+            items.push(widgets::Item::new(
+                "Other PIC in a source LIB\u{2026}",
+                Action::ClonePickOther,
+            ));
+            o.menu(px, py, &items, Action::MenuPad);
+        }
+    }
+    /// Unresolved in source: one row per name with its resource, evidence and
+    /// choice, then the acknowledgement. Returns the height used and, when the
+    /// texture picker is open, where it hangs.
+    fn clone_unresolved_section(
+        &self,
+        o: &mut Layout,
+        [x, y, w]: [i32; 3],
+    ) -> (i32, Option<(i32, i32)>) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, subhead, Btn, Check};
+        let Some(package) = &self.clone_draft else {
+            return (0, None);
+        };
+        let list = &package.unresolved;
+        let rh = m::BUTTON_H + space::SPACE_1;
+        let first = self
+            .clone_unresolved
+            .scroll
+            .min(list.len().saturating_sub(UNRESOLVED_ROWS));
+        let shown = list.len().min(UNRESOLVED_ROWS);
+        subhead(&mut o.canvas, x, y, w, "Unresolved in source");
+        if list.len() > shown {
+            let range = format!("{}\u{2013}{} of {}", first + 1, first + shown, list.len());
+            let rw = text_width(&range, Style::ValueSm);
+            o.canvas.styled(
+                x + w - rw,
+                baseline(y, m::ROW_H, Style::ValueSm),
+                &range,
+                c::INK_MUTED,
+                Style::ValueSm,
+            );
+        }
+        let mut anchor = None;
+        let mut ry = y + m::ROW_H;
+        for (i, u) in list.iter().enumerate().skip(first).take(shown) {
+            o.canvas.rect(
+                x,
+                ry,
+                w,
+                rh,
+                if (i - first) % 2 == 0 {
+                    c::GM_950
+                } else {
+                    c::GM_900
+                },
+            );
+            o.canvas.icon(
+                x + space::SPACE_1,
+                ry + (rh - m::ICON) / 2,
+                Icon::Warning,
+                c::AMBER,
+                c::GM_950,
+            );
+            let keep = Btn::new("Keep as in source");
+            let substitute = match &u.resolution {
+                Resolution::Substitute(name) => name.as_str(),
+                Resolution::Keep => "Use texture\u{2026}",
+            };
+            let pick = Btn::new(substitute).with_icon(Icon::Image);
+            let items = [
+                (
+                    keep.on(u.resolution == Resolution::Keep),
+                    Action::CloneKeep(i),
+                ),
+                (
+                    pick.on(matches!(u.resolution, Resolution::Substitute(_))),
+                    Action::ClonePick(i),
+                ),
+            ];
+            let cw = if u.texture() {
+                Layout::segmented_width(&items)
+            } else {
+                0
+            };
+            let tx = x + space::SPACE_1 + m::ICON + space::SPACE_2;
+            let name_w = text_width(&u.target, Style::Value).min(w / 3);
+            o.canvas.styled(
+                tx,
+                baseline(ry, rh, Style::Value),
+                &fit(&u.target, name_w, Style::Value),
+                c::INK,
+                Style::Value,
+            );
+            let mut detail = format!("in {} \u{b7} {}", u.resource, u.evidence.label());
+            if u.drawn() == Some(false) {
+                detail.push_str(" \u{b7} not drawn by any pose");
+            }
+            let dx = tx + name_w + space::SPACE_2;
+            let right = x + w - space::SPACE_1 - cw;
+            if u.texture() {
+                o.canvas.styled(
+                    dx,
+                    baseline(ry, rh, Style::Label),
+                    &fit(&detail, right - space::SPACE_2 - dx, Style::Label),
+                    c::INK_MUTED,
+                    Style::Label,
+                );
+                let rect = [right, ry + (rh - m::BUTTON_H) / 2, cw, m::BUTTON_H];
+                o.segmented(rect, &items);
+                if self.clone_unresolved.pick == Some(i) {
+                    // At natural width the second member starts after the first.
+                    anchor = Some((right + 1 + items[0].0.width(), rect[1] + rect[3] + 1));
+                }
+            } else {
+                // Only texture names can be retargeted; others are kept or absent.
+                let state = if u.evidence == hangar_core::dependencies::Evidence::Convention {
+                    "Absent, as in source"
+                } else {
+                    "Kept as in source"
+                };
+                let sw = text_width(state, Style::Label);
+                o.canvas.styled(
+                    x + w - space::SPACE_2 - sw,
+                    baseline(ry, rh, Style::Label),
+                    state,
+                    c::INK_MUTED,
+                    Style::Label,
+                );
+                o.canvas.styled(
+                    dx,
+                    baseline(ry, rh, Style::Label),
+                    &fit(&detail, x + w - 2 * space::SPACE_2 - sw - dx, Style::Label),
+                    c::INK_MUTED,
+                    Style::Label,
+                );
+            }
+            ry += rh;
+        }
+        let kept = self.clone_kept();
+        if kept > 0 {
+            let label = format!(
+                "Export with {}, as in the source LIB",
+                view::count(kept, "unresolved reference", "unresolved references")
+            );
+            o.checkbox(
+                x,
+                ry + space::SPACE_1,
+                &label,
+                if self.clone_unresolved.ack {
+                    Check::On
+                } else {
+                    Check::Off
+                },
+                Action::CloneAck,
+                true,
+            );
+            ry += m::ROW_H + space::SPACE_1;
+        }
+        (ry - y, anchor)
+    }
+    pub(super) fn clone_review_prompt(&mut self) {
+        self.prompt = Some(Prompt {
+            kind: PromptKind::CloneReview,
+            title: "Export object: review private resources".into(),
+            value: String::new(),
+            axis: 0,
+        });
+    }
+    /// Wheel over the Unresolved in source rows scrolls them, not the renames.
+    pub(super) fn clone_unresolved_wheel(&mut self, delta: i32) -> bool {
+        use theme::{metric as m, space};
+        let len = self.clone_draft.as_ref().map_or(0, |p| p.unresolved.len());
+        let h = (self.height - 48).min(660);
+        let top = (self.height - h) / 2 + view::DIALOG_HEAD + space::SPACE_3;
+        let bottom = top
+            + 2 * m::ROW_H
+            + space::SPACE_2
+            + UNRESOLVED_ROWS as i32 * (m::BUTTON_H + space::SPACE_1);
+        if len <= UNRESOLVED_ROWS || self.mouse[1] < top || self.mouse[1] >= bottom {
+            return false;
+        }
+        let first = self.clone_unresolved.scroll.min(len - UNRESOLVED_ROWS) as i32;
+        self.clone_unresolved.scroll =
+            (first - delta).clamp(0, (len - UNRESOLVED_ROWS) as i32) as usize;
+        true
+    }
+    /// Unresolved references the draft keeps (not substituted).
+    pub(super) fn clone_kept(&self) -> usize {
+        self.clone_draft.as_ref().map_or(0, |p| {
+            p.unresolved
+                .iter()
+                .filter(|u| u.resolution == Resolution::Keep)
+                .count()
+        })
+    }
+    pub(super) fn clone_exportable(&self) -> bool {
+        self.clone_kept() == 0 || self.clone_unresolved.ack
+    }
+    /// Texture picker: PICs already in the package, the referencing shape's
+    /// own family first. Other source PICs are typed by name.
+    pub(super) fn clone_picks(&self, row: usize) -> Vec<String> {
+        let Some(u) = self
+            .clone_draft
+            .as_ref()
+            .and_then(|p| p.unresolved.get(row))
+        else {
+            return Vec::new();
+        };
+        let stem = u.resource.split('.').next().unwrap_or("");
+        let mut picks: Vec<String> = self
+            .clone_draft
+            .iter()
+            .flat_map(|p| &p.mapping)
+            .map(|(old, _)| old)
+            .filter(|n| n.ends_with(".PIC"))
+            .cloned()
+            .collect();
+        // Unstable sort: the stable one needs a stack buffer the CRT-free build cannot probe.
+        picks.sort_unstable_by(|a, b| (!a.contains(stem), a).cmp(&(!b.contains(stem), b)));
+        picks.truncate(PICKS);
+        picks
+    }
+    /// Keep (`None`) or retarget one review row, then rebuild the draft. A
+    /// failed rebuild restores the previous choice.
+    pub(super) fn clone_choose(&mut self, row: usize, texture: Option<String>) -> Result<()> {
+        let u = self
+            .clone_draft
+            .as_ref()
+            .and_then(|p| p.unresolved.get(row))
+            .ok_or("No unresolved reference in this row")?
+            .clone();
+        let key = (u.resource.clone(), u.target.clone());
+        let kept = self.clone_kept();
+        self.clone_unresolved.pick = None;
+        let texture = texture.map(|t| t.trim().to_ascii_uppercase());
+        let previous = match &texture {
+            Some(t) => self
+                .clone_unresolved
+                .substitutes
+                .insert(key.clone(), t.clone()),
+            None => self.clone_unresolved.substitutes.remove(&key),
+        };
+        match self.build_clone() {
+            Ok(package) => {
+                self.clone_draft = Some(package);
+                // Keeping more names than were acknowledged asks again.
+                if self.clone_kept() > kept {
+                    self.clone_unresolved.ack = false;
+                }
+                self.status = match texture {
+                    Some(t) => format!(
+                        "{} in {} now uses {t}; it joins the package. The source LIB is unchanged",
+                        u.target, u.resource
+                    ),
+                    None => format!("{} in {} kept as in source", u.target, u.resource),
+                };
+                Ok(())
+            }
+            Err(e) => {
+                match previous {
+                    Some(old) => self.clone_unresolved.substitutes.insert(key, old),
+                    None => self.clone_unresolved.substitutes.remove(&key),
+                };
+                Err(e)
+            }
+        }
     }
 }
 impl App {
@@ -389,6 +693,151 @@ impl App {
         assert_eq!(reopened.entries.len(), 8);
         self.key(Key::Escape, false, false);
         // Directory-only platform reader is exercised against an existing LIB by Linux CLI QA.
+        self.smoke_clone_unresolved();
+    }
+    /// Synthetic demo whose DEMO_C.SH draws GHOST.PIC, which no LIB provides,
+    /// taken through the export wizard to its review.
+    pub(super) fn smoke_ghost_review(&mut self, id: &str) -> Vec<u8> {
+        self.doc = Document::new(Archive::empty());
+        self.demo();
+        let mut ghost = hangar_core::model::demo_textured();
+        ghost[258..272].fill(0);
+        ghost[258..267].copy_from_slice(b"GHOST.PIC");
+        let mut a = self.doc.archive.clone();
+        let at = a.find("DEMO_C.SH").unwrap();
+        a.entries[at] = archive::Entry::new("DEMO_C.SH", ghost.clone()).unwrap();
+        self.doc = Document::new(a);
+        self.refresh();
+        self.select_entry(self.doc.archive.find("DEMO.PT").unwrap());
+        self.file_prompt(FileAction::Variant);
+        for value in [id, "Ghost test"] {
+            self.key(Key::Char('a'), true, false);
+            for c in value.chars() {
+                self.key(Key::Char(c), false, false);
+            }
+            self.key(Key::Enter, false, false);
+        }
+        assert!(
+            matches!(self.prompt.as_ref().unwrap().kind, PromptKind::CloneReview),
+            "{}",
+            self.status
+        );
+        ghost
+    }
+    fn smoke_clone_hit(&mut self, predicate: &dyn Fn(Action) -> bool) -> bool {
+        match self.chrome_hit(predicate) {
+            Some(rect) => {
+                self.chrome_click(rect);
+                true
+            }
+            None => false,
+        }
+    }
+    /// Save the reviewed export as `output`, reopen it from disk and return it.
+    fn smoke_clone_export(&mut self, output: &str) -> Archive {
+        assert!(!crate::platform::save_exists(output).unwrap());
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::Apply)));
+        assert!(matches!(
+            self.prompt.as_ref().unwrap().kind,
+            PromptKind::File(FileAction::Save)
+        ));
+        self.key(Key::Char('a'), true, false);
+        for c in output.chars() {
+            self.key(Key::Char(c), false, false);
+        }
+        self.key(Key::Enter, false, false);
+        assert!(!self.doc.dirty(), "{}", self.status);
+        let reopened = Archive::parse(crate::platform::read(output).unwrap()).unwrap();
+        crate::platform::remove_file(output).unwrap();
+        reopened
+    }
+    /// Unresolved in source: blocked by default, substitute through the
+    /// picker, typed source PIC refused, then acknowledged, exported and reopened.
+    fn smoke_clone_unresolved(&mut self) {
+        let ghost = self.smoke_ghost_review("GHJET");
+        let source = self.doc.archive.bytes().unwrap();
+        let p = self.clone_draft.as_ref().unwrap();
+        assert_eq!(p.unresolved.len(), 1);
+        assert_eq!(p.unresolved[0].resource, "DEMO_C.SH");
+        assert!(p.archive.find("GHOST.PIC").is_none());
+        assert!(p.mapping.iter().all(|(old, _)| old != "GHOST.PIC"));
+        // Blocked: no Export hit region, and Enter explains the checkbox.
+        assert!(self.chrome_hit(&|a| matches!(a, Action::Apply)).is_none());
+        self.key(Key::Enter, false, false);
+        assert!(self.status.starts_with("Error: Tick Export with 1"));
+        assert!(matches!(
+            self.prompt.as_ref().unwrap().kind,
+            PromptKind::CloneReview
+        ));
+        assert!(self.clone_draft.is_some());
+        // Use texture: the picker lists package PICs; choosing one enables Export.
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::ClonePick(0))));
+        assert_eq!(self.clone_unresolved.pick, Some(0));
+        let picks = self.clone_picks(0);
+        let i = picks.iter().position(|n| n == "DEMO.PIC").unwrap();
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::CloneTexture(j) if j == i)));
+        let p = self.clone_draft.as_ref().unwrap();
+        assert_eq!(
+            p.unresolved[0].resolution,
+            Resolution::Substitute("DEMO.PIC".into())
+        );
+        assert!(self.clone_exportable());
+        // Keep again: the acknowledgement is required once more.
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::CloneKeep(0))));
+        assert!(!self.clone_exportable());
+        // Other PIC: a name no LIB provides is refused and the row stays kept.
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::ClonePick(0))));
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::ClonePickOther)));
+        for c in "NOWHERE.PIC".chars() {
+            self.key(Key::Char(c), false, false);
+        }
+        self.key(Key::Enter, false, false);
+        assert!(self.status.contains("NOWHERE.PIC is not in this LIB"));
+        self.key(Key::Escape, false, false);
+        assert!(matches!(
+            self.prompt.as_ref().unwrap().kind,
+            PromptKind::CloneReview
+        ));
+        let p = self.clone_draft.as_ref().unwrap();
+        assert_eq!(p.unresolved[0].resolution, Resolution::Keep);
+        // Acknowledge, export, reopen: the copied shape keeps GHOST.PIC as stored.
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::CloneAck)));
+        assert!(self.clone_exportable());
+        assert_eq!(self.doc.archive.bytes().unwrap(), source);
+        let out = self.smoke_clone_export("HGC_GHOST.LIB");
+        assert_eq!(
+            out.entries[out.find("GHJET_C.SH").unwrap()].read().unwrap(),
+            ghost
+        );
+        assert!(out.find("GHOST.PIC").is_none());
+
+        // Substitute path, exported and reopened: only the copied name slot changes.
+        self.smoke_ghost_review("GHSUB");
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::ClonePick(0))));
+        let i = self
+            .clone_picks(0)
+            .iter()
+            .position(|n| n == "DEMO.PIC")
+            .unwrap();
+        assert!(self.smoke_clone_hit(&|a| matches!(a, Action::CloneTexture(j) if j == i)));
+        let private = self
+            .clone_draft
+            .as_ref()
+            .unwrap()
+            .mapping
+            .iter()
+            .find(|(old, _)| old == "DEMO.PIC")
+            .unwrap()
+            .1
+            .clone();
+        let out = self.smoke_clone_export("HGC_GHSUB.LIB");
+        let shape = out.entries[out.find("GHSUB_C.SH").unwrap()].read().unwrap();
+        assert_eq!(shape.len(), ghost.len());
+        assert_eq!(&shape[258..258 + private.len()], private.as_bytes());
+        assert_eq!(shape[..258], ghost[..258]);
+        assert_eq!(shape[272..], ghost[272..]);
+        assert!(out.find(&private).is_some());
+        self.doc = Document::new(Archive::empty());
     }
 }
 
@@ -427,6 +876,14 @@ impl App {
         }
         if self.doc.archive.bytes()? != before {
             return Err("Source document changed before export".into());
+        }
+        if !self.clone_exportable() {
+            // Names no searched LIB provides: acknowledge through the checkbox.
+            let rect = self
+                .chrome_hit(&|a| matches!(a, Action::CloneAck))
+                .ok_or("Unresolved acknowledgement missing")?;
+            self.chrome_click(rect);
+            println!("{}", self.status);
         }
         self.key(Key::Enter, false, false);
         self.key(Key::Char('a'), true, false);
