@@ -22,7 +22,7 @@ crates/hangar-app/    Binary `tore-hangar`: shared UI, CLI, platform backends.
   src/saving.rs       Shared staged-save/backup protocol.
 tore-hangar-design/   Design system. tokens/theme.rs is compiled into the app
                       via #[path]; components/*/README.md specify each widget.
-docs/                 MANUAL, CHANGELOG, ARCHITECTURE, VALIDATION,
+docs/                 MANUAL, CHANGELOG, RELEASING, ARCHITECTURE, VALIDATION,
                       COMPATIBILITY, WINDOWS-TEST.
 tools/check_pe.py     Audits Windows executables' headers, import list and the
                       embedded icon/version resources.
