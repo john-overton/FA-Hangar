@@ -29,6 +29,8 @@ struct Opt {
     inner_c: bool,
     /// The gear stub resumes drawing exactly at face `late`.
     resume_on_late: bool,
+    /// A flat face `after` follows `late`, past the gear stub's x86.
+    flat_after: bool,
 }
 /// Body textured with BASE.PIC: a run fa fb fc (byte UVs), a flat lit face
 /// fd, a word-UV face fw, then a gear part whose block draws a textured face,
@@ -90,6 +92,10 @@ fn build(o: Opt) -> (Vec<u8>, Asm) {
         &[0, 1, 4],
         &[[1, 1], [2, 2], [3, 1]],
     );
+    if o.flat_after {
+        a.label("after")
+            .face(0x23, 38, lit(&pts(&[0, 2, 4])), &[0, 2, 4], &[]);
+    }
     a.jump("end");
     if o.inner_c {
         let at = a.at("fc") + 3;
@@ -105,6 +111,9 @@ fn build(o: Opt) -> (Vec<u8>, Asm) {
     let mut copy = Asm::default();
     for name in ["fa", "fb", "fc", "fd", "fw", "late", "gearblock"] {
         copy.mark(name, a.at(name));
+    }
+    if o.flat_after {
+        copy.mark("after", a.at("after"));
     }
     (a.finish(), copy)
 }
@@ -603,6 +612,31 @@ fn every_face_of_the_textured_kit_can_be_assigned_and_restored() {
                 .unwrap_or_else(|e| panic!("face {:X}: {e}", f.offset));
             let back = restore_texture_assignment(&out.shape, &out.faces).unwrap();
             assert_eq!(drawn(&back.shape, &pose), drawn(&src, &pose));
+        }
+    }
+}
+#[test]
+fn generated_panels_after_native_code_restore_the_proved_state() {
+    let (src, l) = build(Opt {
+        flat_after: true,
+        ..Opt::default()
+    });
+    let m = Model::parse(&src).unwrap();
+    let i = m
+        .faces
+        .iter()
+        .position(|f| f.offset == face(&l, "after"))
+        .unwrap();
+    // The model reader forgets the selector after the gear stub's x86 ...
+    assert!(m.faces[i].material_selector.is_empty());
+    // ... the whole-CODE proof still names E2 BASE.PIC, so the panel converts.
+    let palette = [[0; 3]; 256];
+    let p = crate::shape_edit::texture_panels(&src, &[i], "GEN.PIC", 1 << 16, &palette).unwrap();
+    let out = Model::parse(&p.shape).unwrap();
+    assert_eq!(out.faces[i].texture, "GEN.PIC");
+    for (a, b) in m.faces.iter().zip(&out.faces) {
+        if a.offset != face(&l, "after") {
+            assert_eq!((&a.texture, &a.uv), (&b.texture, &b.uv));
         }
     }
 }

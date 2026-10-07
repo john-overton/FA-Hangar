@@ -446,8 +446,18 @@ fn convert_face(source: &[u8], face_index: usize, name: &str, uv: &[[i32; 2]]) -
             "This polygon shading subtype is not supported for automatic texturing",
         ));
     }
-    if face.material_selector.is_empty() && !original.writable {
-        return Err(invalid("This panel inherits an unresolved material state; use its base color until the SH state writer supports it"));
+    let mut restore = face.material_selector.clone();
+    if restore.is_empty() && !original.writable {
+        // The model reader forgets the state after native code; the
+        // whole-CODE proof can still name the selector that holds here.
+        restore = crate::shape_geometry::Geometry::parse(source)
+            .ok()
+            .and_then(|g| {
+                let i = g.face_at(face.offset)?;
+                g.material(i).ok().map(|at| g.selector(at).to_vec())
+            })
+            .filter(|r| !r.is_empty())
+            .ok_or_else(|| invalid("This panel inherits an unresolved material state; use its base color until the SH state writer supports it"))?;
     }
     if uv.len() != face.indices.len() || uv.iter().flatten().any(|v| !(0..=65535).contains(v)) {
         return Err(invalid("A panel needs one UV per corner, 0..65535"));
@@ -483,10 +493,10 @@ fn convert_face(source: &[u8], face_index: usize, name: &str, uv: &[[i32; 2]]) -
     let extension_start = continuation_start(source)?;
     let new_face = extension_start + 16;
     extension.extend(record);
-    if face.material_selector.is_empty() {
+    if restore.is_empty() {
         extension.extend([0xe0, 0, 0, 0]);
     } else {
-        extension.extend(&face.material_selector);
+        extension.extend(&restore);
     }
     extension.extend(jump(extension_start + extension.len(), successor)?);
     let mut payload = source[code.start..code.start + code.len].to_vec();
