@@ -7,6 +7,26 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- The editor bodies follow the design system. The outliner has aircraft,
+  shape and image type filters, 20px zebra rows with hover, group counts and
+  type badges, an active row distinct from its linked entries, and ink filter
+  text with a focus border. Browse uses 20px rows under a 28px column header.
+- The right-hand editors are collapsible property panels with group icons,
+  right-aligned labels and 20px rows (Ctrl+click a header keeps only that
+  panel open). They scroll with the wheel and show a scroll thumb instead of
+  cutting rows off.
+- Integer source values everywhere (Model properties, Raw fields, the
+  Flight table and envelope, hardpoint stations, decal placement) are number
+  fields: drag to scrub, click to type, Backspace restores the saved operand.
+  "^" scaled operands read **scaled**; hardpoint locations are an X/Y/Z
+  vector with axis colours.
+- The Shape row is a Select of the shapes the entry uses; the link button
+  opens its references. Graft uses checkbox rows with diff summaries and a
+  primary **Apply graft**; Package leads with a summary notice, result badges
+  and a primary **Package LIB**. Brush and Eraser are one segmented control.
+- Dialogs share one frame with a title and no shadow; Cancel is a ghost
+  button and the dialog's action is primary. Copy across prompts, hints and
+  status messages no longer joins phrases with slashes.
 - The window chrome follows the Gunmetal design system: flat workspace tabs
   with the active one joined to its editor, menus with keycap shortcuts and no
   drop shadow, the active LIB with a round dirty dot and a lock for protected

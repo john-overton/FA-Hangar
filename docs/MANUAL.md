@@ -86,10 +86,28 @@ sizes and weights.
   the camera; click an axis cap to view along it. The grid is aligned to the
   origin with every fifth line brighter, the X and Y axes run the full grid and
   the origin is an amber dot.
-- **Number fields** (adopted by editors in a later pass): drag to scrub, Shift
-  for fine steps, Ctrl to snap to ten steps, the hover arrows step once,
-  double-click to type a value, Backspace over the field resets it to the value
-  in the file on disk, Esc during a drag cancels it. A drag is one undo step.
+- **Outliner.** The filter field matches entry names as you type (Ctrl+F;
+  Esc or Enter leaves it). The three type buttons beside it show only
+  aircraft (PT), shapes (SH) or images (PIC) in every open LIB and in the
+  Browse table; click the lit button again to show everything. Groups show
+  their entry count and type badge and collapse from their row; stored
+  originals (`.ORG`) list right below Images. The entry the editors show is
+  the active row (bright amber text); the entries it works with, such as an
+  aircraft's linked shape or the model a texture was opened from, are
+  highlighted as selected.
+- **Property panels.** The right-hand editor stacks collapsible panels.
+  Click a panel header to collapse or expand it; Ctrl+click keeps only that
+  panel open. Each panel remembers its state. The wheel scrolls the panels; a
+  thumb at the right edge and a chevron at the bottom show that more follows.
+- **Number fields.** Every integer source value is a number field: drag
+  left or right to scrub (Shift for fine steps, Ctrl to snap to ten steps),
+  click without dragging to type an exact value, use the hover arrows to step
+  once, and press Backspace over the field to restore the operand saved in
+  the file on disk. Esc during a drag cancels it. A drag, a step, a typed
+  value and a reset are each one undo step. A value that differs from the file
+  turns amber. Values the game stores with BRF's `^` marker read **scaled**
+  after the number; they stay in raw source units. `$hex` operands, strings
+  and pointers keep their notation and open the type prompt when clicked.
 
 | Workspace | Use |
 | --- | --- |
@@ -322,11 +340,15 @@ empty editor document; the LIB writer requires at least one entry to save it.
 
 ## Flight envelope table
 
-Flight opens recognized envelopes as a table. Use the G-row arrows to choose
-the envelope, then edit its point count, stall lift, maximum speed, and the
-Speed/Altitude cells. Unused point slots are dimmed; changed cells are amber.
-Wheel scrolls the table. The All group and Raw fields dock retain the underlying
-BRF view and saved-value comparisons.
+Flight opens recognized envelopes as a table. The chevrons beside
+"Envelope 1 of 3" choose the envelope; its G, points, stall lift and maximum
+speed sit above the Speed and Altitude cells. Every value is a
+[number field](#workspaces): drag to scrub, click to type, Backspace for the
+saved value. Rows past the point count are unused and show their number in
+muted ink; changed cells are amber. Wheel scrolls the table. The **Field
+groups** panel picks the group (with field counts); **All fields** and the Raw
+fields dock keep the underlying BRF view with on-disk values and reset
+buttons.
 
 ## Paint a livery
 
@@ -405,8 +427,8 @@ Undoing that first edit removes both.
   `X.ORG`, as one undo step. The status reads, for example, "Restored _F18.PIC
   from _F18.ORG". If the original came from the opened file, the texture shows
   as unchanged again.
-- The Paint inspector shows the stored original, for example "Original kept:
-  _F18.ORG / 14,476 B".
+- The Paint panel shows the stored original, for example **Original kept**
+  `_F18.ORG` with its stored size, 14,476 B.
 - Panel sheets generated in this session keep no `.ORG`. Their original is the
   panel's solid face color, which the eraser and Restore texture paint back.
   Sheets that were already in the opened LIB are backed up like any texture.
@@ -433,9 +455,10 @@ original game (see [WINDOWS-TEST.md](WINDOWS-TEST.md)).
 ## Hardpoints, materials and decals
 
 Select an aircraft PT and click **Hardpoints** above the model. Steel diamonds
-mark its stations; the selected station turns amber. Drag a diamond in an
-orthographic view, edit X/Y/Z numerically, or press G, X/Y/Z, an offset and
-Enter. H places a new station at the cursor's view-plane position. Add,
+mark its stations; the selected station turns amber. Step between stations
+with the chevrons beside "HP1 of 2". Drag a diamond in an orthographic view,
+scrub or type the X, Y and Z number fields under **Location**, or press G,
+X/Y/Z, an offset and Enter. H places a new station at the cursor's view-plane position. Add,
 duplicate, remove, move and store assignments each form one undo step. The
 inspector also exposes weight class, item count, location code and flags;
 **All station fields** opens the structured table for slew settings and other
@@ -465,12 +488,13 @@ To add a marking:
    preset. Built-in presets are US stars-and-bars, UK and French roundels, and
    the Japanese roundel. These are compact editor artwork; import PNG for exact
    national variants or authentic squadron artwork.
-3. Imported PNG paths are remembered in **Squadron / PNG library**. The list
+3. Imported PNG paths are remembered in the **Squadron library**. The list
    holds 16 files and is saved beside the executable in tore-hangar-decals.txt.
    Artwork stays in its original file; removing a list item does not delete it.
    A read-only executable folder retains new selections for the session only.
-4. Click or drag on the texture atlas or a visible model panel. Set width,
-   rotation, opacity and horizontal mirroring. Tail text uses built-in block
+4. Click or drag on the texture atlas or a visible model panel. Center,
+   width (px), rotation (°) and opacity (%) are number fields under
+   **Placement**; **Mirror horizontally** is a checkbox. Tail text uses built-in block
    lettering, up to 24 ASCII letters/digits, spaces, dashes, slashes or periods,
    with a selectable palette ink color.
 5. Inspect the palette-mapped texture and live model preview. **Apply decal**
@@ -491,8 +515,8 @@ preview shows those effects. PNG parsing follows the
 
 NT definitions now expose the reviewed Object + NPC fields and linked stations.
 Select a ship, tank, AAA or launcher, then use **Hardpoints** for source
-positions and stores. The **Loadout / station flags** button switches to
-heading, pitch and slew limits. These are stored values, not invented degree or
+positions and stores. **Station data** switches between **Loadout** and
+**Slew** (heading, pitch and slew limits). These are stored values, not invented degree or
 distance conversions. The Properties groups also expose movement acceleration
 and engagement/firing parameters. Shape animation and weapon launch behavior
 are separate contracts.
@@ -543,8 +567,10 @@ resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 | Replace / export OBJ | Inspector buttons |
 | Search entry names | Ctrl+F or search field; Esc leaves search |
 | Select entry | Click or Up/Down; wheel scrolls the outliner |
-| Edit a definition operand | Click its field; Ctrl+A clears the input |
-| Scroll fields | Wheel over inspector, Flight workspace or Raw fields |
+| Edit a definition operand | Drag its number field to scrub, click to type (Ctrl+A clears), Backspace restores the saved value |
+| Collapse a panel / keep only one | Click its header / Ctrl+click its header |
+| Show only aircraft, shapes or images | Type buttons beside the outliner filter |
+| Scroll fields | Wheel over panels, Flight workspace or Raw fields |
 | Graft characteristic groups | Entry > Use as graft donor, select target, open Graft |
 | Copy one donor field | Select a field, Tools > Copy one donor field |
 | Remove selected entry | Delete; Ctrl+Z restores it |
@@ -558,7 +584,7 @@ resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 | Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
-| Erase paint / restore a texture | Paint inspector: Eraser, Restore texture |
+| Erase paint / restore a texture | Paint panel: Brush / Eraser control, Restore texture |
 | Cancel transform or dialog | Esc or right mouse button |
 | Close with unsaved edits | Click Discard changes, or Cancel/Esc to return |
 

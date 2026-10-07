@@ -161,9 +161,11 @@ be silently flattened or discarded.
 
 The UI follows `tore-hangar-design` (tokens, component READMEs, screens).
 `ui_view.rs` and the feature slices emit drawing commands and hit regions from
-the same layout; the shared smoke checks minimum-size hit regions, that chrome
-hit regions stay inside what they draw, and that chrome labels are not
-truncated at 1280 x 800.
+the same layout. The shared smoke test lays out every editor and dialog at
+1280 x 800 and 800 x 600 and checks that each hit region stays in the window
+and inside the fills its control draws (hovered when it only fills on hover),
+that no two hit regions overlap (viewport markers and the menu surface
+excepted), and that chrome labels are not truncated at 1280 x 800.
 
 - **Tokens.** `tokens/tokens.json` is the source of truth;
   `tools/gen/theme.py` generates `theme.rs` (integer only: the label column is
@@ -183,16 +185,32 @@ truncated at 1280 x 800.
 - **Shape.** Corners use a 1px notch for `radius-sm`/`radius-md`/`radius-xs`;
   there is no anti-aliased rounding. The lip is a 1px `color::LIP` line.
 - **Components** (`ui_widgets.rs`): buttons, icon buttons, segmented controls,
-  checkbox, select and dropdown menu, NumberField with scrub/step/type/reset,
-  type badges, notices, panel headers with property rows, keycaps, dirty dot
-  and focus ring. Chrome (`ui_chrome.rs`) uses them; the outliner,
-  inspectors, property panels and editors adopt them in a later pass, so some
-  editor bodies still show the earlier boxed buttons and left-aligned labels.
+  checkbox and checkbox rows, select and dropdown menu, NumberField with
+  scrub/step/type/reset, type badges, notices, panels with property rows,
+  keycaps, dirty dot and focus ring. Chrome and the editor bodies use them.
+  The Edit Mesh and Parts inspectors (`ui_mesh.rs`, `ui_animation.rs`) keep
+  the earlier boxed buttons until they are rebuilt.
+- **Panel stacks.** The right-hand editors lay out a `Stack`: rows draw and
+  take hit regions only when entirely visible, panel frames are cut at the
+  edges and spliced beneath their rows once the panel's height is known, and
+  the wheel scrolls in pixels (the range comes from the last layout). There is
+  no clip region in the draw list. Collapsed state is one bit per panel id
+  (`widgets::pane`); a Ctrl+click keeps one panel open.
+- **NumberField targets.** `NumberTarget::Field` (BRF fields, envelope cells
+  included), `Station` (hardpoint columns; positions are signed, `$hex`
+  words sign-extended) and `Decal` (draft placement, no saved value). A click
+  without a drag types a value. Backspace writes the saved operand text back,
+  so `$hex` notation and bytes match the file; `$hex`, string and pointer
+  operands are sunken text fields that open the type prompt.
+- **Units.** BRF values have no evidenced units, so none are shown; "^"
+  scaled operands read "scaled" in raw source units. Units appear where the
+  editor defines them: decal px, ° and %, byte sizes, brush px.
 - **Not implemented from the mockups:** LOD select, header Select/Mesh menus,
-  the vertical property tab strip, the animation timeline, outliner type
-  filter buttons, editor-type switching per header, draggable splitters and
-  collapsing side editors to tab strips at 800 x 600. These are not shown as
-  inert controls.
+  the vertical property tab strip (field groups are a panel list instead), the
+  animation timeline, editor-type switching per header, draggable splitters,
+  graft geometry aspects and viewport ghost preview, panel header tools, and
+  collapsing side editors to tab strips at 800 x 600 (both side editors keep
+  210 and 270 px there). These are not shown as inert controls.
 - **Solid shading** draws the CPU raster without textures: palette face
   colors (textured panels in `ink-muted`) scaled by the camera-space normal.
 
