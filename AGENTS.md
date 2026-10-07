@@ -24,7 +24,10 @@ tore-hangar-design/   Design system. tokens/theme.rs is compiled into the app
                       via #[path]; components/*/README.md specify each widget.
 docs/                 MANUAL, CHANGELOG, ARCHITECTURE, VALIDATION,
                       COMPATIBILITY, WINDOWS-TEST.
-tools/check_pe.py     Audits Windows executables' headers and import list.
+tools/check_pe.py     Audits Windows executables' headers, import list and the
+                      embedded icon/version resources.
+crates/hangar-app/build.rs  Writes the Windows icon/version .res from the
+                      committed tore-hangar-design/icons/app .ico (no deps).
 ```
 
 ## Build and check
