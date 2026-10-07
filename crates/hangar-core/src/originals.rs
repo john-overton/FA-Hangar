@@ -120,15 +120,21 @@ pub fn cloned(archive: &Archive, from: &str, to: &str) -> Result<Option<Entry>> 
     }
     Ok(Some(org.renamed(&name)?))
 }
-/// Raw sheet exactly as Hangar generates for flat-color panels: header, one
-/// raster of 8 to 256 pixels a side (square in older versions, now sized to
-/// the panel) and a full 256-color palette, nothing else.
+/// Sheet exactly as Hangar generates for flat-color panels. Current sheets
+/// are retail textures (`picture::retail_texture`, 8 to 256 rows); older
+/// versions wrote a raw raster of 8 to 256 pixels a side and a full
+/// 256-color palette, nothing else, which crashes FA's texture mapper and
+/// is still recognized so it can be repaired.
 pub fn panel_sheet(bytes: &[u8]) -> bool {
     let field = |at| u32_at(bytes, at).ok();
     let (Some(w), Some(h)) = (field(2), field(6)) else {
         return false;
     };
     let n = w * h;
+    if w == crate::picture::TEXTURE_WIDTH {
+        // Generated (and repaired legacy) sheets are 8 to 256 rows tall.
+        return (8..=256).contains(&h) && crate::picture::is_retail_texture(bytes);
+    }
     (8..=256).contains(&w)
         && (8..=256).contains(&h)
         && u16_at(bytes, 0) == Ok(0)
@@ -378,5 +384,14 @@ mod tests {
         assert!(!panel_sheet(&wide));
         sheet[40] = 1;
         assert!(!panel_sheet(&sheet));
+        // Current sheets are retail textures; taller or extended ones are not.
+        let retail = picture::retail_texture(40, &[9; 256 * 40]).unwrap();
+        assert!(panel_sheet(&retail));
+        assert!(!panel_sheet(
+            &picture::retail_texture(300, &[9; 256 * 300]).unwrap()
+        ));
+        let mut extra = retail.clone();
+        extra.push(0);
+        assert!(!panel_sheet(&extra));
     }
 }

@@ -1391,7 +1391,7 @@ mod tests {
             state.keys().copied().collect::<Vec<_>>(),
             [alias(0) as usize]
         );
-        let shifted = crate::shape_edit::texture_panel(&b, 0, "NEW.PIC", 64, &[[0; 3]; 256])
+        let shifted = crate::shape_edit::texture_panel(&b, 0, "NEW.PIC", 64)
             .unwrap()
             .shape;
         let inv = Inventory::parse(&shifted).unwrap();

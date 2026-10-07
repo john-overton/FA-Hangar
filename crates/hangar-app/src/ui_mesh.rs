@@ -97,21 +97,15 @@ impl App {
         } else {
             shape_edit::coplanar_panels(&model, face, 32)
         };
-        let result =
-            shape_edit::texture_panels(&source, &group, &name, density, &self.base_palette)
-                .or_else(|e| {
-                    if group.len() > 1 {
-                        shape_edit::texture_panels(
-                            &source,
-                            &[face],
-                            &name,
-                            density,
-                            &self.base_palette,
-                        )
-                    } else {
-                        Err(e)
-                    }
-                })?;
+        // Sheets are retail textures (256 wide, no palette): the face color
+        // byte is already a game-palette index.
+        let result = shape_edit::texture_panels(&source, &group, &name, density).or_else(|e| {
+            if group.len() > 1 {
+                shape_edit::texture_panels(&source, &[face], &name, density)
+            } else {
+                Err(e)
+            }
+        })?;
         Ok(PanelPlan {
             entry,
             original,
@@ -147,7 +141,7 @@ impl App {
         self.open_texture(i);
         self.media_tab = 0;
         self.status = format!(
-            "Created {name}, {w} \u{d7} {h}, mapped to {}. One undo step.",
+            "Created {name}, a 256 \u{d7} {h} FA texture with a {w} \u{d7} {h} panel area, mapped to {}. One undo step.",
             if panels == 1 {
                 "the selected panel".to_string()
             } else {

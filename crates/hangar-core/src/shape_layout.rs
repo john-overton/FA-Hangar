@@ -585,7 +585,7 @@ mod tests {
             original.state_words.iter().copied().collect::<Vec<_>>(),
             [0x1ff0]
         );
-        let result = super::super::texture_panel(&b, 0, "NEW.PIC", 64, &[[0; 3]; 256]).unwrap();
+        let result = super::super::texture_panel(&b, 0, "NEW.PIC", 64).unwrap();
         let c = code(&result.shape).unwrap();
         let tail = tail(&result.shape, &c).unwrap().unwrap();
         let model = Model::parse(&result.shape).unwrap();
@@ -605,8 +605,7 @@ mod tests {
         );
         assert_eq!(u32_at(&result.shape, 292).unwrap(), 28);
         assert!(repair(&result.shape).unwrap().is_none());
-        let more =
-            super::super::texture_panel(&result.shape, 1, "NEXT.PIC", 64, &[[0; 3]; 256]).unwrap();
+        let more = super::super::texture_panel(&result.shape, 1, "NEXT.PIC", 64).unwrap();
         assert_eq!(
             Model::parse(&more.shape)
                 .unwrap()
@@ -640,7 +639,7 @@ mod tests {
         }
         put32(&mut b, 292, size).unwrap();
         assert_eq!(u32_at(&b, 208).unwrap(), 0x7000);
-        let result = super::super::texture_panel(&b, 0, "NEW.PIC", 64, &[[0; 3]; 256]).unwrap();
+        let result = super::super::texture_panel(&b, 0, "NEW.PIC", 64).unwrap();
         let out = &result.shape;
         let image = u32_at(out, 208).unwrap();
         for n in 0..3 {
@@ -673,7 +672,7 @@ mod tests {
         let model = Model::parse(&out).unwrap();
         assert_eq!(model.faces[0].texture, "OLD.PIC");
         assert_eq!(model.faces[0].uv, [[0, 0], [63, 0], [0, 63]]);
-        let more = super::super::texture_panel(&source, 1, "NEXT.PIC", 64, &[[0; 3]; 256]).unwrap();
+        let more = super::super::texture_panel(&source, 1, "NEXT.PIC", 64).unwrap();
         assert!(repair(&more.shape).unwrap().is_none());
         assert_eq!(
             Model::parse(&more.shape).unwrap().faces[0].texture,
@@ -688,22 +687,18 @@ mod tests {
         assert!(repair(&b).is_err());
         let mut b = fixture();
         put32(&mut b, 376 + 80 + 8, 16).unwrap();
-        assert!(
-            super::super::texture_panel(&b, 0, "NEW.PIC", 64, &[[0; 3]; 256])
-                .unwrap_err()
-                .contains("Relocation table")
-        );
+        assert!(super::super::texture_panel(&b, 0, "NEW.PIC", 64)
+            .unwrap_err()
+            .contains("Relocation table"));
         let mut referenced = fixture();
         let face = Model::parse(&referenced).unwrap().faces[0].offset;
         put32(&mut referenced, 1024 + 5, 0x1000 + face - 1024 + 3).unwrap();
-        assert!(
-            super::super::texture_panel(&referenced, 0, "NEW.PIC", 64, &[[0; 3]; 256])
-                .unwrap_err()
-                .contains("inside this face")
-        );
+        assert!(super::super::texture_panel(&referenced, 0, "NEW.PIC", 64)
+            .unwrap_err()
+            .contains("inside this face"));
         let mut b = fixture();
         put32(&mut b, 152 + 96 + 6 * 8, 0x5000).unwrap();
-        assert!(super::super::texture_panel(&b, 0, "NEW.PIC", 64, &[[0; 3]; 256]).is_err());
+        assert!(super::super::texture_panel(&b, 0, "NEW.PIC", 64).is_err());
         let b = legacy();
         for n in [0, 64, 128, 376, 1024, b.len() - 1] {
             assert!(repair(&b[..n]).is_err());

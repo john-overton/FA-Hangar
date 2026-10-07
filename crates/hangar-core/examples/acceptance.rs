@@ -175,7 +175,7 @@ fn run() -> Result<()> {
             .find_map(|(i, f)| {
                 (f.sub & 4 == 0)
                     .then(|| {
-                        shape_edit::texture_panel(&bytes, i, "HGPNL.PIC", 64, &palette)
+                        shape_edit::texture_panel(&bytes, i, "HGPNL.PIC", 64)
                             .ok()
                             .map(|p| (i, p))
                     })

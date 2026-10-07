@@ -1548,13 +1548,13 @@ impl App {
         self.status = status;
         Ok(())
     }
-    fn context_name(&self) -> Option<String> {
+    pub(super) fn context_name(&self) -> Option<String> {
         self.context_entry
             .and_then(|i| self.doc.archive.entries.get(i))
             .map(|e| e.name.clone())
     }
     /// Removals shift indices: keep the selection and model context by name.
-    fn reselect(&mut self, selected: &str, context: Option<String>) {
+    pub(super) fn reselect(&mut self, selected: &str, context: Option<String>) {
         self.selected = self.doc.archive.find(selected).unwrap_or(self.selected);
         self.context_entry = context.and_then(|n| self.doc.archive.find(&n));
         let face = self.selected_face;
@@ -2238,7 +2238,9 @@ impl App {
         a.doc.replace(0, model::demo_shape()).unwrap();
         a.doc.mark_saved();
         a.select_entry(0);
-        a.palette_loaded = true;
+        // Generated sheets carry no palette: painting them needs the base PAL.
+        a.palette_override = Some(Box::new(core::array::from_fn(|i| [i as u8; 3])));
+        a.refresh();
         let original = a.doc.archive.bytes().unwrap();
         let count = a.doc.archive.entries.len();
         a.start_generated_stroke(0).unwrap();
@@ -2308,5 +2310,6 @@ impl App {
         a.act(Action::Undo);
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        a.palette_override = None;
     }
 }

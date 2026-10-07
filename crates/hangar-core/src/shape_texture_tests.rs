@@ -630,8 +630,7 @@ fn generated_panels_after_native_code_restore_the_proved_state() {
     // The model reader forgets the selector after the gear stub's x86 ...
     assert!(m.faces[i].material_selector.is_empty());
     // ... the whole-CODE proof still names E2 BASE.PIC, so the panel converts.
-    let palette = [[0; 3]; 256];
-    let p = crate::shape_edit::texture_panels(&src, &[i], "GEN.PIC", 1 << 16, &palette).unwrap();
+    let p = crate::shape_edit::texture_panels(&src, &[i], "GEN.PIC", 1 << 16).unwrap();
     let out = Model::parse(&p.shape).unwrap();
     assert_eq!(out.faces[i].texture, "GEN.PIC");
     for (a, b) in m.faces.iter().zip(&out.faces) {

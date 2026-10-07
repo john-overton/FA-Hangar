@@ -18,7 +18,8 @@ pub struct PanelTexture {
     pub face: usize,
     /// Model face indices of every converted face (they keep their index).
     pub faces: Vec<usize>,
-    /// Sheet width and height in pixels.
+    /// Width and height of the panel's sub-rectangle at the sheet's left
+    /// edge. The sheet is a retail texture: 256 wide and this tall.
     pub size: [u32; 2],
 }
 fn put32(bytes: &mut [u8], at: usize, value: usize) -> Result<()> {
@@ -184,26 +185,6 @@ pub(crate) fn jump(from: usize, to: usize) -> Result<[u8; 4]> {
     let b = d.to_le_bytes();
     Ok([0x48, 0, b[0], b[1]])
 }
-fn raw_picture(size: [u32; 2], color: u8, palette: &[[u8; 3]; 256]) -> Result<Vec<u8>> {
-    let (w, h) = (size[0] as usize, size[1] as usize);
-    let limits = PANEL_MIN as usize..=PANEL_MAX as usize;
-    if !limits.contains(&w) || !limits.contains(&h) {
-        return Err(invalid("Texture sheet sides must be 8 to 256 pixels"));
-    }
-    let n = w * h;
-    let mut out = vec![0; 64 + n + 768];
-    for (at, v) in [(2, w), (6, h), (10, 64), (14, n), (18, 64 + n), (22, 768)] {
-        put32(&mut out, at, v)?;
-    }
-    out[64..64 + n].fill(color);
-    for (i, rgb) in palette.iter().enumerate() {
-        for c in 0..3 {
-            out[64 + n + i * 3 + c] = ((rgb[c] as u16 * 63 + 127) / 255) as u8;
-        }
-    }
-    crate::picture::Pic::parse(&out)?;
-    Ok(out)
-}
 /// CODE offset at which `append_continuation` places an extension: the end
 /// marker when the module has the native tail, otherwise the end of CODE.
 pub(crate) fn continuation_start(source: &[u8]) -> Result<usize> {
@@ -289,8 +270,9 @@ pub(crate) fn append_continuation(
     }
     Ok(out)
 }
-/// Paintable flat-color face -> private square PIC of `size` and planar UVs
-/// on the face's own plane (square texels, longer side along U). The old
+/// Paintable flat-color face -> private PIC with planar UVs on the face's own
+/// plane in a `size` square at its left edge (square texels, longer side
+/// along U). The PIC is a retail texture, 256 wide and `size` tall. The old
 /// face site becomes one relative jump; the new draw sequence returns to the
 /// original successor. Code grows only within its existing virtual-address gap.
 pub fn texture_panel(
@@ -298,33 +280,28 @@ pub fn texture_panel(
     face_index: usize,
     name: &str,
     size: usize,
-    palette: &[[u8; 3]; 256],
 ) -> Result<PanelTexture> {
     if !(8..=256).contains(&size) || !size.is_power_of_two() {
         return Err(invalid(
             "Texture sheet size must be a power of two from 8 to 256",
         ));
     }
-    panels(
-        source,
-        &[face_index],
-        name,
-        Fit::Size([size as u32; 2]),
-        palette,
-    )
+    panels(source, &[face_index], name, Fit::Size([size as u32; 2]))
 }
 /// Flat-color faces -> one private PIC sized from `density` (Q16 texels per
 /// source unit, see `shape_texture::atlas_density`). The faces are projected
 /// together onto their plane, the longer extent along U, with square texels;
-/// each side is clamped to 8..256 with the aspect kept.
+/// each side is clamped to 8..256 with the aspect kept. The panel fills that
+/// sub-rectangle at the left edge of a retail texture (256 wide, kind 0, row
+/// table, no palette) of the panel's height, so FA's texture mapper can read
+/// it; the rest of the sheet repeats the face color.
 pub fn texture_panels(
     source: &[u8],
     faces: &[usize],
     name: &str,
     density: u32,
-    palette: &[[u8; 3]; 256],
 ) -> Result<PanelTexture> {
-    panels(source, faces, name, Fit::Density(density), palette)
+    panels(source, faces, name, Fit::Density(density))
 }
 /// Flat faces that can share one generated sheet with model face `face`:
 /// connected to it through shared stored vertices, with the same colour,
@@ -386,13 +363,7 @@ pub fn coplanar_panels(model: &Model, face: usize, limit: usize) -> Vec<usize> {
     }
     group
 }
-fn panels(
-    source: &[u8],
-    faces: &[usize],
-    name: &str,
-    fit: Fit,
-    palette: &[[u8; 3]; 256],
-) -> Result<PanelTexture> {
+fn panels(source: &[u8], faces: &[usize], name: &str, fit: Fit) -> Result<PanelTexture> {
     crate::archive::validate_name(name)?;
     if !name.ends_with(".PIC") {
         return Err(invalid("Panel texture must be a PIC"));
@@ -415,14 +386,24 @@ fn panels(
         group.push((points, face.normal));
     }
     let planar = crate::shape_texture::planar(&group, Plane::Auto, fit)?;
+    let limits = PANEL_MIN..=PANEL_MAX;
+    if !planar.size.iter().all(|s| limits.contains(s)) {
+        return Err(invalid("Texture sheet sides must be 8 to 256 pixels"));
+    }
+    // The face's own palette byte is a game-palette index: retail textures
+    // carry no palette, and FA draws them with the game palette.
     let color = original.faces[faces[0]].color;
+    let rows = planar.size[1] as usize;
     let mut shape = source.to_vec();
     for (i, uv) in faces.iter().zip(&planar.uv) {
         shape = convert_face(&shape, *i, name, uv)?;
     }
     Ok(PanelTexture {
         shape,
-        picture: raw_picture(planar.size, color, palette)?,
+        picture: crate::picture::retail_texture(
+            rows,
+            &vec![color; crate::picture::TEXTURE_WIDTH * rows],
+        )?,
         face: faces[0],
         faces: faces.to_vec(),
         size: planar.size,
@@ -574,13 +555,12 @@ mod tests {
     fn new_panel_keeps_geometry_and_supports_followup_vertex_edits() {
         let source = crate::model::demo_shape();
         let model = Model::parse(&source).unwrap();
-        let palette = core::array::from_fn(|i| [i as u8; 3]);
-        let panel = texture_panel(&source, 0, "PANEL.PIC", 64, &palette).unwrap();
+        let panel = texture_panel(&source, 0, "PANEL.PIC", 64).unwrap();
         let result = Model::parse(&panel.shape).unwrap();
         assert!(result.writable);
         assert_eq!(result.faces[0].texture, "PANEL.PIC");
         assert_eq!(result.faces[0].uv.len(), 3);
-        assert!(texture_panel(&panel.shape, 0, "OTHER.PIC", 64, &palette)
+        assert!(texture_panel(&panel.shape, 0, "OTHER.PIC", 64)
             .unwrap_err()
             .contains("already has a named texture"));
         assert_eq!(
@@ -595,10 +575,10 @@ mod tests {
         }
         assert_eq!(moved.vertices[0].point, [1, 102, 3]);
         assert!(move_vertices(&panel.shape, &[0], [32768, 0, 0]).is_err());
-        assert_eq!(
-            crate::picture::Pic::parse(&panel.picture).unwrap().pixels,
-            vec![32; 4096]
-        );
+        let sheet = crate::picture::Pic::parse(&panel.picture).unwrap();
+        assert_eq!((sheet.width, sheet.height), (256, 64));
+        assert_eq!(sheet.pixels, vec![32; 256 * 64]);
+        assert!(crate::picture::retail_texture_check(&panel.picture).is_ok());
     }
     /// Two flat coplanar quads sharing an edge (together 160 x 40 units),
     /// one more of another colour and a tilted one, under BASE.PIC.
@@ -638,35 +618,50 @@ mod tests {
         assert_eq!(coplanar_panels(&model, 0, 32), [0, 1]);
         assert_eq!(coplanar_panels(&model, 0, 1), [0]);
         assert_eq!(coplanar_panels(&model, 3, 32), [3]);
-        let palette = core::array::from_fn(|i| [i as u8; 3]);
-        // One texel per unit: an 80 x 40 quad -> 80 x 40 sheet.
-        let one = texture_panels(&src, &[0], "ONE.PIC", 1 << 16, &palette).unwrap();
+        // One texel per unit: an 80 x 40 quad -> an 80 x 40 sub-rectangle
+        // of a 256 x 40 retail texture.
+        let one = texture_panels(&src, &[0], "ONE.PIC", 1 << 16).unwrap();
         assert_eq!(one.size, [80, 40]);
         let pic = crate::picture::Pic::parse(&one.picture).unwrap();
-        assert_eq!((pic.width, pic.height), (80, 40));
+        assert_eq!((pic.width, pic.height), (256, 40));
         assert!(crate::originals::panel_sheet(&one.picture));
         let m = Model::parse(&one.shape).unwrap();
         assert_eq!(m.faces[0].texture, "ONE.PIC");
         let max = |k: usize| m.faces[0].uv.iter().map(|p| p[k]).max().unwrap();
         assert_eq!((max(0), max(1)), (79, 39));
         // The coplanar pair shares one 160 x 40 sheet with continuous UVs.
-        let pair = texture_panels(&src, &[0, 1], "PAIR.PIC", 1 << 16, &palette).unwrap();
+        let pair = texture_panels(&src, &[0, 1], "PAIR.PIC", 1 << 16).unwrap();
         assert_eq!(pair.size, [160, 40]);
         let m = Model::parse(&pair.shape).unwrap();
         assert_eq!(m.faces[1].texture, "PAIR.PIC");
         assert_eq!(m.faces[0].uv[1], m.faces[1].uv[0]);
         assert_eq!(m.faces[2].texture, "BASE.PIC");
         // Clamping keeps the aspect: 4 texels a unit would be 640 x 160.
-        let big = texture_panels(&src, &[0, 1], "BIG.PIC", 4 << 16, &palette).unwrap();
+        let big = texture_panels(&src, &[0, 1], "BIG.PIC", 4 << 16).unwrap();
         assert_eq!(big.size, [256, 64]);
         // A standing panel: the longer extent still runs along U.
-        let side = texture_panels(&src, &[3], "SIDE.PIC", 1 << 16, &palette).unwrap();
+        let side = texture_panels(&src, &[3], "SIDE.PIC", 1 << 16).unwrap();
         assert_eq!(side.size, [80, 30]);
         // The square entry point still fits the face into its sheet.
-        let square = texture_panel(&src, 0, "SQ.PIC", 64, &palette).unwrap();
+        let square = texture_panel(&src, 0, "SQ.PIC", 64).unwrap();
         assert_eq!(square.size, [64, 64]);
         let m = Model::parse(&square.shape).unwrap();
         assert!(m.faces[0].uv.iter().all(|p| p[0] <= 63 && p[1] <= 32));
+        // Every generated sheet is a retail texture as tall as its panel,
+        // solid in the face's own game-palette index.
+        for (panel, height) in [
+            (&one, 40),
+            (&pair, 40),
+            (&big, 64),
+            (&side, 30),
+            (&square, 64),
+        ] {
+            assert!(crate::picture::retail_texture_check(&panel.picture).is_ok());
+            let pic = crate::picture::Pic::parse(&panel.picture).unwrap();
+            assert_eq!((pic.width, pic.height), (256, height));
+            assert!(pic.palette.is_empty());
+            assert!(pic.pixels.iter().all(|p| *p == 9));
+        }
     }
     #[test]
     fn exhausted_virtual_gap_and_long_jump_are_refused() {
@@ -675,14 +670,13 @@ mod tests {
         source[70..72].copy_from_slice(&2u16.to_le_bytes());
         source[160..166].copy_from_slice(b".idata");
         put32(&mut source, 172, 4096 + len).unwrap();
-        let palette = [[0; 3]; 256];
-        assert!(texture_panel(&source, 0, "PANEL.PIC", 64, &palette).is_err());
+        assert!(texture_panel(&source, 0, "PANEL.PIC", 64).is_err());
         let mut source = crate::model::demo_shape();
         source.resize(256 + 40000, 0);
         put32(&mut source, 128, 40000).unwrap();
         put32(&mut source, 136, 40000).unwrap();
-        assert!(texture_panel(&source, 0, "PANEL.PIC", 64, &palette).is_err());
-        assert!(texture_panel(&crate::model::demo_shape(), 0, "PANEL.PIC", 0, &palette).is_err());
+        assert!(texture_panel(&source, 0, "PANEL.PIC", 64).is_err());
+        assert!(texture_panel(&crate::model::demo_shape(), 0, "PANEL.PIC", 0).is_err());
     }
     #[test]
     fn face_relocations_are_not_overwritten() {
@@ -699,7 +693,7 @@ mod tests {
         source.extend(12u32.to_le_bytes());
         source.extend((0x3000 | f as u16).to_le_bytes());
         source.extend(0u16.to_le_bytes());
-        assert!(texture_panel(&source, 0, "PANEL.PIC", 64, &[[0; 3]; 256])
+        assert!(texture_panel(&source, 0, "PANEL.PIC", 64)
             .unwrap_err()
             .contains("relocation"));
     }
