@@ -110,11 +110,34 @@ fn shift_label(n: u8, gear: bool) -> String {
         format!("sar {n}")
     }
 }
+/// Both forms occur in the retail census (D1 alone and D1 + NEG), so the
+/// labels name the encoding rather than a "standard" direction.
 fn direction_label(negated: bool) -> &'static str {
     if negated {
-        "Negated (NEG)"
+        "NEG"
     } else {
-        "Plain"
+        "No NEG"
+    }
+}
+/// Panel label of a pose variable; unknown names fall back to the raw name.
+pub(super) fn pose_label(var: &str) -> &str {
+    let name = var.trim_start_matches("_PL");
+    match name {
+        "gearDown" => "Gear",
+        "gearPos" => "Gear position",
+        "leftFlap" => "Flap left",
+        "rightFlap" => "Flap right",
+        "brake" => "Speed brake",
+        "hook" => "Hook",
+        "afterBurner" => "Afterburner",
+        "bayOpen" => "Bay doors",
+        "swingWing" => "Swing wing",
+        "canardPos" => "Canards",
+        "bayDoorPos" => "Bay door position",
+        "vtOn" => "Vectored thrust",
+        "vtAngle" => "Thrust angle",
+        "slats" => "Slats",
+        _ => name,
     }
 }
 /// The current value of a control as an option value, and its label.
@@ -154,7 +177,7 @@ impl App {
             "Parts: this shape has no stub-driven parts".into()
         } else {
             format!(
-                "Parts: {} / pose preview is never saved",
+                "Parts: {}. The pose preview is never saved.",
                 view::count(self.ed.parts.len(), "part", "parts")
             )
         };
@@ -243,12 +266,12 @@ impl App {
             .ed
             .pose
             .iter()
-            .map(|(k, v)| format!("{}={v}", k.trim_start_matches("_PL")))
+            .map(|(k, v)| format!("{}={v}", pose_label(k)))
             .collect();
         self.status = if set.is_empty() {
-            "Pose reset: neutral preview".into()
+            "Pose reset to the neutral preview.".into()
         } else {
-            format!("Pose preview {} / never saved", set.join(" "))
+            format!("Pose preview {}. Never saved.", set.join(" "))
         };
     }
     pub(super) fn pose_preset(&mut self, n: u8) {
@@ -506,7 +529,7 @@ impl App {
             self.refresh();
         }
         self.status = format!(
-            "{} pivot {} = {value} / one undo step",
+            "{} pivot {} = {value}. One undo step.",
             self.part_title(i),
             ["X", "Y", "Z"][axis as usize % 3]
         );
@@ -592,12 +615,12 @@ impl App {
                 .and_then(|x| x.controls.get(k));
             let gear = p.role == Role::Gear;
             self.status = format!(
-                "{}: {} set to {} / one undo step{}",
+                "{}: {} set to {}. One undo step.{}",
                 p.name,
                 c.label,
                 now.map_or(String::new(), |c| current(c, gear).1),
                 if now.is_some_and(|c| !c.retail) {
-                    " / not seen in retail: verify in the game"
+                    " Not seen in retail; verify in the game."
                 } else {
                     ""
                 }
@@ -688,7 +711,7 @@ impl App {
                 }
             }
             for (v, name) in vars.iter().enumerate() {
-                let label = name.trim_start_matches("_PL");
+                let label = pose_label(name);
                 let Some(rect) = o.prop(&mut s, label) else {
                     continue;
                 };
@@ -922,6 +945,7 @@ impl App {
         }
         if gear {
             self.stack_hint(o, s, "Degrees assume gearPos runs from 0 down to -8192 up.");
+            self.stack_hint(o, s, "NEG and No NEG fold the part in opposite directions.");
         }
     }
     /// Joined X/Y/Z pivot NumberFields of the selected part.
@@ -1183,7 +1207,7 @@ impl App {
         a.chrome_click(plain);
         assert!(a.menu.is_none());
         assert_eq!(a.doc.changed_count(), 1, "{}", a.status);
-        assert!(a.status.contains("not seen in retail"), "{}", a.status);
+        assert!(a.status.contains("Not seen in retail"), "{}", a.status);
         assert!(!a.ed.parts[left].retail());
         assert!(a.draw().commands.iter().any(|d| matches!(d,
             Draw::Text(_, _, s, _, _) if s == "Not seen in retail")));

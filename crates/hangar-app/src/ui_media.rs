@@ -1454,11 +1454,11 @@ impl App {
         self.reselect(&name, context);
         self.status = if removals.len() > 1 {
             format!(
-                "Removed {name} and its stored original {} | Ctrl+Z undo",
+                "Removed {name} and its stored original {}. Ctrl+Z undoes it.",
                 removals[1]
             )
         } else {
-            "Entry removed | Ctrl+Z undo".into()
+            "Entry removed. Ctrl+Z undoes it.".into()
         };
         Ok(())
     }

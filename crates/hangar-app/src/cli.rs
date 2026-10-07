@@ -73,13 +73,13 @@ pub fn run() -> Result<()> {
         Some("--panel-check")=>{
             let bytes=platform::read(argument(&args,1)?)?;let model=Model::parse(&bytes)?;
             let summary=model.faces.iter().filter(|f|f.sub&4==0).count();let known=model.faces.iter().filter(|f|f.sub&4==0&&!f.material_selector.is_empty()).count();
-            println!("{} vertices / {} faces / {summary} flat faces / {known} known material states / {} decoded records",model.vertices.len(),model.faces.len(),model.records.len());
+            println!("{} vertices, {} faces, {summary} flat faces, {known} known material states, {} decoded records",model.vertices.len(),model.faces.len(),model.records.len());
             let mut types=std::collections::BTreeMap::new();for f in &model.faces{*types.entry(f.sub).or_insert(0)+=1;}println!("Face subtypes: {types:?}");
             let face:usize=if argument(&args,2)?=="auto"{model.faces.iter().position(|f|f.sub&4==0&&f.sub&!0x67==0&&(!f.material_selector.is_empty()||model.writable)).ok_or("No supported panel")?}else{argument(&args,2)?.parse().map_err(|_|"Face index")?};
             let palette=core::array::from_fn(|i|[i as u8;3]);
             let result=hangar_core::shape_edit::texture_panel(&bytes,face,argument(&args,3)?,64,&palette)?;
             platform::write_new(argument(&args,4)?,&result.shape)?;platform::write_new(argument(&args,5)?,&result.picture)?;
-            println!("Generated panel {} / geometry retained / texture mapped",result.face);
+            println!("Generated panel {}. Geometry retained; texture mapped.",result.face);
         },
         Some("--decal-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("PIC not found")?;app.select_entry(at);println!("{}",app.check_decal_import(argument(&args,3)?,argument(&args,4)?)?);},
         Some("--paint-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Shape not found")?;app.select_entry(at);println!("{}",app.check_real_paint()?);},
@@ -126,7 +126,7 @@ pub fn run() -> Result<()> {
             let name = &archive.entries[at].name;
             let mut index = hangar_core::dependencies::Index::default();
             index.update(&archive);
-            println!("{name}: observed stored names / current LIB only");
+            println!("{name}: observed stored names in the current LIB only.");
             if let Some(scan) = index.get(name) {
                 for link in &scan.links { println!("  -> {} [{}; {}]", link.target, link.evidence, if archive.find(&link.target).is_some() { "local" } else { "not in this LIB" }); }
                 if let Some(error) = &scan.unavailable { println!("  Unverified: {error}"); }

@@ -38,10 +38,10 @@ impl App {
             self.doc.replace(entry, repaired.shape)?;
             self.refresh();
             self.status = format!(
-                "Repaired {panels} generated panels / painted PICs preserved / one undo step"
+                "Repaired {panels} generated panels. Painted PICs preserved. One undo step."
             );
         } else {
-            self.status = "No legacy generated-panel layout found / nothing changed".into();
+            self.status = "No legacy generated-panel layout found. Nothing changed.".into();
         }
         Ok(())
     }
@@ -114,7 +114,7 @@ impl App {
         let i = self.doc.archive.find(&name).unwrap();
         self.open_texture(i);
         self.media_tab = 0;
-        self.status = format!("Created {name}, mapped selected panel / one undo step");
+        self.status = format!("Created {name} and mapped it to the selected panel. One undo step.");
         Ok(())
     }
     pub(super) fn start_generated_stroke(&mut self, face: usize) -> Result<()> {
@@ -167,7 +167,7 @@ impl App {
             return;
         }
         if self.perspective && !self.textured {
-            self.status = "Vertex selected / switch to an orthographic view (5) to drag".into();
+            self.status = "Vertex selected. Switch to an orthographic view (5) to drag.".into();
             return;
         }
         let (Some(entry), Some(model)) = (self.model_entry, &self.model) else {
@@ -220,7 +220,7 @@ impl App {
         d.moving = true;
         d.delta = delta;
         self.status = format!(
-            "Dragging {} vertices / {} / Esc cancels",
+            "Dragging {} vertices. {}. Esc cancels.",
             self.mesh_vertices.len(),
             match d.axis {
                 Some(a) => format!("{} axis locked", ['X', 'Y', 'Z'][a]),
@@ -271,7 +271,7 @@ impl App {
             )?;
             let n = self.commit_points(&d.model, &moved)?;
             self.status = format!(
-                "{} moved / one undo step",
+                "{} moved. One undo step.",
                 view::count(n, "stored vertex", "stored vertices")
             );
         }

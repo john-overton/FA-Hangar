@@ -1297,7 +1297,7 @@ impl App {
                 self.doc.import(name, crate::platform::read(path)?)?;
                 self.selected = self.doc.archive.entries.len() - 1;
                 self.refresh();
-                self.status = "Entry added | Ctrl+Z undo".into();
+                self.status = "Entry added. Ctrl+Z undoes it.".into();
                 Ok(())
             }
             FileAction::Replace => {
@@ -1321,7 +1321,7 @@ impl App {
                     Some(org) => {
                         format!("Entry replaced; original kept as {org}. Ctrl+Z undoes it")
                     }
-                    None => "Entry replaced | Ctrl+Z undo".into(),
+                    None => "Entry replaced. Ctrl+Z undoes it.".into(),
                 };
                 Ok(())
             }
@@ -1492,14 +1492,14 @@ impl App {
             let before = self.model.clone().ok_or("No model")?;
             let n = self.commit_points(&before, &preview)?;
             self.status = format!(
-                "{} transformed / one undo step",
+                "{} transformed. One undo step.",
                 view::count(n, "stored vertex", "stored vertices")
             );
         } else {
             let bytes = preview.write(&self.data)?;
             self.doc.replace(self.selected, bytes)?;
             self.refresh();
-            self.status = "Geometry changed | Ctrl+Z undo".into();
+            self.status = "Geometry changed. Ctrl+Z undoes it.".into();
         }
         Ok(())
     }
@@ -1733,7 +1733,7 @@ impl App {
                                 self.doc.replace(i, bytes)?;
                                 self.refresh();
                                 self.textured = true;
-                                self.status=format!("Recolored {n} untextured faces in the decoded pose; Ctrl+Z undo");
+                                self.status=format!("Recolored {n} untextured faces in the decoded pose. Ctrl+Z undoes it.");
                                 Ok(())
                             })();
                             r
@@ -1906,7 +1906,7 @@ impl App {
                                 self.refresh();
                                 self.field_scroll = scroll;
                                 self.field_selected = index;
-                                self.status = "Field changed | Ctrl+Z undo".into();
+                                self.status = "Field changed. Ctrl+Z undoes it.".into();
                             }
                             r
                         }

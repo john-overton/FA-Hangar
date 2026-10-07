@@ -955,7 +955,7 @@ impl App {
                 .ed
                 .pose
                 .iter()
-                .map(|(k, v)| format!("{}={v}", k.trim_start_matches("_PL")))
+                .map(|(k, v)| format!("{}={v}", super::animation_ui::pose_label(k)))
                 .collect();
             d.styled(
                 x,

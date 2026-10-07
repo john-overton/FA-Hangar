@@ -1555,7 +1555,7 @@ impl App {
                 self.refresh();
                 self.field_scroll = scroll;
                 self.field_selected = i;
-                self.status = "Field changed | Ctrl+Z undo".into();
+                self.status = "Field changed. Ctrl+Z undoes it.".into();
             }
             NumberTarget::Station(column) => self.station_value(column, &format!("{value}"))?,
             NumberTarget::Decal(key) => self.decal_setting(key, &format!("{value}"))?,
@@ -1705,7 +1705,7 @@ impl App {
                 let result = self.restore_saved(t, &text);
                 self.result(result);
                 if result_ok(&self.status) {
-                    self.status = "Value reset to the file on disk | Ctrl+Z undo".into();
+                    self.status = "Value reset to the file on disk. Ctrl+Z undoes it.".into();
                 }
             }
             None => self.status = "No saved value to reset to".into(),

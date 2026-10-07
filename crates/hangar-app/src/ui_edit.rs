@@ -417,22 +417,22 @@ impl App {
                 }
             }
         }
-        self.status = self.selection_text();
+        self.status = format!("{} selected", self.selection_text());
     }
-    /// "3 of 286 faces selected".
+    /// "3 of 286 faces".
     pub(super) fn selection_text(&self) -> String {
         let Some(model) = &self.model else {
             return String::new();
         };
         if self.ed.face_select {
             format!(
-                "{} / {}",
+                "{} of {}",
                 self.ed.mesh_faces.len(),
                 view::count(model.faces.len(), "face", "faces")
             )
         } else {
             format!(
-                "{} / {}",
+                "{} of {}",
                 self.mesh_vertices.len(),
                 view::count(model.vertices.len(), "vertex", "vertices")
             )
@@ -697,7 +697,7 @@ impl App {
                 self.ed.mesh_faces.clear();
                 self.refresh();
                 self.status = format!(
-                    "Deleted {} in place (same-size jumps) / one undo step",
+                    "Deleted {} in place with same-size jumps. One undo step.",
                     view::count(faces.len(), "face", "faces")
                 );
             }
@@ -707,7 +707,7 @@ impl App {
                 self.doc.replace(entry, bytes)?;
                 self.refresh();
                 self.status = format!(
-                    "Flipped {} in place / one undo step",
+                    "Flipped {} in place. One undo step.",
                     view::count(faces.len(), "normal", "normals")
                 );
             }
@@ -718,7 +718,7 @@ impl App {
                 self.refresh();
                 self.ed.mesh_faces = added.faces.clone();
                 self.status = format!(
-                    "Made a {}-corner face, drawn after the face at {:X} / one undo step",
+                    "Added a {}-corner face, drawn after the face at {:X}. One undo step.",
                     corners.len(),
                     added.host.unwrap_or(0)
                 );
@@ -767,7 +767,7 @@ impl App {
                         .collect();
                 }
                 self.status = format!(
-                    "Added a vertex at the median ({} {} {}), slot {} / one undo step",
+                    "Added a vertex at the median ({} {} {}), slot {}. One undo step.",
                     median[0],
                     median[1],
                     median[2],
@@ -916,7 +916,7 @@ impl App {
         }
         self.sync_face_vertices();
         self.status = format!(
-            "{} {}: {}, {} / one undo step",
+            "{} {}: {}, {}. One undo step.",
             if p.extrude { "Extruded" } else { "Duplicated" },
             view::count(p.faces.len(), "face", "faces"),
             view::count(added.faces.len(), "new face", "new faces"),
@@ -1315,7 +1315,7 @@ impl App {
         assert!(a.ed.mesh_box.is_some_and(|b| b.boxing));
         a.pointer(a.right() - 4, a.dock_y() - 4, 1, false, false);
         let boxed = a.ed.mesh_faces.len();
-        assert!(boxed > 0 && a.status.contains(" / "));
+        assert!(boxed > 0 && a.status.contains(" of "));
         a.key(Key::Char('b'), false, false);
         a.smoke_press(p[0], p[1], false);
         assert!(
