@@ -21,6 +21,7 @@ pub mod identity;
 pub mod material;
 pub mod model;
 pub mod originals;
+pub mod palette;
 pub mod picture;
 pub mod resource_ops;
 pub mod save;

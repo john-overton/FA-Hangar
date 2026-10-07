@@ -6,7 +6,7 @@ use crate::{
     authoring::validate_id,
     brf::Brf,
     clone_aircraft::{self, Graph, Names, Package, Policy},
-    dependencies, invalid, originals,
+    dependencies, invalid, originals, palette,
     resource_ops::{rewrite, Choice, Item, Plan},
     Result,
 };
@@ -645,6 +645,49 @@ impl Duplicate {
         }
         self.plan.apply(doc)
     }
+    /// When this LIB has neither `PALETTE.PAL` nor the donor's `<ID>.PAL`
+    /// (which the graph copies or shares like any resource), offer `game`,
+    /// the palette Hangar resolved, as `<new ID>.PAL`.
+    pub fn add_palette(&mut self, archive: &Archive, game: Option<(&[u8], &str)>) {
+        let name = palette::private_name(&self.root());
+        if self.package.archive.find(&name).is_some()
+            || archive
+                .find(&palette::private_name(&self.package.donor))
+                .is_some()
+        {
+            return;
+        }
+        if archive.find(&name).is_some() {
+            self.plan
+                .notes
+                .push(format!("{name} is already in this LIB; it is not replaced"));
+            return;
+        }
+        let offer = palette::companion(archive, archive, &self.package.donor, &self.root(), game);
+        self.plan.add_palette(offer);
+    }
+    /// The palette companion: name, where it comes from, and whether it is copied.
+    pub fn palette(&self) -> Option<(&str, &str, bool)> {
+        let (at, from) = self.plan.palette.as_ref()?;
+        let item = &self.plan.items[*at];
+        Some((
+            item.entry.name.as_str(),
+            from.as_str(),
+            item.choice == Choice::TakeSource,
+        ))
+    }
+    pub fn set_palette(&mut self, copy: bool) {
+        if let Some((at, _)) = self.plan.palette {
+            self.plan.items[at].choice = if copy {
+                Choice::TakeSource
+            } else {
+                Choice::KeepTarget
+            };
+        }
+    }
+    pub fn notes(&self) -> &[String] {
+        &self.plan.notes
+    }
 }
 pub fn duplicate(
     archive: &Archive,
@@ -1112,5 +1155,68 @@ mod tests {
         assert_eq!(doc.archive.bytes().unwrap(), before);
         // Collisions are checked against the whole LIB.
         assert!(duplicate(&doc.archive, &own, "TWO", names, &share).is_err());
+    }
+    /// The fixture with DEMO's private palette in place of PALETTE.PAL.
+    fn private_palette() -> Archive {
+        let mut a = fixture();
+        let at = a.find("PALETTE.PAL").unwrap();
+        a.entries[at] = Entry::new("DEMO.PAL", vec![9; 768]).unwrap();
+        a
+    }
+    #[test]
+    fn palettes_follow_rename_and_duplicate() {
+        // Rename reference ID renames the aircraft's <ID>.PAL with it.
+        let mut doc = Document::new(private_palette());
+        let plan = rename(&doc.archive, "DEMO.PT", "NEO").unwrap();
+        assert!(plan.ready(), "{:?}", plan.refusals);
+        assert!(plan
+            .renames
+            .contains(&("DEMO.PAL".to_string(), "NEO.PAL".to_string())));
+        plan.apply(&mut doc).unwrap();
+        assert_eq!(payload(&doc.archive, "NEO.PAL"), vec![9; 768]);
+        assert!(doc.archive.find("DEMO.PAL").is_none());
+        // Duplicate copies DEMO.PAL as TWIN.PAL through the graph; no extra row.
+        let a = private_palette();
+        let own = ownership(&a, "DEMO.PT").unwrap();
+        let names = Names {
+            short: "Twin",
+            long: "Twin",
+        };
+        let mut dup = duplicate(&a, &own, "TWIN", names, &own.default_share()).unwrap();
+        assert!(dup
+            .package
+            .mapping
+            .contains(&("DEMO.PAL".to_string(), "TWIN.PAL".to_string())));
+        dup.add_palette(&a, Some((&[1; 768], "G")));
+        assert!(dup.palette().is_none());
+        // PALETTE.PAL in the LIB: shared, no companion.
+        let a = fixture();
+        let own = ownership(&a, "DEMO.PT").unwrap();
+        let mut dup = duplicate(&a, &own, "TWIN", names, &own.default_share()).unwrap();
+        dup.add_palette(&a, Some((&[1; 768], "G")));
+        assert!(dup.palette().is_none());
+        // No palette in the LIB: the resolved game palette becomes TWIN.PAL,
+        // Copy by default, Skip leaves it out; one undo step either way.
+        let mut a = fixture();
+        let at = a.find("PALETTE.PAL").unwrap();
+        a.entries.remove(at);
+        let before = a.bytes().unwrap();
+        let own = ownership(&a, "DEMO.PT").unwrap();
+        let mut dup = duplicate(&a, &own, "TWIN", names, &own.default_share()).unwrap();
+        dup.add_palette(&a, Some((&[2; 768], "PALETTE.PAL from FA_2.LIB")));
+        assert_eq!(
+            dup.palette(),
+            Some(("TWIN.PAL", "PALETTE.PAL from FA_2.LIB", true))
+        );
+        let mut doc = Document::new(a.clone());
+        dup.apply(&mut doc).unwrap();
+        assert_eq!(payload(&doc.archive, "TWIN.PAL"), vec![2; 768]);
+        assert!(doc.archive.find("PALETTE.PAL").is_none());
+        assert!(doc.undo());
+        assert_eq!(doc.archive.bytes().unwrap(), before);
+        dup.set_palette(false);
+        dup.apply(&mut doc).unwrap();
+        assert!(doc.archive.find("TWIN.PT").is_some());
+        assert!(doc.archive.find("TWIN.PAL").is_none());
     }
 }

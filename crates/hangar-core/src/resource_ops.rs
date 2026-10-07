@@ -4,7 +4,7 @@ use crate::{
     brf::Brf,
     dependencies::{self, Location},
     document::Document,
-    invalid, originals, Result,
+    invalid, originals, palette, Result,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -30,8 +30,45 @@ pub struct Plan {
     pub removals: Vec<String>,
     pub(crate) removed_before: Vec<Entry>,
     pub notes: Vec<String>,
+    /// The palette companion's item and where its bytes come from.
+    pub palette: Option<(usize, String)>,
 }
+/// Why a copied object gets `<ID>.PAL` and never `PALETTE.PAL`.
+pub const PALETTE_NOTE: &str = "The palette lets Hangar show this object's colors. Hangar never adds PALETTE.PAL to a custom LIB: FA keeps the newest of duplicate names, so it would recolor every aircraft in the game.";
 impl Plan {
+    /// Add the palette companion as a review row (copied by default; Skip
+    /// keeps it out), or note why none is offered.
+    pub fn add_palette(&mut self, offer: palette::Offer) {
+        let c = match offer {
+            palette::Offer::Skip(reason) => {
+                if !reason.is_empty() {
+                    self.notes.push(reason);
+                }
+                return;
+            }
+            palette::Offer::Copy(c) => c,
+        };
+        if self.items.iter().any(|i| i.entry.name == c.entry.name) {
+            return;
+        }
+        let conflict = c.previous.is_some();
+        self.items.push(Item {
+            entry: c.entry,
+            previous: c.previous,
+            choice: if conflict {
+                Choice::Unresolved
+            } else {
+                Choice::TakeSource
+            },
+            conflict,
+        });
+        self.palette = Some((self.items.len() - 1, c.from));
+        self.notes.push(PALETTE_NOTE.into());
+    }
+    /// Whether item `i` is the palette companion.
+    pub fn is_palette(&self, i: usize) -> bool {
+        self.palette.as_ref().is_some_and(|(p, _)| *p == i)
+    }
     pub fn ready(&self) -> bool {
         self.items
             .iter()
@@ -91,7 +128,12 @@ pub fn move_between(
 ) -> Result<usize> {
     let root = root.to_ascii_uppercase();
     let mut removals = BTreeSet::new();
-    for item in &plan.items {
+    for (at, item) in plan.items.iter().enumerate() {
+        // The palette companion is copied: what stays in the source still
+        // displays with it.
+        if plan.is_palette(at) {
+            continue;
+        }
         let Some(i) = source.archive.find(&item.entry.name) else {
             continue;
         };
@@ -506,6 +548,69 @@ mod tests {
         );
         doc.undo();
         assert_eq!(doc.archive.bytes().unwrap(), original);
+    }
+    /// DEMO.PT drawing DEMO.SH and its texture, plus the aircraft's own palette.
+    fn aircraft() -> Archive {
+        let mut a = source();
+        let pt = b"[brent's_relocatable_format]\nstring \"DEMO.SH\"\nend\n".to_vec();
+        a.entries.insert(0, Entry::new("DEMO.PT", pt).unwrap());
+        a.entries
+            .push(Entry::new("DEMO.PAL", vec![5; 768]).unwrap());
+        a
+    }
+    #[test]
+    fn palette_companions_copy_skip_and_stay_in_a_move_source() {
+        let source = aircraft();
+        // A copy brings DEMO.PAL as its own row, one undo step with the rest.
+        let mut target = Document::new(Archive::empty());
+        let mut plan = transfer(&source, &target.archive, "DEMO.PT", true).unwrap();
+        assert!(plan.items.iter().all(|i| i.entry.name != "DEMO.PAL"));
+        plan.add_palette(palette::companion(
+            &source,
+            &target.archive,
+            "DEMO.PT",
+            "DEMO.PT",
+            None,
+        ));
+        let (at, from) = plan.palette.clone().unwrap();
+        assert_eq!(plan.items[at].entry.name, "DEMO.PAL");
+        assert_eq!(from, "DEMO.PAL in the source");
+        assert!(plan.notes.iter().any(|n| n == PALETTE_NOTE));
+        plan.apply(&mut target).unwrap();
+        assert!(target.archive.find("DEMO.PAL").is_some());
+        target.undo();
+        assert!(target.archive.entries.is_empty());
+        // Skip: the row stays, nothing is written for it.
+        plan.items[at].choice = Choice::KeepTarget;
+        assert!(plan.ready());
+        plan.apply(&mut target).unwrap();
+        assert!(target.archive.find("DEMO.PAL").is_none());
+        assert!(target.archive.find("DEMO.PT").is_some());
+        // A target with PALETTE.PAL gets no companion, only a note.
+        let mut game = Archive::empty();
+        game.entries
+            .push(Entry::new(palette::GAME, vec![1; 768]).unwrap());
+        let mut plan = transfer(&source, &game, "DEMO.PT", true).unwrap();
+        plan.add_palette(palette::companion(
+            &source, &game, "DEMO.PT", "DEMO.PT", None,
+        ));
+        assert!(plan.palette.is_none());
+        assert!(plan.notes.iter().any(|n| n.contains("has PALETTE.PAL")));
+        // A move takes the aircraft and leaves DEMO.PAL in the source.
+        let mut from = Document::new(source.clone());
+        let mut to = Document::new(Archive::empty());
+        let mut plan = transfer(&from.archive, &to.archive, "DEMO.PT", true).unwrap();
+        plan.add_palette(palette::companion(
+            &from.archive,
+            &to.archive,
+            "DEMO.PT",
+            "DEMO.PT",
+            None,
+        ));
+        move_between(&mut from, &mut to, &plan, "DEMO.PT").unwrap();
+        assert!(from.archive.find("DEMO.PT").is_none());
+        assert!(from.archive.find("DEMO.PAL").is_some());
+        assert!(to.archive.find("DEMO.PAL").is_some());
     }
     #[test]
     fn renaming_rewrites_references_and_checks_stale_removals() {
