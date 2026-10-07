@@ -524,7 +524,9 @@ impl App {
                 x + 22,
                 yy + 35,
                 w - 260,
-                if item.conflict {
+                if plan.follows_kept(item) {
+                    "Stored original of a kept target PIC / not copied"
+                } else if item.conflict {
                     "Different target resource"
                 } else if item.previous.is_some() {
                     "Existing / unchanged or rewritten"
@@ -533,7 +535,7 @@ impl App {
                 },
                 c::INK_MUTED,
             );
-            if item.conflict {
+            if item.conflict && !plan.follows_kept(item) {
                 o.button(
                     [x + w - 236, yy + 9, 102, 25],
                     "Keep target",
@@ -552,7 +554,9 @@ impl App {
                     x + w - 212,
                     yy + 25,
                     184,
-                    if item.choice == Choice::TakeSource {
+                    if plan.follows_kept(item) {
+                        "Follows its PIC"
+                    } else if item.choice == Choice::TakeSource {
                         "Apply"
                     } else {
                         "Keep identical target"
