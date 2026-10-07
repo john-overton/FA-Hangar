@@ -1270,6 +1270,14 @@ impl App {
             &format!("Palette \u{b7} index {}", self.brush),
             Icon::Palette,
         ) {
+            o.info(&mut s, "Source", &self.palette_label(), "");
+            if self.palette_gray() && picture.is_none_or(|p| p.palette.len() != 256) {
+                o.stack_notice(
+                    &mut s,
+                    Tone::Warn,
+                    "No game palette found; colors are approximate.",
+                );
+            }
             let cell = ((s.w - 2 * space::SPACE_2) / 16).max(8);
             for row in 0..16 {
                 if s.collapsed() {
@@ -1298,7 +1306,7 @@ impl App {
             if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
                 o.button_ex(
                     rect,
-                    Btn::new("Load palette").with_icon(Icon::Folder),
+                    Btn::new("Load palette\u{2026}").with_icon(Icon::Folder),
                     Action::File(FileAction::Palette),
                 );
             }

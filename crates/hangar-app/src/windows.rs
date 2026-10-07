@@ -688,6 +688,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
         .trim();
         if rest == "--smoke-test" {
+            crate::ui::NO_PALETTE_MEMORY.store(true, core::sync::atomic::Ordering::Relaxed);
             app.demo();
             let before = app.doc.archive.bytes().unwrap();
             app.key(Key::Char('g'), false, false);
@@ -700,6 +701,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             app.smoke_layout();
             app.smoke_media();
             app.smoke_clone();
+            app.smoke_palette();
             app.smoke_texture_repair();
             crate::saving::smoke();
             app.smoke_save_policy();
@@ -1074,6 +1076,14 @@ pub fn load_recent() -> Vec<String> {
 }
 pub fn save_recent(paths: &[String]) -> Result<()> {
     save_paths("tore-hangar-recent.txt", paths)
+}
+/// The last game palette Hangar resolved: its source label, then 1,536 hex
+/// digits. Read-only locations keep it for the session only.
+pub fn load_palette_memory() -> Vec<String> {
+    load_paths("tore-hangar-palette.txt", 2)
+}
+pub fn save_palette_memory(lines: &[String]) -> Result<()> {
+    save_paths("tore-hangar-palette.txt", lines)
 }
 pub fn load_decals() -> Vec<String> {
     load_paths("tore-hangar-decals.txt", 16)

@@ -71,7 +71,10 @@ impl App {
     }
     pub(super) fn package_report(&mut self) -> hangar_core::validation::Report {
         let providers = self.dependency_providers();
-        hangar_core::validation::inspect_with(&self.doc, &mut self.dependencies, &providers)
+        let mut report =
+            hangar_core::validation::inspect_with(&self.doc, &mut self.dependencies, &providers);
+        self.palette_checks(&mut report);
+        report
     }
     /// Package errors for textures FA's texture mapper cannot read.
     pub(super) fn texture_layout_errors(&self) -> usize {

@@ -25,6 +25,7 @@ pub(super) struct Library {
     required: Vec<String>,
     suggested: Option<String>,
     palette: Option<Box<[[u8; 3]; 256]>>,
+    palette_label: String,
     dock: u8,
     scroll: usize,
     table_scroll: usize,
@@ -55,6 +56,9 @@ pub(super) struct Clipboard {
     additional: Vec<Archive>,
     pub name: String,
     pub path: String,
+    /// The palette Hangar showed the copied resource with, and its source:
+    /// the companion's bytes when the source has no `<ID>.PAL`.
+    palette: Option<Box<(Vec<u8>, String)>>,
 }
 fn normalized(path: &str) -> String {
     let path = path.replace('\\', "/");
@@ -135,6 +139,7 @@ impl App {
             required: core::mem::take(&mut self.required),
             suggested: self.suggested_output.take(),
             palette: self.palette_override.take(),
+            palette_label: core::mem::take(&mut self.pal.loaded_label),
             dock: self.dock,
             scroll: self.scroll,
             table_scroll: self.table_scroll,
@@ -155,6 +160,7 @@ impl App {
         self.required = library.required;
         self.suggested_output = library.suggested;
         self.palette_override = library.palette;
+        self.pal.loaded_label = library.palette_label;
         self.dock = library.dock;
         self.scroll = library.scroll;
         self.table_scroll = library.table_scroll;
@@ -250,6 +256,7 @@ impl App {
         self.required.clear();
         self.suggested_output = None;
         self.palette_override = None;
+        self.pal.loaded_label.clear();
         self.scroll = self
             .library_rows()
             .iter()
@@ -306,6 +313,7 @@ impl App {
                 .collect(),
             name: self.name().into(),
             path: self.path.clone(),
+            palette: self.game_palette().map(Box::new),
         });
         self.status = format!(
             "Copied a snapshot of {}. Select a target LIB and paste resources",
@@ -320,12 +328,27 @@ impl App {
             .ok_or("Copy a source resource first")?;
         let mut sources = vec![&source.archive];
         sources.extend(source.additional.iter());
-        self.transfer_plan = Some(resource_ops::transfer_from(
+        let mut plan = resource_ops::transfer_from(
             &sources,
             &self.doc.archive,
             &source.name,
             self.include_dependencies,
-        )?);
+        )?;
+        // Into another LIB, an object brings the palette Hangar showed it with.
+        if source.path != self.path {
+            let game = source
+                .palette
+                .as_ref()
+                .map(|p| (p.0.as_slice(), p.1.as_str()));
+            plan.add_palette(hangar_core::palette::companion(
+                &source.archive,
+                &self.doc.archive,
+                &source.name,
+                &source.name,
+                game,
+            ));
+        }
+        self.transfer_plan = Some(plan);
         if self.transfer_source.is_some() {
             self.transfer_plan.as_mut().unwrap().notes.push("When moving, known shared dependencies stay in the source. Linked files supplied by other LIBs are copied. Each changed LIB has its own undo step.".into());
         }
@@ -376,12 +399,19 @@ impl App {
         {
             return Err("Another open LIB references this resource; isolate it or update that LIB before renaming".into());
         }
-        self.transfer_plan = Some(resource_ops::rename(
-            &self.doc.archive,
-            self.name(),
-            name.trim(),
-            duplicate,
-        )?);
+        let mut plan =
+            resource_ops::rename(&self.doc.archive, self.name(), name.trim(), duplicate)?;
+        if duplicate {
+            let game = self.game_palette();
+            plan.add_palette(hangar_core::palette::companion(
+                &self.doc.archive,
+                &self.doc.archive,
+                self.name(),
+                &name.trim().to_ascii_uppercase(),
+                game.as_ref().map(|(b, l)| (b.as_slice(), l.as_str())),
+            ));
+        }
+        self.transfer_plan = Some(plan);
         self.transfer_scroll = 0;
         self.transfer_note = 0;
         self.transfer_is_copy = false;
@@ -564,27 +594,51 @@ impl App {
                 c::INK,
                 Style::Value,
             );
+            let palette = plan.palette.as_ref().filter(|(at, _)| *at == i);
+            let detail = match palette {
+                Some((_, from)) => {
+                    format!("Palette for Hangar's colors, from {from}; never PALETTE.PAL")
+                }
+                None if plan.follows_kept(item) => {
+                    "Stored original of a kept target PIC; not copied".into()
+                }
+                None if item.conflict => {
+                    "A different resource with this name is in the target".into()
+                }
+                None if item.previous.is_some() => {
+                    "Already in the target; unchanged or rewritten".into()
+                }
+                None => "New resource".into(),
+            };
             d.styled(
                 bx + 6 + m::ICON + space::SPACE_2,
                 baseline(yy + m::ROW_H, m::ROW_H, Style::Label),
-                &fit(
-                    if plan.follows_kept(item) {
-                        "Stored original of a kept target PIC; not copied"
-                    } else if item.conflict {
-                        "A different resource with this name is in the target"
-                    } else if item.previous.is_some() {
-                        "Already in the target; unchanged or rewritten"
-                    } else {
-                        "New resource"
-                    },
-                    tw - m::ICON,
-                    Style::Label,
-                ),
+                &fit(&detail, tw - m::ICON, Style::Label),
                 c::INK_MUTED,
                 Style::Label,
             );
             let cx = bx + bw - space::SPACE_2 - choice_w;
-            if item.conflict && !plan.follows_kept(item) {
+            if palette.is_some() && !item.conflict {
+                // Copy or Skip; Skip leaves the target without it.
+                o.segmented(
+                    [
+                        cx,
+                        yy + (2 * m::ROW_H - m::BUTTON_H) / 2,
+                        choice_w,
+                        m::BUTTON_H,
+                    ],
+                    &[
+                        (
+                            Btn::new("Copy").on(item.choice == Choice::TakeSource),
+                            Action::TransferChoice(i, true),
+                        ),
+                        (
+                            Btn::new("Skip").on(item.choice == Choice::KeepTarget),
+                            Action::TransferChoice(i, false),
+                        ),
+                    ],
+                );
+            } else if item.conflict && !plan.follows_kept(item) {
                 o.segmented(
                     [
                         cx,

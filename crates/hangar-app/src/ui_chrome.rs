@@ -1009,6 +1009,21 @@ impl App {
                 y += line;
             }
         }
+        if self.palette_gray() && self.model.is_some() {
+            d.icon_sm(x, y - 10, Icon::Warning, c::AMBER, c::GM_950);
+            d.styled(
+                x + m::ICON_SM + space::SPACE_1,
+                y,
+                &fit(
+                    "No game palette found; colors are approximate",
+                    room - m::ICON_SM - space::SPACE_1,
+                    Style::ValueSm,
+                ),
+                c::AMBER,
+                Style::ValueSm,
+            );
+            y += line;
+        }
         if !self.ed.pose.is_empty() {
             let pose: Vec<String> = self
                 .ed

@@ -93,6 +93,8 @@ pub(super) enum Action {
     DuplicateAircraft,
     /// Duplicate review: copy (false) or share (true) toggle row.
     DuplicateToggle(usize, bool),
+    /// Duplicate review: copy (true) or skip the `<ID>.PAL` companion.
+    DuplicatePalette(bool),
     /// Rename or duplicate review: back to the previous step.
     IdentityBack,
     BrowserUp,
@@ -551,6 +553,7 @@ impl App {
                 let r = self.duplicate_toggle(row, share);
                 self.result(r);
             }
+            Action::DuplicatePalette(copy) => self.duplicate_palette(copy),
             Action::Menu(n) => self.menu = if self.menu == Some(n) { None } else { Some(n) },
             Action::Mode(m) => {
                 if self.animation_tool {
@@ -2719,10 +2722,12 @@ impl App {
             let mut yy = y + top + space::SPACE_2;
             let col = 96.min(w / 3);
             let error = self.status.starts_with("Error:");
+            let palette = self.palette_label();
             for (label, value) in [
                 ("Entry", self.name()),
                 ("Decoded", self.detail.as_str()),
                 ("LIB", self.path.as_str()),
+                ("Palette", palette.as_str()),
             ] {
                 o.canvas.styled(
                     x + space::SPACE_3 + col - text_width(label, Style::Label),
@@ -3088,7 +3093,7 @@ impl App {
     /// Every hit region lies inside the control it draws (rect fills within
     /// 1px of the region reach all four edges, hovered when needed), stays in
     /// the window, and no two regions overlap.
-    fn smoke_geometry(&mut self, state: &str) {
+    pub(super) fn smoke_geometry(&mut self, state: &str) {
         let (w, h) = (self.width, self.height);
         let hits: Vec<Hit> = self.layout().hits;
         let covered = |draw: &Canvas, [x, y, rw, rh]: [i32; 4]| {

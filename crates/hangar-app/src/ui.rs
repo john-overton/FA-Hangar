@@ -509,6 +509,8 @@ pub struct App {
     base_palette: Box<[[u8; 3]; 256]>,
     palette_loaded: bool,
     palette_override: Option<Box<[[u8; 3]; 256]>>,
+    /// Display palette resolver: cached answer, source label, remembered palette.
+    pal: Box<palette_ui::State>,
     image_zoom: i32,
     image_pan: [i32; 2],
     image_drag: bool,
@@ -671,6 +673,7 @@ impl App {
             base_palette: Box::new(core::array::from_fn(|i| [i as u8; 3])),
             palette_loaded: false,
             palette_override: None,
+            pal: Box::default(),
             image_zoom: 100,
             image_pan: [0, 0],
             image_drag: false,
@@ -894,36 +897,6 @@ impl App {
         self.painting = false;
         self.last_paint = None;
         self.paint_enabled = false;
-        *self.base_palette = self
-            .palette_override
-            .as_deref()
-            .copied()
-            .unwrap_or_else(|| core::array::from_fn(|i| [i as u8; 3]));
-        self.palette_loaded = self.palette_override.is_some();
-        let mut palettes = Vec::new();
-        let pts: Vec<_> = self
-            .doc
-            .archive
-            .entries
-            .iter()
-            .filter(|e| e.name.ends_with(".PT"))
-            .collect();
-        if pts.len() == 1 {
-            palettes.push(format!("{}.PAL", pts[0].name.split('.').next().unwrap()));
-        }
-        palettes.push("PALETTE.PAL".into());
-        if let Some(entry) = palettes
-            .iter()
-            .find_map(|name| self.resolve_resource(name).map(|(_, _, e)| e))
-        {
-            if let Ok(b) = entry.read() {
-                if let Ok(p) = picture::palette(&b) {
-                    *self.base_palette = p;
-                    self.palette_loaded = true;
-                }
-            }
-        }
-
         self.brf = None;
         self.model = None;
         self.model_entry = None;
@@ -956,6 +929,7 @@ impl App {
             .selected
             .min(self.doc.archive.entries.len().saturating_sub(1));
         self.aircraft_users = self.dependencies.aircraft_users(self.name());
+        self.resolve_palette();
         if let Some(e) = self.doc.archive.entries.get(self.selected) {
             match e.read() {
                 Ok(data) => {
@@ -1388,23 +1362,7 @@ impl App {
                 self.status = format!("Exported WAV {path}");
                 Ok(())
             }
-            FileAction::Palette => {
-                let bytes = crate::platform::read(path)?;
-                let palette = if bytes.starts_with(b"EALIB") {
-                    let archive = Archive::parse(bytes)?;
-                    let at = archive
-                        .find("PALETTE.PAL")
-                        .ok_or("This LIB has no PALETTE.PAL")?;
-                    picture::palette(&archive.entries[at].read()?)?
-                } else {
-                    picture::palette(&bytes)?
-                };
-                self.palette_override = Some(Box::new(palette));
-                self.refresh();
-                self.status =
-                    "Display palette loaded; original resource palettes remain unchanged".into();
-                Ok(())
-            }
+            FileAction::Palette => self.load_palette(path),
             FileAction::Variant => Err("Start Export object from a selected resource".into()),
             FileAction::CloneSource => self.add_clone_source(path),
             FileAction::VariantSh => {
@@ -2134,6 +2092,7 @@ impl App {
                                     self.status=format!("New aircraft {} | {} shared stock references | {} missing textures",self.variant_id,v.shared.len(),required.len());
                                     let palette =
                                         self.palette_loaded.then(|| self.base_palette.clone());
+                                    let label = self.palette_label();
                                     self.install_library(
                                         Document::new(v.archive),
                                         format!(
@@ -2142,6 +2101,7 @@ impl App {
                                         ),
                                     )?;
                                     self.doc.mark_unsaved();
+                                    self.pal.loaded_label = format!("{label}, from the donor LIB");
                                     self.palette_override = palette;
                                     self.required = required;
                                     self.variant_shape.clear();
@@ -2972,6 +2932,7 @@ mod media;
 mod cloning_ui;
 #[cfg(not(windows))]
 pub(crate) use cloning_ui::index as library_index;
+pub(crate) use palette_ui::NO_MEMORY as NO_PALETTE_MEMORY;
 
 #[path = "ui_dependencies.rs"]
 mod dependencies_ui;
@@ -3010,3 +2971,6 @@ mod texture_ui;
 
 #[path = "ui_replace.rs"]
 mod replace_ui;
+
+#[path = "ui_palette.rs"]
+mod palette_ui;

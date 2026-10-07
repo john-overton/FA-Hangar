@@ -174,7 +174,17 @@ impl App {
                 });
             }
         }
-        clone_aircraft::build_with(
+        // The palette Hangar shows the donor with is the one the export
+        // carries as <ID>.PAL when this LIB has neither its own nor
+        // PALETTE.PAL; other LIBs' PALETTE.PAL copies never conflict.
+        let game = self.game_palette();
+        let own_palette = hangar_core::palette::private_name(self.name());
+        let local = |n: &str| self.doc.archive.find(n).is_some();
+        let game = game.filter(|_| !local(&own_palette) && !local(hangar_core::palette::GAME));
+        if game.is_some() && !catalog.contains(&own_palette) {
+            catalog.insert(hangar_core::palette::GAME.into());
+        }
+        let mut package = clone_aircraft::build_with(
             &catalog,
             self.name(),
             &self.variant_id,
@@ -191,6 +201,11 @@ impl App {
             |name| {
                 if let Some(i) = self.doc.archive.find(name) {
                     return self.doc.archive.entries[i].read();
+                }
+                if let Some((bytes, _)) =
+                    game.as_ref().filter(|_| name == hangar_core::palette::GAME)
+                {
+                    return Ok(bytes.clone());
                 }
                 // Explicit source choices win; an open document supplies its in-memory bytes.
                 for source in sources.iter().filter(|s| s.explicit) {
@@ -252,7 +267,33 @@ impl App {
                     .map(|(bytes, _)| bytes)
                     .ok_or_else(|| format!("Missing {name}; use Add source LIB to locate it"))
             },
-        )
+        )?;
+        if self.clone_palette_row(&package).is_none() && hangar_core::palette::object(self.name()) {
+            package.notes.insert(
+                0,
+                "No palette found: the new LIB has no <ID>.PAL, so Hangar shows it in grayscale until one is loaded".into(),
+            );
+        }
+        Ok(package)
+    }
+    /// The export's `<ID>.PAL` row: its index in the mapping and where its
+    /// bytes come from.
+    pub(super) fn clone_palette_row(
+        &self,
+        package: &clone_aircraft::Package,
+    ) -> Option<(usize, String)> {
+        let name = format!("{}.PAL", package.id);
+        let at = package.mapping.iter().position(|(_, new)| *new == name)?;
+        let old = &package.mapping[at].0;
+        let from = if self.doc.archive.find(old).is_some() {
+            format!("{old} in this LIB")
+        } else if old == hangar_core::palette::GAME {
+            self.game_palette()
+                .map_or_else(|| old.clone(), |(_, label)| label)
+        } else {
+            format!("{old} from a source LIB")
+        };
+        Some((at, from))
     }
     pub(super) fn clone_review(&self, o: &mut Layout) {
         use theme::{metric as m, space};
@@ -309,6 +350,7 @@ impl App {
         let notes = package.notes.len().min(4) as i32;
         let foot = y + h - space::SPACE_4 - m::BUTTON_H - space::SPACE_3 - (notes + 1) * m::ROW_H;
         let rows = ((foot - head - m::ROW_H) / m::ROW_H).max(1) as usize;
+        let palette = self.clone_palette_row(package);
         for (row, (old, new)) in package
             .mapping
             .iter()
@@ -316,6 +358,12 @@ impl App {
             .take(rows)
             .enumerate()
         {
+            let old = match &palette {
+                Some((at, from)) if *at == row + self.clone_scroll => {
+                    format!("Palette: {from}")
+                }
+                _ => old.clone(),
+            };
             let yy = head + m::ROW_H + row as i32 * m::ROW_H;
             d.rect(
                 bx,
@@ -328,7 +376,7 @@ impl App {
             d.styled(
                 bx + 8,
                 base,
-                &fit(old, nx - bx - 16, Style::Value),
+                &fit(&old, nx - bx - 16, Style::Value),
                 c::INK_MUTED,
                 Style::Value,
             );

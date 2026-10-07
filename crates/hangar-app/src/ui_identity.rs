@@ -21,11 +21,19 @@ pub(super) struct State {
     pub in_place: bool,
     /// Wizard short name; the long name is `App::clone_title`.
     pub short: String,
+    /// Duplicate review: Skip chosen for the `<ID>.PAL` companion.
+    pub palette_skip: bool,
 }
 /// One review list row: a section head, or a resource with its detail and,
 /// for duplicates, the index of its Copy/Share toggle and whether it is shared.
 pub(super) enum Row {
     Head(String),
+    /// The `<ID>.PAL` companion with its Copy/Skip toggle.
+    Palette {
+        name: String,
+        detail: String,
+        copy: bool,
+    },
     Item {
         name: String,
         detail: String,
@@ -352,6 +360,7 @@ impl App {
         self.identity.in_place = true;
         self.identity.own = None;
         self.identity.duplicate = None;
+        self.identity.palette_skip = false;
         self.clone_step(1);
         self.status = format!(
             "{} will be duplicated in this LIB; shared resources stay shared",
@@ -376,13 +385,19 @@ impl App {
             short: &self.identity.short,
             long: &self.clone_title,
         };
-        let dup = identity::duplicate(
+        let mut dup = identity::duplicate(
             &self.doc.archive,
             own,
             &self.variant_id,
             names,
             &self.identity.share,
         )?;
+        let game = self.game_palette();
+        dup.add_palette(
+            &self.doc.archive,
+            game.as_ref().map(|(b, l)| (b.as_slice(), l.as_str())),
+        );
+        dup.set_palette(!self.identity.palette_skip);
         self.identity.duplicate = Some(dup);
         Ok(())
     }
@@ -446,7 +461,8 @@ impl App {
             .ok_or("No duplicate review")?;
         dup.apply(&mut self.doc)?;
         let root = dup.root();
-        let copied = dup.package.archive.entries.len();
+        let copied = dup.package.archive.entries.len()
+            + usize::from(dup.palette().is_some_and(|(_, _, copy)| copy));
         let shared = dup.package.shared.len();
         self.identity.duplicate = None;
         self.identity.own = None;
@@ -491,6 +507,13 @@ impl App {
                 toggle,
             });
         }
+        if let Some((name, from, copy)) = dup.palette() {
+            rows.push(Row::Palette {
+                name: name.into(),
+                detail: format!("Palette for Hangar's colors, from {from}"),
+                copy,
+            });
+        }
         let originals = p.archive.entries.len() - p.mapping.len();
         if originals > 0 {
             rows.push(Row::Item {
@@ -533,9 +556,10 @@ impl App {
             widgets::Tone::Neutral,
             "Copy gives the new aircraft its own file under a new name; Share keeps the existing name. Damage families, skins and store icons switch together.".to_string(),
         )];
-        let notes: Vec<String> = p
-            .notes
+        let notes: Vec<String> = dup
+            .notes()
             .iter()
+            .chain(&p.notes)
             .filter(|n| !n.starts_with("Referenced files are copied"))
             .cloned()
             .collect();
@@ -585,6 +609,38 @@ impl App {
             let ry = top + (i - first) as i32 * ROW;
             match row {
                 Row::Head(text) => subhead(&mut o.canvas, bx, ry + ROW - m::ROW_H, bw, text),
+                Row::Palette { name, detail, copy } => {
+                    let fill = if i % 2 == 0 { c::GM_950 } else { c::GM_900 };
+                    o.canvas.rect(bx, ry, bw, ROW, fill);
+                    let items = [
+                        (Btn::new("Copy").on(*copy), Action::DuplicatePalette(true)),
+                        (Btn::new("Skip").on(!*copy), Action::DuplicatePalette(false)),
+                    ];
+                    let tw = Layout::segmented_width(&items);
+                    let nx = bx + space::SPACE_2;
+                    let name_w = (bw / 3).min(140);
+                    let base = baseline(ry, ROW, Style::Value);
+                    o.canvas.styled(
+                        nx,
+                        base,
+                        &fit(name, name_w, Style::Value),
+                        c::INK,
+                        Style::Value,
+                    );
+                    let dx = nx + name_w + space::SPACE_2;
+                    let right = bx + bw - space::SPACE_1 - tw;
+                    o.canvas.styled(
+                        dx,
+                        base,
+                        &fit(detail, right - space::SPACE_2 - dx, Style::Value),
+                        if *copy { c::AMBER } else { c::INK_MUTED },
+                        Style::Value,
+                    );
+                    o.segmented(
+                        [right, ry + (ROW - m::BUTTON_H) / 2, tw, m::BUTTON_H],
+                        &items,
+                    );
+                }
                 Row::Item {
                     name,
                     detail,
@@ -701,6 +757,20 @@ impl App {
                 self.clone_step(3);
             }
             _ => {}
+        }
+    }
+    /// Duplicate review: copy or skip the `<ID>.PAL` companion.
+    pub(super) fn duplicate_palette(&mut self, copy: bool) {
+        self.identity.palette_skip = !copy;
+        if let Some(dup) = self.identity.duplicate.as_mut() {
+            dup.set_palette(copy);
+            if let Some((name, _, _)) = dup.palette() {
+                self.status = if copy {
+                    format!("{name} is copied with the duplicate")
+                } else {
+                    format!("{name} is skipped; Hangar resolves another palette for it")
+                };
+            }
         }
     }
     /// Esc from any identity prompt drops its drafts.

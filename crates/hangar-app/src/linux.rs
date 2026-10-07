@@ -677,6 +677,14 @@ pub fn load_recent() -> Vec<String> {
 pub fn save_recent(paths: &[String]) -> Result<()> {
     save_paths("tore-hangar-recent.txt", paths)
 }
+/// The last game palette Hangar resolved: its source label, then 1,536 hex
+/// digits. Read-only locations keep it for the session only.
+pub fn load_palette_memory() -> Vec<String> {
+    load_paths("tore-hangar-palette.txt", 2)
+}
+pub fn save_palette_memory(lines: &[String]) -> Result<()> {
+    save_paths("tore-hangar-palette.txt", lines)
+}
 pub fn load_decals() -> Vec<String> {
     load_paths("tore-hangar-decals.txt", 16)
 }
