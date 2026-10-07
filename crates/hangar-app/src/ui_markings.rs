@@ -209,8 +209,7 @@ impl App {
         pixels: &mut [u32],
         [w, h]: [usize; 2],
         m: &Model,
-        center: [i32; 3],
-        span: i32,
+        view: &hangar_core::model::ViewFrame,
     ) {
         if !self.markings_shown() {
             return;
@@ -244,7 +243,7 @@ impl App {
             let q: Vec<[i32; 2]> = points
                 .iter()
                 .map(|p| {
-                    let r = self.raster_point(*p, [w, h], center, span);
+                    let r = view.raster16(*p, [w, h]);
                     [r[0].div_euclid(16), r[1].div_euclid(16)]
                 })
                 .collect();

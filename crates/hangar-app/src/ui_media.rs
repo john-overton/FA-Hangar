@@ -1,5 +1,6 @@
 use super::view::{border, label_fit, Action, Icon, Layout};
 use super::*;
+use hangar_core::model::ViewFrame;
 use hangar_core::originals;
 pub(super) struct Frame {
     w: usize,
@@ -467,29 +468,16 @@ impl App {
                     .or_else(|| self.textures.get(name))
             })
     }
-    /// A model point in the raster of `render_model`: 1/16-pixel x and y
-    /// and the fixed-point camera depth.
-    pub(super) fn raster_point(
-        &self,
-        point: [i32; 3],
-        [w, h]: [usize; 2],
-        center: [i32; 3],
-        span: i32,
-    ) -> [i32; 3] {
-        let p = self.camera_point(core::array::from_fn(|i| (point[i] - center[i]) * 256));
-        [
-            w as i32 * 8
-                + (p[0] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
-                    / (span as i64 * 400 * 256)) as i32
-                + self.pan[0] * 16 * w as i32 / (self.right() - self.left()),
-            h as i32 * 8
-                - (p[1] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
-                    / (span as i64 * 400 * 256)) as i32
-                + self.pan[1] * 16 * h as i32 / (self.dock_y() - 54),
-            p[2],
-        ]
+    /// The frame `render_model` draws a `target`-sized view with: the
+    /// shared viewport projection (`view_frame`), always orthographic.
+    pub(super) fn raster_frame(&self, target: [i32; 2]) -> Option<ViewFrame> {
+        let mut frame = self.view_frame(target)?;
+        frame.perspective = false;
+        Some(frame)
     }
-    fn render_model(&self, w: usize, h: usize) -> Frame {
+    /// The shaded model in a `w` x `h` raster that is shown stretched over
+    /// a `target`-sized view.
+    fn render_model(&self, w: usize, h: usize, target: [i32; 2]) -> Frame {
         let mut frame = Frame {
             w,
             h,
@@ -502,13 +490,13 @@ impl App {
             return frame;
         };
         // Frame on the committed model, as the wireframe and overlays do, so previews move.
-        let (center, span) = self
-            .model_bounds()
-            .unwrap_or_else(|| super::hardpoint_ui::bounds(m));
+        let Some(view) = self.raster_frame(target) else {
+            return frame;
+        };
         let points: Vec<[i32; 3]> = m
             .vertices
             .iter()
-            .map(|v| self.raster_point(v.point, [w, h], center, span))
+            .map(|v| view.raster16(v.point, [w, h]))
             .collect();
         let mut depth = vec![i64::MIN; w * h];
         let edge = |a: [i32; 3], b: [i32; 3], x: i32, y: i32| {
@@ -702,7 +690,7 @@ impl App {
                 frame.pixels = out;
             }
         }
-        self.markings_overlay(&mut frame.pixels, [w, h], m, center, span);
+        self.markings_overlay(&mut frame.pixels, [w, h], m, &view);
         if let Some(selected) = self.selected_face {
             for y in 1..h - 1 {
                 for x in 1..w - 1 {
@@ -719,22 +707,15 @@ impl App {
         }
         frame
     }
-    /// `raster_point` framed as `render_model` frames the shown model.
-    pub(super) fn shown_raster_point(&self, w: usize, h: usize, p: [i32; 3]) -> [i32; 3] {
-        let (center, span) = self
-            .model_bounds()
-            .or_else(|| self.model_for_paint().map(super::hardpoint_ui::bounds))
-            .unwrap_or(([0; 3], 1));
-        self.raster_point(p, [w, h], center, span)
-    }
-    /// The shaded raster with its face and depth buffers (occlusion tests).
+    /// The shaded raster of the main viewport (`w` x `h` stretched over
+    /// it) with its face and depth buffers (occlusion tests).
     pub(super) fn raster(&self, w: usize, h: usize) -> Frame {
-        self.render_model(w, h)
+        self.render_model(w, h, self.view_size())
     }
     pub(super) fn draw_model(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
         let rw = (w as usize).min(512);
         let rh = (h as usize * rw / w as usize).max(1);
-        let frame = self.render_model(rw, rh);
+        let frame = self.render_model(rw, rh, [w, h]);
         blit(o, [x, y, w, h], &frame.pixels, rw, rh);
     }
     pub(super) fn model_hit(&self, x: i32, y: i32) -> Option<(usize, [i32; 2])> {
@@ -755,7 +736,7 @@ impl App {
         }
         let rw = (w as usize).min(512);
         let rh = (h as usize * rw / w as usize).max(1);
-        let f = self.render_model(rw, rh);
+        let f = self.render_model(rw, rh, [w, h]);
         let i = ((y - top) as usize * f.h / h as usize) * f.w + (x - l) as usize * f.w / w as usize;
         if f.faces[i] == usize::MAX {
             None
@@ -766,7 +747,7 @@ impl App {
     /// The textured view as RGBA rows, for real-data checks.
     #[cfg(not(windows))]
     pub(super) fn render_rgba(&self, w: usize, h: usize) -> Vec<u8> {
-        self.render_model(w, h)
+        self.render_model(w, h, [w as i32, h as i32])
             .pixels
             .iter()
             .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8, 255])
@@ -774,7 +755,7 @@ impl App {
     }
     /// Pixels of `color` in a 320 x 200 viewport raster, for smoke checks.
     pub(super) fn raster_count(&self, color: u32) -> usize {
-        self.render_model(320, 200)
+        self.render_model(320, 200, [320, 200])
             .pixels
             .iter()
             .filter(|p| **p == color)
@@ -789,7 +770,7 @@ impl App {
         }
         let rw = (w as usize).min(512);
         let rh = (h as usize * rw / w as usize).max(1);
-        let f = self.render_model(rw, rh);
+        let f = self.render_model(rw, rh, [w, h]);
         Some(
             f.pixels[((y - top) as usize * f.h / h as usize) * f.w
                 + (x - l) as usize * f.w / w as usize],
@@ -1696,7 +1677,7 @@ impl App {
         self.demo();
         self.select_entry(0);
         self.textured = true;
-        let before = self.render_model(192, 144);
+        let before = self.render_model(192, 144, [192, 144]);
         let i = (193..before.faces.len() - 193)
             .find(|i| {
                 let f = before.faces[*i];
@@ -1719,7 +1700,7 @@ impl App {
         self.paint_model_hit(face, uv);
         assert!(self.painting);
         assert!(!self.doc.dirty());
-        let live = self.render_model(192, 144);
+        let live = self.render_model(192, 144, [192, 144]);
         assert_ne!(
             before.pixels[i], live.pixels[i],
             "3D preview did not update during stroke"
@@ -1756,7 +1737,10 @@ impl App {
         let y = rect[1] + (uv[1] * 2 + 1) * rect[3] / (picture.height as i32 * 2);
         self.paint_point(x, y);
         assert!(self.painting);
-        assert_ne!(self.render_model(192, 144).pixels[i], before.pixels[i]);
+        assert_ne!(
+            self.render_model(192, 144, [192, 144]).pixels[i],
+            before.pixels[i]
+        );
         self.finish_stroke();
         let packed = self.doc.archive.bytes().unwrap();
         let reopened = Archive::parse(packed).unwrap();
@@ -1785,7 +1769,7 @@ impl App {
     #[cfg(not(windows))]
     pub fn check_real_paint(&mut self) -> Result<String> {
         self.textured = true;
-        let frame = self.render_model(192, 144);
+        let frame = self.render_model(192, 144, [192, 144]);
         let i = (193..frame.faces.len() - 193)
             .find(|i| {
                 let face = frame.faces[*i];
@@ -1820,7 +1804,7 @@ impl App {
         if !self.painting {
             return Err(self.status.clone());
         }
-        if self.render_model(192, 144).pixels[i] == frame.pixels[i] {
+        if self.render_model(192, 144, [192, 144]).pixels[i] == frame.pixels[i] {
             return Err("Preview failed to change".into());
         }
         self.finish_stroke();
@@ -1846,7 +1830,7 @@ impl App {
     #[cfg(not(windows))]
     pub fn check_real_restore(&mut self) -> Result<String> {
         self.textured = true;
-        let frame = self.render_model(192, 144);
+        let frame = self.render_model(192, 144, [192, 144]);
         let i = (193..frame.faces.len() - 193)
             .find(|i| {
                 let face = frame.faces[*i];
@@ -2201,7 +2185,7 @@ impl App {
         upper.color = 80;
         m.faces.push(upper);
         a.model = Some(m);
-        assert_eq!(a.render_model(128, 128).faces[64 * 128 + 64], 1);
+        assert_eq!(a.render_model(128, 128, [128, 128]).faces[64 * 128 + 64], 1);
         let pic_entry = a.doc.archive.find("DEMO.PIC").unwrap();
         let mut pic_bytes = a.doc.archive.entries[pic_entry].read().unwrap();
         let mut pic = Pic::parse(&pic_bytes).unwrap();
@@ -2213,29 +2197,29 @@ impl App {
         f.sub = 12;
         f.uv = vec![[0, 0], [63, 0], [0, 63]];
         assert_eq!(
-            a.render_model(128, 128).faces[64 * 128 + 64],
+            a.render_model(128, 128, [128, 128]).faces[64 * 128 + 64],
             0,
             "Keyed 255 must not hide the base or receive brush hits"
         );
         a.model.as_mut().unwrap().faces[1].sub = 14;
         assert_eq!(
-            a.render_model(128, 128).faces[64 * 128 + 64],
+            a.render_model(128, 128, [128, 128]).faces[64 * 128 + 64],
             1,
             "Keyed base-fill faces stay opaque"
         );
         assert_eq!(
-            a.render_model(128, 128).pixels[64 * 128 + 64],
+            a.render_model(128, 128, [128, 128]).pixels[64 * 128 + 64],
             rgb(a.base_palette[80])
         );
         a.model.as_mut().unwrap().faces[1].sub = 4;
         assert_eq!(
-            a.render_model(128, 128).faces[64 * 128 + 64],
+            a.render_model(128, 128, [128, 128]).faces[64 * 128 + 64],
             1,
             "Opaque 255 remains paintable"
         );
         a.model.as_mut().unwrap().faces[1].normal = Some([0, 0, -32765]);
         assert_eq!(
-            a.render_model(128, 128).faces[64 * 128 + 64],
+            a.render_model(128, 128, [128, 128]).faces[64 * 128 + 64],
             0,
             "Rear-facing artwork cannot cover the front skin"
         );

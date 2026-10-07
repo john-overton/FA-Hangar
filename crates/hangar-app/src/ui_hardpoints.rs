@@ -1,6 +1,7 @@
 use super::view::{text_fit, Action, Icon, Layout};
 use super::*;
 use hangar_core::hardpoints::{self, Station};
+use hangar_core::model::ViewFrame;
 
 pub(super) struct Context {
     pub entry: usize,
@@ -66,40 +67,50 @@ impl App {
         let model = self.hp_model()?;
         (!model.vertices.is_empty()).then(|| bounds(model))
     }
+    /// The main viewport's size, px.
+    pub(super) fn view_size(&self) -> [i32; 2] {
+        [self.right() - self.left() - 2, self.dock_y() - 54]
+    }
+    /// The shared viewport projection for a view of `size` px: framed on
+    /// the committed model (else the shown one), the camera, zoom and pan
+    /// (scaled from the main viewport). The raster, the wireframe and every
+    /// overlay project through this, so they agree to the pixel.
+    pub(super) fn view_frame(&self, size: [i32; 2]) -> Option<ViewFrame> {
+        let (center, span) = self
+            .model_bounds()
+            .or_else(|| self.model_for_paint().map(bounds))?;
+        let [vw, vh] = self.view_size();
+        Some(ViewFrame {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            zoom: self.zoom,
+            perspective: self.perspective && !self.textured,
+            center,
+            span,
+            size,
+            pan: [
+                self.pan[0] as i64 * 16 * size[0] as i64 / vw.max(1) as i64,
+                self.pan[1] as i64 * 16 * size[1] as i64 / vh.max(1) as i64,
+            ],
+        })
+    }
+    /// A model point on screen in the main viewport (`view_frame`).
     pub(super) fn hp_project(&self, p: [i32; 3]) -> Option<[i32; 2]> {
-        let (center, span) = self.model_bounds()?;
-        let p = self.camera_point(core::array::from_fn(|i| p[i] - center[i]));
-        let (w, h) = (self.right() - self.left() - 2, self.dock_y() - 54);
-        let denom = if self.perspective && !self.textured {
-            (span as i64 * 4 - p[2] as i64).max(span as i64)
-        } else {
-            span as i64 * 4
-        };
-        Some([
-            self.left()
-                + 1
-                + w / 2
-                + self.pan[0]
-                + (p[0] as i64 * w.min(h) as i64 * self.zoom as i64 * 3 / (denom * 100)) as i32,
-            54 + h / 2 + self.pan[1]
-                - (p[1] as i64 * w.min(h) as i64 * self.zoom as i64 * 3 / (denom * 100)) as i32,
-        ])
+        let [x, y] = self.view_frame(self.view_size())?.project(p);
+        Some([self.left() + 1 + x, 54 + y])
     }
     pub(super) fn cursor_station(&self, x: i32, y: i32, reference: [i32; 3]) -> Result<[i32; 3]> {
         if self.perspective && !self.textured {
             return Err("Use orthographic view to place or drag stations".into());
         }
-        let (center, span) = self
-            .model_bounds()
+        let frame = self
+            .view_frame(self.view_size())
             .ok_or("No model for station placement")?;
-        let (w, h) = (self.right() - self.left() - 2, self.dock_y() - 54);
-        let mut p = self.camera_point(core::array::from_fn(|i| reference[i] - center[i]));
-        let denom = w.min(h) as i64 * self.zoom as i64 * 3;
-        p[0] =
-            ((x - self.left() - 1 - w / 2 - self.pan[0]) as i64 * span as i64 * 400 / denom) as i32;
-        p[1] = -((y - 54 - h / 2 - self.pan[1]) as i64 * span as i64 * 400 / denom) as i32;
-        let p = self.camera_inverse(p);
-        let world = core::array::from_fn(|i| p[i] + center[i]);
+        let at = [
+            (x - self.left() - 1) as i64 * 16 + 8,
+            (y - 54) as i64 * 16 + 8,
+        ];
+        let world = frame.unproject16(at, reference);
         if world.iter().any(|v| !(-32768..=32767).contains(v)) {
             return Err("Station outside signed source-coordinate range".into());
         }

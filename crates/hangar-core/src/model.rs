@@ -213,6 +213,102 @@ pub fn rotate(p: [i32; 3], axis: usize, degrees: i32) -> [i32; 3] {
 pub fn view_point(yaw: i32, pitch: i32, p: [i32; 3]) -> [i32; 3] {
     rotate(rotate([-p[0], p[2], p[1]], 1, yaw), 0, pitch)
 }
+/// The inverse of `view_point`.
+pub fn view_inverse(yaw: i32, pitch: i32, p: [i32; 3]) -> [i32; 3] {
+    let p = rotate(rotate(p, 0, -pitch), 1, -yaw);
+    [-p[0], p[2], p[1]]
+}
+/// Sub-unit precision of `ViewFrame`: points are scaled by this before the
+/// camera turn, so projected positions never snap to whole source units.
+pub const VIEW_FIXED: i64 = 256;
+/// The one viewport projection the shaded raster, the wireframe and every
+/// overlay (vertex handles, picking, box select, gizmo, snap targets,
+/// stations) share. Integer only; positions are in 1/16 px.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewFrame {
+    pub yaw: i32,
+    pub pitch: i32,
+    /// Percent.
+    pub zoom: i32,
+    /// Perspective divide (the wireframe's perspective view).
+    pub perspective: bool,
+    /// Framing: the model's bounds centre and largest extent.
+    pub center: [i32; 3],
+    pub span: i32,
+    /// View size, px.
+    pub size: [i32; 2],
+    /// Pan, 1/16 px.
+    pub pan: [i64; 2],
+}
+impl ViewFrame {
+    fn denom(&self, depth: i64) -> i64 {
+        let span = self.span.max(1) as i64 * VIEW_FIXED;
+        let denom = if self.perspective {
+            (span * 4 - depth).max(span)
+        } else {
+            span * 4
+        };
+        denom * 100
+    }
+    fn scale(&self) -> i64 {
+        self.size[0].min(self.size[1]).max(1) as i64 * self.zoom.max(1) as i64 * 48
+    }
+    /// `point` in 1/16 px of the view (origin top-left) and its camera
+    /// depth in source units x `VIEW_FIXED` (larger is nearer).
+    pub fn project16(&self, point: [i32; 3]) -> [i64; 3] {
+        let d = core::array::from_fn(|i| {
+            ((point[i] as i64 - self.center[i] as i64) * VIEW_FIXED)
+                .clamp(i32::MIN as i64 / 2, i32::MAX as i64 / 2) as i32
+        });
+        let p = view_point(self.yaw, self.pitch, d).map(|v| v as i64);
+        let (s, denom) = (self.scale(), self.denom(p[2]));
+        [
+            self.size[0] as i64 * 8 + self.pan[0] + p[0] * s / denom,
+            self.size[1] as i64 * 8 + self.pan[1] - p[1] * s / denom,
+            p[2],
+        ]
+    }
+    /// `point` in whole px of the view: the pixel holding `project16`.
+    pub fn project(&self, point: [i32; 3]) -> [i32; 2] {
+        let p = self.project16(point);
+        [0, 1].map(|k| p[k].div_euclid(16).clamp(-(1 << 28), 1 << 28) as i32)
+    }
+    /// `project16` in 1/16 px of a `raster` drawn stretched over the view,
+    /// with the depth: the shaded raster's corners.
+    pub fn raster16(&self, point: [i32; 3], raster: [usize; 2]) -> [i32; 3] {
+        let p = self.project16(point);
+        let at = |k: usize| {
+            (p[k] * raster[k] as i64)
+                .div_euclid(self.size[k].max(1) as i64)
+                .clamp(-(1 << 30), 1 << 30) as i32
+        };
+        [
+            at(0),
+            at(1),
+            p[2].clamp(i32::MIN as i64, i32::MAX as i64) as i32,
+        ]
+    }
+    /// The point at view position `at` (1/16 px) with `reference`'s depth:
+    /// the inverse of an orthographic `project16`.
+    pub fn unproject16(&self, at: [i64; 2], reference: [i32; 3]) -> [i32; 3] {
+        let d = core::array::from_fn(|i| {
+            ((reference[i] as i64 - self.center[i] as i64) * VIEW_FIXED)
+                .clamp(i32::MIN as i64 / 2, i32::MAX as i64 / 2) as i32
+        });
+        let mut p = view_point(self.yaw, self.pitch, d);
+        let (s, denom) = (self.scale(), self.denom(p[2] as i64));
+        let x = (at[0] - self.size[0] as i64 * 8 - self.pan[0]) * denom / s;
+        let y = -(at[1] - self.size[1] as i64 * 8 - self.pan[1]) * denom / s;
+        p[0] = x.clamp(i32::MIN as i64 / 2, i32::MAX as i64 / 2) as i32;
+        p[1] = y.clamp(i32::MIN as i64 / 2, i32::MAX as i64 / 2) as i32;
+        let p = view_inverse(self.yaw, self.pitch, p);
+        core::array::from_fn(|i| {
+            let v = p[i] as i64;
+            (self.center[i] as i64 + (v + v.signum() * VIEW_FIXED / 2) / VIEW_FIXED)
+                .clamp(i32::MIN as i64, i32::MAX as i64) as i32
+        })
+    }
+}
 fn word(b: &[u8], p: usize) -> Result<i32> {
     Ok(u16_at(b, p)? as u16 as i16 as i32)
 }
@@ -1104,6 +1200,78 @@ fn module(c: Vec<u8>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn frame(zoom: i32) -> ViewFrame {
+        ViewFrame {
+            yaw: 35,
+            pitch: 25,
+            zoom,
+            perspective: false,
+            center: [0, 19, 3],
+            span: 135,
+            size: [1316, 818],
+            pan: [0, 0],
+        }
+    }
+    /// A small shape at 800%: one source unit is about 30 px, so a
+    /// projection that turned whole units would put every corner on a
+    /// lattice. Consecutive unit steps must advance evenly instead.
+    #[test]
+    fn view_frame_has_sub_unit_precision() {
+        for zoom in [100, 250, 800] {
+            let f = frame(zoom);
+            let xs: Vec<i64> = (0..24).map(|i| f.project16([i, 0, 0])[0]).collect();
+            let steps: Vec<i64> = xs.windows(2).map(|w| w[1] - w[0]).collect();
+            let (lo, hi) = (*steps.iter().min().unwrap(), *steps.iter().max().unwrap());
+            assert!(hi - lo <= 4, "zoom {zoom}: uneven unit steps {steps:?}");
+            assert!(lo != 0, "zoom {zoom}: two points share a position");
+        }
+        // Linear: the projection of a sum is the sum of the offsets.
+        let f = frame(800);
+        let o = f.project16(f.center);
+        let a = f.project16([7, 23, -5]);
+        let b = f.project16([-3, 41, 9]);
+        let ab = f.project16([7 - 3, 23 + 41 - 19, -5 + 9 - 3]);
+        for k in 0..2 {
+            assert!((ab[k] - (a[k] + b[k] - o[k])).abs() <= 6, "{k}");
+        }
+    }
+    /// The raster's corners are the same projection scaled to the raster,
+    /// and whole pixels hold their 1/16 px position.
+    #[test]
+    fn view_frame_raster_and_screen_agree() {
+        for zoom in [100, 250, 800] {
+            let f = frame(zoom);
+            let raster = [512usize, 318];
+            for p in [[40, -9, -3], [-44, 4, -4], [0, 87, -3], [2, 75, -1]] {
+                let s = f.project16(p);
+                let r = f.raster16(p, raster);
+                let px = f.project(p);
+                for k in 0..2 {
+                    let back = r[k] as i64 * f.size[k] as i64 / raster[k] as i64;
+                    assert!((back - s[k]).abs() <= 16 * f.size[k] as i64 / raster[k] as i64);
+                    assert_eq!(px[k] as i64, s[k].div_euclid(16));
+                }
+                assert_eq!(r[2] as i64, s[2]);
+            }
+        }
+    }
+    #[test]
+    fn view_frame_unprojects_its_points() {
+        let mut f = frame(250);
+        f.pan = [96, -40];
+        for p in [[40, -9, -3], [-44, 4, -4], [0, 87, -3], [1200, -800, 300]] {
+            let s = f.project16(p);
+            // The integer sine table is not exactly orthonormal: far
+            // points come back within half a percent.
+            let back = f.unproject16([s[0], s[1]], p);
+            for k in 0..3 {
+                assert!(
+                    (back[k] - p[k]).abs() <= 1 + p[k].abs() / 200,
+                    "{back:?} {p:?}"
+                );
+            }
+        }
+    }
     #[test]
     fn parse_transform_and_preserve_other_bytes() {
         let b = demo_shape();

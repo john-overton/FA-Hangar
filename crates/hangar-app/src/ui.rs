@@ -2888,25 +2888,14 @@ impl App {
         [-p[0], p[2], p[1]]
     }
     fn viewport(&self, d: &mut Canvas, m: &Model, x: i32, y: i32, w: i32, h: i32) {
-        let (center, span) = self
-            .model_bounds()
-            .unwrap_or_else(|| hardpoint_ui::bounds(m));
+        // The shared viewport projection (`view_frame`), as the overlays use.
+        let Some(frame) = self.view_frame([w, h]) else {
+            return;
+        };
+        let (center, span) = (frame.center, frame.span);
         let project = |p: [i32; 3]| {
-            let p = self.camera_point(core::array::from_fn(|i| p[i] - center[i]));
-            let denom = if self.perspective {
-                (span * 4 - p[2]).max(span)
-            } else {
-                span * 4
-            };
-            [
-                x + w / 2
-                    + self.pan[0]
-                    + (p[0] as i64 * w.min(h) as i64 * self.zoom as i64 * 3 / (denom as i64 * 100))
-                        as i32,
-                y + h / 2 + self.pan[1]
-                    - (p[1] as i64 * w.min(h) as i64 * self.zoom as i64 * 3 / (denom as i64 * 100))
-                        as i32,
-            ]
+            let [px, py] = frame.project(p);
+            [x + px, y + py]
         };
         let line = |d: &mut Canvas, a: [i32; 2], b: [i32; 2], color: Rgb| {
             if let Some((a, b)) = clip(a, b, [x, y, x + w - 1, y + h - 1]) {

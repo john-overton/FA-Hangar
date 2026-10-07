@@ -1348,7 +1348,10 @@ impl App {
         assert_eq!(a.ed.mesh_faces, part, "{}", a.status);
         assert!(a.status.starts_with("Selected "));
         // Delete through the Mesh menu: one undo step back to the exact bytes.
+        // Clear first: the part's gizmo may sit over the face centre.
+        a.smoke_press(empty[0], empty[1], false);
         a.smoke_press(p[0], p[1], false);
+        assert_eq!(a.ed.mesh_faces, vec![offset]);
         let mesh = a.smoke_find(&|x| matches!(x, Action::Menu(chrome::MENU_MESH)));
         a.chrome_click(mesh);
         let delete = a.smoke_find(&|x| matches!(x, Action::MeshOp(OP_DELETE)));

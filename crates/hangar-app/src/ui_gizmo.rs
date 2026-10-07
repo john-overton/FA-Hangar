@@ -1103,6 +1103,7 @@ impl App {
         let rw = (w as usize).min(512);
         let rh = (h as usize * rw / w.max(1) as usize).max(1);
         let frame = self.raster(rw, rh);
+        let view = self.raster_frame(self.view_size())?;
         let mut faces = vec![false; m.faces.len()];
         for f in &frame.faces {
             if let Some(v) = faces.get_mut(*f) {
@@ -1113,7 +1114,7 @@ impl App {
             .vertices
             .iter()
             .map(|v| {
-                let [px, py, z] = self.shown_raster_point(rw, rh, v.point);
+                let [px, py, z] = view.raster16(v.point, [rw, rh]);
                 let (x, y) = (px.div_euclid(16), py.div_euclid(16));
                 for dy in -1..=1 {
                     for dx in -1..=1 {
@@ -1498,6 +1499,7 @@ impl App {
             smoke_gizmo_snap(w, h);
             smoke_gizmo_controls(w, h);
             smoke_vertex_handles(w, h);
+            smoke_handle_precision(w, h);
         }
         smoke_gizmo_refused();
     }
@@ -1950,6 +1952,112 @@ fn smoke_vertex_handles(w: i32, h: i32) {
     a.smoke_press(keel[0], keel[1], false);
     assert_eq!(a.mesh_vertices, vec![4]);
     a.smoke_geometry("vertex handles");
+}
+/// Where the shaded raster draws `p`, in screen px: its raster corner
+/// mapped back over the viewport as the blit stretches it.
+fn raster_corner(a: &App, p: [i32; 3], [rw, rh]: [usize; 2]) -> [i32; 2] {
+    let [w, h] = a.view_size();
+    let r = a.raster_frame([w, h]).unwrap().raster16(p, [rw, rh]);
+    [
+        a.left() + 1 + (r[0] as i64 * w as i64).div_euclid(rw as i64 * 16) as i32,
+        54 + (r[1] as i64 * h as i64).div_euclid(rh as i64 * 16) as i32,
+    ]
+}
+/// Handles, picking and the raster share one projection: at 100, 250 and
+/// 800% every handle sits within 1 px of its rasterized corner, on a pixel
+/// of a face with that corner; a selected face's handles draw at its
+/// corners at high zoom.
+#[inline(never)]
+fn smoke_handle_precision(w: i32, h: i32) {
+    let mut a = gizmo_app(w, h);
+    a.gizmo.mode = G_NONE;
+    a.textured = true;
+    a.flat = true;
+    let [vw, vh] = a.view_size();
+    let rw = (vw as usize).min(512);
+    let rh = (vh as usize * rw / vw as usize).max(1);
+    let (cx, cy) = (a.left() + 1 + vw / 2, 54 + vh / 2);
+    let m = a.model.clone().unwrap();
+    for (zoom, k) in [100, 250, 800]
+        .into_iter()
+        .flat_map(|z| (0..m.vertices.len()).map(move |k| (z, k)))
+    {
+        // Each corner in turn at the viewport centre.
+        a.zoom = zoom;
+        a.pan = [0, 0];
+        let at = a.hp_project(m.vertices[k].point).unwrap();
+        a.pan = [cx - at[0], cy - at[1]];
+        let frame = a.raster(rw, rh);
+        let handles = a.vertex_handles();
+        assert!(!handles.is_empty(), "zoom {zoom}: handles");
+        for hd in &handles {
+            let p = m.vertices[hd.index].point;
+            let c = raster_corner(&a, p, [rw, rh]);
+            let d = (c[0] - hd.at[0]).abs().max((c[1] - hd.at[1]).abs());
+            assert!(d <= 1, "zoom {zoom}: handle {:?} vs corner {c:?}", hd.at);
+            assert_eq!(Some(hd.at), a.hp_project(p));
+            // A shown handle sits on a pixel of a face with that corner
+            // (within 2 raster px: sharp tips cover few pixel centres).
+            let x = ((hd.at[0] - a.left() - 1) as usize * rw / vw as usize) as i32;
+            let y = ((hd.at[1] - 54) as usize * rh / vh as usize) as i32;
+            let on = (-2..=2).any(|dy| {
+                (-2..=2).any(|dx| {
+                    let (x, y) = (x + dx, y + dy);
+                    x >= 0
+                        && y >= 0
+                        && (x as usize) < rw
+                        && (y as usize) < rh
+                        && m.faces
+                            .get(frame.faces[y as usize * rw + x as usize])
+                            .is_some_and(|f| f.indices.iter().any(|i| m.vertices[*i].point == p))
+                })
+            });
+            assert!(
+                !hd.visible || on,
+                "zoom {zoom}: handle {} off its faces",
+                hd.index
+            );
+        }
+    }
+    // A selected face at 800%, each corner panned to the viewport centre
+    // in turn: an amber handle and a pick region on the rasterized corner.
+    a.zoom = 100;
+    a.pan = [0, 0];
+    let face = (0..40)
+        .find_map(|k| a.pick_face(cx + k * 3, cy + k))
+        .expect("A face near the centre");
+    let corners: Vec<usize> = m.faces[face].indices.clone();
+    a.mesh_vertices = corners.clone();
+    a.zoom = 800;
+    for i in &corners {
+        let p = m.vertices[*i].point;
+        a.pan = [0, 0];
+        let at = a.hp_project(p).unwrap();
+        a.pan = [cx - at[0], cy - at[1]];
+        let c = raster_corner(&a, p, [rw, rh]);
+        assert!(
+            (c[0] - cx).abs() <= 1 && (c[1] - cy).abs() <= 1,
+            "Corner {i} at {c:?}"
+        );
+        let layout = a.layout();
+        let hit = layout
+            .hits
+            .iter()
+            .find_map(|x| match x.action {
+                Action::MeshVertex(v) if m.vertices[v].point == p => Some(x.rect),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("Corner {i} has no handle"));
+        let centre = [hit[0] + hit[2] / 2, hit[1] + hit[3] / 2];
+        assert!((centre[0] - c[0]).abs() <= 1 && (centre[1] - c[1]).abs() <= 1);
+        assert!(
+            layout.canvas.commands.iter().any(|d| matches!(d,
+                Draw::Rect(x, y, w, _, color) if *color == c::AMBER.0
+                    && x + w / 2 == centre[0] && *y + w / 2 == centre[1])),
+            "Amber handle at corner {i}"
+        );
+    }
+    a.smoke_geometry("handle precision");
 }
 #[inline(never)]
 fn smoke_gizmo_refused() {

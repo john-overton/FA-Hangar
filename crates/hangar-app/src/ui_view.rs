@@ -1062,6 +1062,13 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        // "STATE@ZOOM" sets up STATE, then zooms the viewport to ZOOM percent.
+        if let Some((state, zoom)) = name.rsplit_once('@') {
+            let zoom: i32 = zoom.parse().map_err(|_| "Zoom percent after @")?;
+            self.workspace(state)?;
+            self.zoom = zoom.clamp(10, 1000);
+            return Ok(());
+        }
         if name == "libraries" || name == "move-review" {
             self.path = "SOURCE.LIB".into();
             let source = self.library_id;
