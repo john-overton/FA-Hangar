@@ -933,3 +933,258 @@ mod replace_tests {
         assert_eq!(&bytes[64 + 1024..], &original[64 + 1024..]);
     }
 }
+
+/// `is_retail_texture` with the reason when it is not: each difference FA's
+/// texture mapper depends on (kind, width, row table, embedded palette), or
+/// that other header fields differ from retail textures.
+pub fn retail_texture_check(bytes: &[u8]) -> Result<()> {
+    if is_retail_texture(bytes) {
+        return Ok(());
+    }
+    let pic = Pic::parse(bytes).map_err(|e| format!("not a readable PIC ({e})"))?;
+    let mut why: Vec<alloc::string::String> = Vec::new();
+    let raw = u16_at(bytes, 0)? == 0;
+    if !raw {
+        why.push("span-coded (kind 1), not a raw raster".into());
+    }
+    if pic.width != TEXTURE_WIDTH {
+        why.push(format!("{} pixels wide, not 256", pic.width));
+    }
+    if raw && u32_at(bytes, 38)? == 0 {
+        why.push("no row-offset table".into());
+    }
+    let palette = u32_at(bytes, 22)?;
+    if palette != 0 {
+        why.push(format!("embedded {palette}-byte palette"));
+    }
+    if pic.height > TEXTURE_MAX_ROWS {
+        why.push(format!("{} rows, more than the 1,280 FA reads", pic.height));
+    }
+    if why.is_empty() {
+        why.push("span, row-table or glyph fields differ from retail textures".into());
+    }
+    Err(why.join(", "))
+}
+/// What `to_retail_texture` did with an embedded palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaletteCheck {
+    /// No embedded palette: indices were already game-palette indices.
+    None,
+    /// The embedded palette equals the game palette; indices kept.
+    Same,
+    /// The embedded palette differs; this many used indices were mapped to
+    /// the nearest game-palette color.
+    Remapped(usize),
+    /// No game palette to compare with; indices kept as stored.
+    Unverified,
+}
+#[derive(Debug)]
+pub struct TextureConversion {
+    pub bytes: Vec<u8>,
+    pub palette: PaletteCheck,
+}
+/// Rewrite a PIC in the retail texture layout (`retail_texture`) without moving any texel: each
+/// pixel keeps its (u, v), so SH UVs stay valid. Columns past the old width
+/// repeat the row's edge pixel, span holes take a neighbouring opaque pixel,
+/// and the embedded palette is dropped. Indices are mapped only when that
+/// palette differs from `game` (both expanded 8-bit, as `palette` returns).
+pub fn to_retail_texture(bytes: &[u8], game: Option<&[[u8; 3]; 256]>) -> Result<TextureConversion> {
+    let pic = Pic::parse(bytes)?;
+    if pic.width > TEXTURE_WIDTH {
+        return Err(format!(
+            "{} pixels wide; a 256-wide texture cannot keep its UVs",
+            pic.width
+        ));
+    }
+    if pic.height > TEXTURE_MAX_ROWS {
+        return Err(invalid(
+            "Taller than the 1,280 rows FA's texture mapper reads",
+        ));
+    }
+    if !pic.glyphs.is_empty() {
+        return Err(invalid("A glyph strip, not a texture"));
+    }
+    let mut map: [u8; 256] = core::array::from_fn(|i| i as u8);
+    let palette = match (pic.palette.is_empty(), game) {
+        (true, _) => PaletteCheck::None,
+        (false, None) => PaletteCheck::Unverified,
+        (false, Some(game)) => {
+            let mut used = [false; 256];
+            for (p, m) in pic.pixels.iter().zip(&pic.mask) {
+                used[*p as usize] |= *m;
+            }
+            let six = |c: [u8; 3]| c.map(|v| (v as i32 * 63 + 127) / 255);
+            let mut remapped = 0;
+            let mut differs = false;
+            for (i, rgb) in pic.palette.iter().enumerate() {
+                if *rgb == game[i] {
+                    continue;
+                }
+                differs = true;
+                if !used[i] {
+                    continue;
+                }
+                let want = six(*rgb);
+                let distance = |c: &[u8; 3]| {
+                    let c = six(*c);
+                    (0..3).map(|k| (c[k] - want[k]).pow(2)).sum::<i32>()
+                };
+                // Ties go to the lowest index.
+                let best = (0..256)
+                    .min_by_key(|j| (distance(&game[*j]), *j))
+                    .unwrap_or(i);
+                map[i] = best as u8;
+                remapped += 1;
+            }
+            if differs {
+                PaletteCheck::Remapped(remapped)
+            } else {
+                PaletteCheck::Same
+            }
+        }
+    };
+    let (w, h) = (pic.width, pic.height);
+    let mut raster = vec![0; TEXTURE_WIDTH * h];
+    for y in 0..h {
+        let row = &pic.pixels[y * w..y * w + w];
+        let mask = &pic.mask[y * w..y * w + w];
+        let out = &mut raster[y * TEXTURE_WIDTH..(y + 1) * TEXTURE_WIDTH];
+        let mut last = mask.iter().position(|m| *m).map_or(0, |x| row[x]);
+        for x in 0..w {
+            if mask[x] {
+                last = row[x];
+            }
+            out[x] = map[last as usize];
+        }
+        let edge = out[w - 1];
+        out[w..].fill(edge);
+    }
+    Ok(TextureConversion {
+        bytes: retail_texture(h, &raster)?,
+        palette,
+    })
+}
+#[cfg(test)]
+mod texture_tests {
+    use super::*;
+    #[test]
+    fn layout_reasons_name_every_difference() {
+        // A legacy generated panel sheet: 32 x 32, palette, no row table.
+        let e = retail_texture_check(&demo()).unwrap_err();
+        assert!(e.contains("32 pixels wide"), "{e}");
+        assert!(e.contains("no row-offset table"), "{e}");
+        assert!(e.contains("embedded 768-byte palette"), "{e}");
+        assert!(retail_texture_check(&demo()[..100])
+            .unwrap_err()
+            .contains("not a readable PIC"));
+        let mut span = vec![0; 85];
+        span[0] = 1;
+        for (at, value) in [(2, 2u32), (6, 1), (10, 64), (14, 1), (26, 65), (30, 20)] {
+            span[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        span[67] = 1;
+        span[69] = 1;
+        span[75..77].copy_from_slice(&65535u16.to_le_bytes());
+        let e = retail_texture_check(&span).unwrap_err();
+        assert!(e.contains("kind 1") && !e.contains("row-offset"), "{e}");
+        // Retail textures pass; one with a different span capacity is named.
+        let mut sheet = retail_texture(4, &[7; 1024]).unwrap();
+        assert!(retail_texture_check(&sheet).is_ok());
+        sheet[18] = 5;
+        assert!(retail_texture_check(&sheet)
+            .unwrap_err()
+            .contains("differ from retail textures"));
+    }
+    #[test]
+    fn conversion_keeps_every_texel_at_its_uv() {
+        let old = demo();
+        let before = Pic::parse(&old).unwrap();
+        let game: [[u8; 3]; 256] = before.colors(&[[0; 3]; 256]);
+        let out = to_retail_texture(&old, Some(&game)).unwrap();
+        assert_eq!(out.palette, PaletteCheck::Same);
+        assert!(retail_texture_check(&out.bytes).is_ok());
+        let after = Pic::parse(&out.bytes).unwrap();
+        assert_eq!((after.width, after.height), (256, 32));
+        for y in 0..32 {
+            for x in 0..256 {
+                let want = before.pixels[y * 32 + x.min(31)];
+                assert_eq!(after.pixels[y * 256 + x], want, "{x},{y}");
+            }
+        }
+        // The game palette alone renders what the embedded one did.
+        let rgba = after.rgba(&game);
+        let old_rgba = before.rgba(&[[0; 3]; 256]);
+        for y in 0..32 {
+            assert_eq!(
+                &rgba[y * 1024..y * 1024 + 128],
+                &old_rgba[y * 128..y * 128 + 128]
+            );
+        }
+        // Already in layout: the conversion is the identity.
+        let again = to_retail_texture(&out.bytes, Some(&game)).unwrap();
+        assert_eq!(again.bytes, out.bytes);
+        assert_eq!(again.palette, PaletteCheck::None);
+        // Without a game palette the indices are kept and flagged.
+        let blind = to_retail_texture(&old, None).unwrap();
+        assert_eq!(blind.palette, PaletteCheck::Unverified);
+        assert_eq!(blind.bytes, out.bytes);
+    }
+    #[test]
+    fn differing_palettes_map_used_indices_to_the_nearest_game_color() {
+        let old = demo();
+        let before = Pic::parse(&old).unwrap();
+        let mut game = before.colors(&[[0; 3]; 256]);
+        // Index 16 is used; the game palette has another color there and the
+        // old color at index 200.
+        let wanted = game[16];
+        game[16] = [255, 255, 255];
+        game[200] = wanted;
+        let out = to_retail_texture(&old, Some(&game)).unwrap();
+        assert_eq!(out.palette, PaletteCheck::Remapped(1));
+        let after = Pic::parse(&out.bytes).unwrap();
+        assert!(after.pixels.iter().all(|p| *p != 16));
+        assert_eq!(after.pixels[4], 200);
+        // A difference at an unused index maps nothing but is still flagged.
+        let mut game = before.colors(&[[0; 3]; 256]);
+        game[3] = [1, 2, 3];
+        let out = to_retail_texture(&old, Some(&game)).unwrap();
+        assert_eq!(out.palette, PaletteCheck::Remapped(0));
+    }
+    #[test]
+    fn spans_fill_holes_and_wide_or_glyph_pictures_are_refused() {
+        // 4 x 3 span PIC: row 0 x 1..=2, row 2 x 0..=3, row 1 a hole.
+        let mut b = vec![0; 64 + 6 + 30];
+        b[0] = 1;
+        for (at, n) in [(2, 4u32), (6, 3), (10, 64), (14, 6), (26, 70), (30, 30)] {
+            b[at..at + 4].copy_from_slice(&n.to_le_bytes());
+        }
+        b[64..70].copy_from_slice(&[5, 9, 1, 2, 3, 4]);
+        let span = |b: &mut Vec<u8>, at: usize, v: [u16; 3], off: u32| {
+            for (k, n) in v.iter().enumerate() {
+                b[at + k * 2..at + k * 2 + 2].copy_from_slice(&n.to_le_bytes());
+            }
+            b[at + 6..at + 10].copy_from_slice(&off.to_le_bytes());
+        };
+        span(&mut b, 70, [0, 1, 2], 0);
+        span(&mut b, 80, [2, 0, 3], 2);
+        b[90..92].copy_from_slice(&65535u16.to_le_bytes());
+        let out = to_retail_texture(&b, None).unwrap();
+        let p = Pic::parse(&out.bytes).unwrap();
+        assert_eq!(out.palette, PaletteCheck::None);
+        assert_eq!(&p.pixels[..5], &[5, 5, 9, 9, 9]);
+        assert!(p.pixels[256..512].iter().all(|v| *v == 0));
+        assert_eq!(&p.pixels[512..517], &[1, 2, 3, 4, 4]);
+        let mut wide = vec![0; 64 + 257];
+        for (at, n) in [(2, 257u32), (6, 1), (10, 64), (14, 257)] {
+            wide[at..at + 4].copy_from_slice(&n.to_le_bytes());
+        }
+        assert!(to_retail_texture(&wide, None)
+            .unwrap_err()
+            .contains("257 pixels wide"));
+        let mut glyph = demo();
+        let at = glyph.len() as u32;
+        glyph[42..46].copy_from_slice(&at.to_le_bytes());
+        glyph.extend(vec![0; 256 * 6]);
+        assert!(to_retail_texture(&glyph, None).is_err());
+    }
+}
