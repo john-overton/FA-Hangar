@@ -59,6 +59,12 @@ impl App {
         if !(-32768..=32767).contains(&value) {
             return Err("State exceeds signed word range".into());
         }
+        if self.animation_state.is_empty() {
+            self.animation_symbols = self
+                .animation_bytes()
+                .and_then(|b| animation::symbols(&b))
+                .unwrap_or_default();
+        }
         let old = self.animation_state.insert(address, value);
         if let Err(error) = self.animation_preview() {
             if let Some(old) = old {
@@ -69,6 +75,40 @@ impl App {
             return Err(error);
         }
         Ok(())
+    }
+    /// State keys are absolute guard addresses. Keep them only while the shape's import
+    /// symbols (and so its trampoline aliases) are unchanged; any undo, redo or replace
+    /// that moves them clears the preview states. Returns true when states were reset.
+    pub(super) fn revalidate_animation_state(&mut self) -> bool {
+        if self.animation_state.is_empty() {
+            return false;
+        }
+        let now = self
+            .animation_bytes()
+            .and_then(|b| animation::symbols(&b))
+            .ok();
+        if now.as_ref() == Some(&self.animation_symbols) {
+            return false;
+        }
+        self.animation_state.clear();
+        self.animation_scroll = 0;
+        true
+    }
+    pub(super) fn animation_addresses(&self) -> alloc::collections::BTreeSet<usize> {
+        let mut addresses = self
+            .preview
+            .as_ref()
+            .or(self.model.as_ref())
+            .map(|m| m.state_words.clone())
+            .unwrap_or_default();
+        if let Some(m) = &self.model {
+            addresses.extend(&m.state_words);
+        }
+        addresses.extend(self.animation_state.keys());
+        addresses
+    }
+    pub(super) fn animation_rows(&self) -> usize {
+        ((self.height - 390) / 28).max(1) as usize
     }
     pub(super) fn part_position_prompt(&mut self, axis: usize) {
         let Some(part) = self
@@ -203,25 +243,33 @@ impl App {
                 c::INK_MUTED,
             );
         }
+        let names = self
+            .animation_bytes()
+            .and_then(|b| animation::symbols(&b))
+            .unwrap_or_default();
+        let addresses = self.animation_addresses();
+        let rows = self.animation_rows();
+        let first = self
+            .animation_scroll
+            .min(addresses.len().saturating_sub(rows));
         label_fit(
             &mut o.canvas,
             r + 12,
             321,
             w - 24,
-            "Imported state inputs / preview only",
+            &if addresses.len() > rows {
+                format!(
+                    "State inputs {}-{} of {} / wheel scrolls",
+                    first + 1,
+                    (first + rows).min(addresses.len()),
+                    addresses.len()
+                )
+            } else {
+                "Imported state inputs / preview only".into()
+            },
             c::INK,
         );
-        let names = self
-            .animation_bytes()
-            .and_then(|b| animation::symbols(&b))
-            .unwrap_or_default();
-        let mut addresses = model.state_words.clone();
-        if let Some(m) = &self.model {
-            addresses.extend(&m.state_words);
-        }
-        addresses.extend(self.animation_state.keys());
-        let rows = ((self.height - 390) / 28).max(1) as usize;
-        for (row, address) in addresses.iter().take(rows).enumerate() {
+        for (row, address) in addresses.iter().skip(first).take(rows).enumerate() {
             let label = names
                 .get(address)
                 .cloned()
@@ -305,11 +353,36 @@ impl App {
         assert!(a.animation_tool);
         assert!(!a.doc.dirty());
         assert_eq!(a.preview.as_ref().unwrap().parts[0].position, [10, 20, 30]);
+        // Byte-local placement edits keep import addresses, so preview states survive.
+        a.set_animation_state(0x7912, "1").unwrap();
         a.part_position(1, "40").unwrap();
         assert_eq!(a.preview.as_ref().unwrap().parts[0].position, [10, 40, 30]);
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
         assert_eq!(a.preview.as_ref().unwrap().parts[0].position, [10, 20, 30]);
+        assert_eq!(a.animation_state.get(&0x7912), Some(&1));
+        // A history step whose import aliases differ invalidates absolute state keys.
+        a.animation_symbols.insert(0x7912, "_PLgearDown".into());
+        a.act(Action::Redo);
+        assert!(a.animation_state.is_empty());
+        a.act(Action::Undo);
+        // State inputs beyond the visible rows scroll instead of being hidden.
+        for n in 0..40 {
+            a.animation_state.insert(0x9000 + n * 2, 0);
+        }
+        a.animation_symbols = animation::symbols(&a.animation_bytes().unwrap()).unwrap();
+        a.mouse = [a.right() + 20, a.height - 80];
+        let rows = a.animation_rows();
+        a.wheel(-100);
+        assert_eq!(a.animation_scroll, a.animation_addresses().len() - rows);
+        assert!(a
+            .layout()
+            .hits
+            .iter()
+            .any(|h| matches!(h.action, Action::AnimationState(at) if at == 0x9000 + 39 * 2)));
+        a.wheel(100);
+        assert_eq!(a.animation_scroll, 0);
+        a.animation_state.clear();
         for (w, h) in [(800, 600), (1280, 800)] {
             a.width = w;
             a.height = h;

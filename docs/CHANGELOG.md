@@ -29,6 +29,10 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 - The textured viewport frames on the committed shape like the wireframe,
   vertex markers and station cursor, so G previews visibly move and overlays
   stay aligned.
+- Parts preview states are cleared when an undo, redo or replace moves the
+  shape's import addresses (for example a panel texture added or removed), so
+  a state can no longer apply to the wrong guard. The state input list
+  scrolls with the wheel instead of hiding rows beyond the panel.
 
 ## 0.8.2
 

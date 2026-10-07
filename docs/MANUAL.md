@@ -428,7 +428,9 @@ are separate contracts.
 inputs select reviewed branches without changing the file. Set a state such as
 gear-down to reveal its C4 parts; edit a part's X/Y/Z placement with one-step
 undo. Existing rotations, code addresses and other bytes remain intact. Stored
-angles are shown for inspection. Native angle arithmetic, smooth animation,
+angles are shown for inspection. The wheel scrolls a long state input list.
+States are cleared when an undo, redo or replace moves the shape's import
+addresses. Native angle arithmetic, smooth animation,
 turret tracking and arbitrary animated geometry are not yet editable.
 
 The local developer command below creates baseline/edited weapon, building,

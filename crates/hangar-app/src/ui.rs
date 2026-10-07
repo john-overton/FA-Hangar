@@ -161,6 +161,9 @@ pub struct App {
     mesh_edit: bool,
     animation_tool: bool,
     animation_state: BTreeMap<usize, i32>,
+    /// Import symbols when the state keys were chosen; keys are absolute addresses.
+    animation_symbols: BTreeMap<usize, String>,
+    animation_scroll: usize,
     animation_part: usize,
     mesh_vertices: Vec<usize>,
     mesh_drag: Option<Box<mesh_ui::MeshDrag>>,
@@ -299,6 +302,8 @@ impl App {
             mesh_edit: false,
             animation_tool: false,
             animation_state: BTreeMap::new(),
+            animation_symbols: BTreeMap::new(),
+            animation_scroll: 0,
             animation_part: 0,
             mesh_vertices: Vec::new(),
             mesh_drag: None,
@@ -529,6 +534,7 @@ impl App {
         self.mesh_edit = false;
         self.animation_tool = false;
         self.animation_state.clear();
+        self.animation_scroll = 0;
         self.mesh_vertices.clear();
         self.decal_active = false;
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
@@ -760,10 +766,13 @@ impl App {
         self.mesh_vertices.retain(|i| *i < vertices);
         self.refresh_graft();
         self.refresh_hardpoints();
+        let reset = self.revalidate_animation_state();
         if self.animation_tool {
             if let Err(error) = self.animation_preview() {
                 self.preview = None;
                 self.status = error;
+            } else if reset {
+                self.status = "Preview states reset: the shape's import addresses changed".into();
             }
         }
         self.frame();
@@ -2068,6 +2077,19 @@ impl App {
             && (self.mouse[0] >= self.right() || self.mouse[1] >= self.dock_y())
         {
             self.zoom = (self.zoom + delta * 10).clamp(10, 1000);
+            return;
+        }
+        if self.animation_tool
+            && self.mode == Mode::Model
+            && self.mouse[0] >= self.right()
+            && self.mouse[1] >= 321
+        {
+            let hidden = self
+                .animation_addresses()
+                .len()
+                .saturating_sub(self.animation_rows());
+            self.animation_scroll =
+                (self.animation_scroll as i32 - delta * 3).clamp(0, hidden as i32) as usize;
             return;
         }
         if self.mouse[0] < self.left() {
