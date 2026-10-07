@@ -215,6 +215,37 @@ impl Pic {
         radius: usize,
         color: u8,
     ) -> Result<usize> {
+        self.brush(source, x, y, radius, |_| color)
+    }
+    /// Same raster geometry and byte map, so pixels can be copied back one by one.
+    pub fn same_layout(&self, other: &Pic) -> bool {
+        self.width == other.width && self.height == other.height && self.offsets == other.offsets
+    }
+    /// Eraser: the same circle as `paint`, writing each pixel's index from `original`.
+    /// Only raster bytes change; header, palette and span tables stay untouched.
+    pub fn paint_from(
+        &mut self,
+        source: &mut [u8],
+        x: usize,
+        y: usize,
+        radius: usize,
+        original: &Pic,
+    ) -> Result<usize> {
+        if !self.same_layout(original) {
+            return Err(invalid(
+                "Stored original has a different raster layout; use Restore texture",
+            ));
+        }
+        self.brush(source, x, y, radius, |i| original.pixels[i])
+    }
+    fn brush(
+        &mut self,
+        source: &mut [u8],
+        x: usize,
+        y: usize,
+        radius: usize,
+        color: impl Fn(usize) -> u8,
+    ) -> Result<usize> {
         if !self.paintable || source.len() != self.source_len {
             return Err(invalid(
                 "PIC storage aliases metadata or samples; painting disabled",
@@ -233,6 +264,7 @@ impl Pic {
                 }
                 let i = yy * self.width + xx;
                 let off = self.offsets[i];
+                let color = color(i);
                 if off != u32::MAX && self.pixels[i] != color {
                     source[off as usize] = color;
                     self.pixels[i] = color;
@@ -365,6 +397,38 @@ mod edit_tests {
         assert_eq!(changed, vec![64 + 4 * 32 + 3]);
         assert_eq!(Pic::parse(&bytes).unwrap().pixels[4 * 32 + 3], 201);
         assert_eq!(&p.png(&[[0; 3]; 256])[..8], b"\x89PNG\r\n\x1a\n");
+    }
+    #[test]
+    fn eraser_restores_original_raster_bytes_in_the_brush_circle() {
+        let original = demo();
+        let source = Pic::parse(&original).unwrap();
+        let mut bytes = original.clone();
+        let mut p = source.clone();
+        assert!(p.paint(&mut bytes, 10, 10, 3, 7).unwrap() > 20);
+        assert_eq!(p.paint(&mut bytes, 20, 20, 0, 7).unwrap(), 1);
+        // Erasing one dab restores only that circle.
+        p.paint_from(&mut bytes, 10, 10, 3, &source).unwrap();
+        assert_eq!(bytes[64 + 20 * 32 + 20], 7);
+        assert_eq!(&bytes[..64 + 20 * 32 + 20], &original[..64 + 20 * 32 + 20]);
+        assert_eq!(p.paint_from(&mut bytes, 20, 20, 0, &source).unwrap(), 1);
+        assert_eq!(bytes, original);
+        assert_eq!(p.paint_from(&mut bytes, 20, 20, 3, &source).unwrap(), 0);
+        let mut other = vec![0; 64 + 16 * 16 + 768];
+        for (at, n) in [
+            (2, 16u32),
+            (6, 16),
+            (10, 64),
+            (14, 256),
+            (18, 320),
+            (22, 768),
+        ] {
+            other[at..at + 4].copy_from_slice(&n.to_le_bytes());
+        }
+        let other = Pic::parse(&other).unwrap();
+        assert!(!p.same_layout(&other));
+        assert!(p.same_layout(&source));
+        assert!(p.paint_from(&mut bytes, 1, 1, 0, &other).is_err());
+        assert_eq!(bytes, original);
     }
     #[test]
     fn span_paint_leaves_holes_and_tables() {

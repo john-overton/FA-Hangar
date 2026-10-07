@@ -4,7 +4,7 @@ use crate::{
     brf::Brf,
     dependencies::{self, Location},
     document::Document,
-    invalid, Result,
+    invalid, originals, Result,
 };
 use alloc::{
     collections::{BTreeMap, BTreeSet},
@@ -33,7 +33,18 @@ pub struct Plan {
 }
 impl Plan {
     pub fn ready(&self) -> bool {
-        self.items.iter().all(|i| i.choice != Choice::Unresolved)
+        self.items
+            .iter()
+            .all(|i| i.choice != Choice::Unresolved || self.follows_kept(i))
+    }
+    /// A stored original (`X.ORG`) follows its texture: when the target keeps
+    /// its own `X.PIC`, the source's original for a different PIC is not copied.
+    pub fn follows_kept(&self, item: &Item) -> bool {
+        originals::texture_of(&item.entry.name).is_some_and(|pic| {
+            self.items
+                .iter()
+                .any(|i| i.entry.name == pic && i.choice == Choice::KeepTarget)
+        })
     }
     pub fn apply(&self, doc: &mut Document) -> Result<()> {
         if !self.ready() {
@@ -64,7 +75,7 @@ impl Plan {
         let entries = self
             .items
             .iter()
-            .filter(|i| i.choice == Choice::TakeSource)
+            .filter(|i| i.choice == Choice::TakeSource && !self.follows_kept(i))
             .map(|i| i.entry.clone())
             .collect();
         doc.transaction(entries, &self.removals)
@@ -87,7 +98,7 @@ pub fn move_between(
         if !source.archive.entries[i].same_storage(&item.entry) {
             return Err(invalid("Source LIB changed; rebuild the move review"));
         }
-        if item.choice == Choice::TakeSource
+        if (item.choice == Choice::TakeSource && !plan.follows_kept(item))
             || target
                 .archive
                 .find(&item.entry.name)
@@ -117,6 +128,20 @@ pub fn move_between(
         for name in shared {
             removals.remove(&name);
         }
+    }
+    // A texture that stays in the source keeps its stored original there.
+    let staying: Vec<_> = removals
+        .iter()
+        .filter(|name| {
+            **name != root
+                && originals::texture_of(name).is_some_and(|pic| {
+                    !removals.contains(&pic) && source.archive.find(&pic).is_some()
+                })
+        })
+        .cloned()
+        .collect();
+    for name in staying {
+        removals.remove(&name);
     }
     let mut new_source = source.clone();
     let mut new_target = target.clone();
@@ -159,6 +184,7 @@ pub fn transfer_from(
     }
     let mut decoded = 0usize;
     let mut visited = BTreeSet::new();
+    let mut companions = BTreeSet::new();
     let mut pending = vec![root.to_ascii_uppercase()];
     while let Some(name) = pending.pop() {
         if !visited.insert(name.clone()) {
@@ -185,6 +211,9 @@ pub fn transfer_from(
                 }
             }
         }
+        if companions.contains(&name) && !found.is_some_and(originals::valid) {
+            continue;
+        }
         let Some(entry) = found.cloned() else {
             if target.find(&name).is_none() {
                 plan.notes.push(format!(
@@ -208,6 +237,11 @@ pub fn transfer_from(
             },
             conflict,
         });
+        // A texture's stored original travels with it, even without dependencies.
+        if let Some(org) = originals::companion(&name).filter(|n| catalog.contains(n)) {
+            companions.insert(org.clone());
+            pending.push(org);
+        }
         if include_dependencies && !dependencies::leaf(&name) {
             match found.unwrap().read() {
                 Ok(bytes) => {
@@ -364,6 +398,27 @@ pub fn rename(archive: &Archive, old: &str, new: &str, duplicate: bool) -> Resul
         choice: Choice::TakeSource,
         conflict: false,
     });
+    // The stored original follows its texture's name (and is copied for a duplicate).
+    if let Some(org) = originals::backup(archive, &old) {
+        let name = originals::companion(&new).ok_or("Stored original needs a PIC name")?;
+        if archive.find(&name).is_some() {
+            return Err(format!(
+                "{name} already exists; the stored original of {old} cannot follow"
+            ));
+        }
+        plan.items.push(Item {
+            entry: org.renamed(&name)?,
+            previous: None,
+            choice: Choice::TakeSource,
+            conflict: false,
+        });
+        if !duplicate {
+            plan.removals.push(org.name.clone());
+            plan.removed_before.push(org.clone());
+        }
+        plan.notes
+            .push(format!("Stored original {} follows as {name}", org.name));
+    }
     if !duplicate {
         plan.removals.push(old.clone());
         plan.removed_before.push(archive.entries[selected].clone());
@@ -505,6 +560,88 @@ mod tests {
         let plan =
             transfer_from(&[&owner, &images, &conflicting], &target, "DEMO.SH", false).unwrap();
         assert_eq!(plan.items.len(), 1);
+    }
+    fn with_original() -> Archive {
+        let mut a = source();
+        let org = a.entries[1].renamed("DEMO.ORG").unwrap();
+        a.entries.push(org);
+        a.entries[1] = Entry::new("DEMO.PIC", vec![9; 4]).unwrap();
+        a
+    }
+    #[test]
+    fn stored_originals_follow_rename_duplicate_delete_and_copy() {
+        let mut doc = Document::new(with_original());
+        let original = doc.archive.bytes().unwrap();
+        let backup = doc.archive.entries[2].clone();
+        let plan = rename(&doc.archive, "DEMO.PIC", "PAINT.PIC", false).unwrap();
+        plan.apply(&mut doc).unwrap();
+        assert!(doc.archive.find("DEMO.ORG").is_none());
+        let moved = &doc.archive.entries[doc.archive.find("PAINT.ORG").unwrap()];
+        assert!(moved.same_payload(&backup));
+        assert!(doc.undo());
+        assert_eq!(doc.archive.bytes().unwrap(), original);
+        let plan = rename(&doc.archive, "DEMO.PIC", "COPY.PIC", true).unwrap();
+        plan.apply(&mut doc).unwrap();
+        assert!(doc.archive.find("DEMO.ORG").is_some());
+        assert!(doc.archive.find("COPY.ORG").is_some());
+        doc.undo();
+        doc.transaction(vec![Entry::new("TAKEN.ORG", vec![1]).unwrap()], &[])
+            .unwrap();
+        assert!(rename(&doc.archive, "DEMO.PIC", "TAKEN.PIC", false).is_err());
+        doc.undo();
+        let removals = originals::removals(&doc.archive, "DEMO.PIC");
+        doc.transaction(Vec::new(), &removals).unwrap();
+        assert!(doc.archive.find("DEMO.ORG").is_none());
+        doc.undo();
+        assert_eq!(doc.archive.bytes().unwrap(), original);
+        // Copies carry the original even without dependencies; a kept target PIC keeps its own.
+        let mut target = Document::new(Archive::empty());
+        let plan = transfer(&doc.archive, &target.archive, "DEMO.PIC", false).unwrap();
+        assert_eq!(plan.items.len(), 2);
+        plan.apply(&mut target).unwrap();
+        assert!(target.archive.find("DEMO.ORG").is_some());
+        let mut target = Archive::empty();
+        target
+            .entries
+            .push(Entry::new("DEMO.PIC", vec![1]).unwrap());
+        let mut target = Document::new(target);
+        let mut plan = transfer(&doc.archive, &target.archive, "DEMO.SH", true).unwrap();
+        plan.items.iter_mut().find(|i| i.conflict).unwrap().choice = Choice::KeepTarget;
+        assert!(plan.ready());
+        plan.apply(&mut target).unwrap();
+        assert!(target.archive.find("DEMO.ORG").is_none());
+    }
+    #[test]
+    fn moving_a_shared_texture_keeps_its_original_in_the_source() {
+        let mut a = with_original();
+        a.entries.push(
+            Entry::new(
+                "ONE.OT",
+                b"[brent's_relocatable_format]\nstring \"DEMO.SH\"\nend\n".to_vec(),
+            )
+            .unwrap(),
+        );
+        a.entries.push(
+            Entry::new(
+                "TWO.OT",
+                b"[brent's_relocatable_format]\nstring \"DEMO.SH\"\nend\n".to_vec(),
+            )
+            .unwrap(),
+        );
+        let mut source = Document::new(a);
+        let mut target = Document::new(Archive::empty());
+        let plan = transfer(&source.archive, &target.archive, "ONE.OT", true).unwrap();
+        assert!(plan.items.iter().any(|i| i.entry.name == "DEMO.ORG"));
+        move_between(&mut source, &mut target, &plan, "ONE.OT").unwrap();
+        assert!(source.archive.find("DEMO.PIC").is_some());
+        assert!(source.archive.find("DEMO.ORG").is_some());
+        assert!(target.archive.find("DEMO.ORG").is_some());
+        let mut source = Document::new(with_original());
+        let mut target = Document::new(Archive::empty());
+        let plan = transfer(&source.archive, &target.archive, "DEMO.PIC", false).unwrap();
+        move_between(&mut source, &mut target, &plan, "DEMO.PIC").unwrap();
+        assert!(source.archive.find("DEMO.ORG").is_none());
+        assert!(target.archive.find("DEMO.ORG").is_some());
     }
     #[test]
     fn transaction_failure_is_atomic() {

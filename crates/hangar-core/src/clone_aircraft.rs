@@ -428,6 +428,32 @@ pub fn build_with(
             assign(name, new, &mut mapping, &mut used, &budget)?;
         }
     }
+    // Stored originals follow their privately renamed textures; a taken
+    // companion name is reported rather than overwritten.
+    let mut originals = Vec::new();
+    for (old, new) in &mapping {
+        let (Some(org), Some(target)) = (
+            crate::originals::companion(old),
+            crate::originals::companion(new),
+        ) else {
+            continue;
+        };
+        if !catalog.contains(&org) {
+            continue;
+        }
+        match read(&org) {
+            Ok(bytes) if crate::picture::Pic::parse(&bytes).is_ok() => {
+                if used.insert(target.clone()) {
+                    originals.push((target, bytes));
+                } else {
+                    unresolved.insert(format!(
+                        "{org}: stored original not copied; {target} is already in use."
+                    ));
+                }
+            }
+            _ => {}
+        }
+    }
     let mut archive = Archive::empty();
     let mut identities = Vec::new();
     if let Some(root) = &root {
@@ -501,6 +527,10 @@ pub fn build_with(
         }
         archive.entries.push(Entry::new(&mapping[&name], bytes)?);
     }
+    let copied_originals = originals.len();
+    for (name, bytes) in originals {
+        archive.entries.push(Entry::new(&name, bytes)?);
+    }
     archive.entries.sort_unstable_by(|a, b| a.name.cmp(&b.name));
     // Verify closure after rewriting, including extensionless PIC operands.
     let mut output_catalog = BTreeSet::new();
@@ -529,6 +559,11 @@ pub fn build_with(
         "Runtime-generated assets and game procedures remain game-provided.".into(),
         "Some resource names are shortened to fit the original file format.".into(),
     ];
+    if copied_originals > 0 {
+        notes.push(format!(
+            "{copied_originals} stored original textures (.ORG) copied with their PICs; remove them for distribution builds."
+        ));
+    }
     notes.extend(unresolved);
     let mut mapping: Vec<_> = mapping.into_iter().collect();
     let main_name = format!("{id}.SH");
@@ -634,6 +669,11 @@ mod tests {
             a.entries
                 .push(Entry::new(name, crate::picture::demo()).unwrap());
         }
+        // A painted texture's stored original, and an unrelated non-PIC .ORG.
+        a.entries
+            .push(Entry::new("~PANEL.ORG", crate::picture::demo()).unwrap());
+        a.entries
+            .push(Entry::new("DEMO.ORG", b"notes".to_vec()).unwrap());
         a.entries
             .push(Entry::new("PALETTE.PAL", vec![0; 768]).unwrap());
         a
@@ -644,7 +684,22 @@ mod tests {
         let original = a.bytes().unwrap();
         let p = build(&[&a], "DEMO.PT", "NEW", "New aircraft").unwrap();
         let mapping: BTreeMap<_, _> = p.mapping.iter().cloned().collect();
-        assert_eq!(p.archive.entries.len(), 16);
+        // 16 mapped resources plus the stored original of ~PANEL.PIC. DEMO.ORG
+        // is not a PIC payload, so it is not treated as DEMO.PIC's original.
+        assert_eq!(p.archive.entries.len(), 17);
+        let panel_original = format!("{}.ORG", stem(&mapping["~PANEL.PIC"]));
+        assert_eq!(
+            p.archive.entries[p.archive.find(&panel_original).unwrap()]
+                .read()
+                .unwrap(),
+            crate::picture::demo()
+        );
+        assert!(!mapping.contains_key("~PANEL.ORG"));
+        assert!(p
+            .archive
+            .find(&format!("{}.ORG", stem(&mapping["DEMO.PIC"])))
+            .is_none());
+        assert!(p.notes.iter().any(|n| n.contains("1 stored original")));
         assert!(mapping.contains_key("HIDDEN.PIC"));
         assert!(!mapping.contains_key("SYMBOL.PIC"));
         assert_eq!(
@@ -679,7 +734,7 @@ mod tests {
             }
         }
         let decoded = Archive::parse(p.archive.bytes().unwrap()).unwrap();
-        assert_eq!(decoded.entries.len(), p.mapping.len());
+        assert_eq!(decoded.entries.len(), p.mapping.len() + 1);
         assert_eq!(a.bytes().unwrap(), original);
         let again = build(&[&p.archive], "NEW.PT", "NEXT", "Next variant").unwrap();
         assert!(again.archive.find("NEXT.PAL").is_some());

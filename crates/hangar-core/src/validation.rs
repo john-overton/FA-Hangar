@@ -107,10 +107,66 @@ fn payload(name: &str, bytes: &[u8]) -> Option<Result<()>> {
     }
     match name.rsplit('.').next().unwrap_or("") {
         "SH" => Some(Model::parse(bytes).map(|_| ())),
-        "PIC" => Some(Pic::parse(bytes).map(|_| ())),
+        "PIC" | "ORG" => Some(Pic::parse(bytes).map(|_| ())),
         "PAL" => Some(picture::palette(bytes).map(|_| ())),
         "5K" | "11K" | "WAV" => Some(Pcm::parse(name, bytes).map(|_| ())),
         _ => None,
+    }
+}
+/// Stored originals (`X.ORG`) are editor backups; FA does not load them by name.
+fn originals(doc: &Document, report: &mut Report) {
+    let mut decoded = 0usize;
+    let mut count = 0usize;
+    for e in &doc.archive.entries {
+        let Some(pic) = crate::originals::texture_of(&e.name) else {
+            continue;
+        };
+        if decoded >= ARCHIVE_LIMIT {
+            report.add(
+                Level::Warning,
+                Some(&e.name),
+                "Stored original check budget reached; unverified".into(),
+            );
+            break;
+        }
+        let Some(original) = e.read().ok().and_then(|b| {
+            decoded = decoded.saturating_add(b.len());
+            Pic::parse(&b).ok()
+        }) else {
+            report.add(
+                Level::Info,
+                Some(&e.name),
+                "Not a PIC payload; not treated as a stored original".into(),
+            );
+            continue;
+        };
+        count += 1;
+        let Some(at) = doc.archive.find(&pic) else {
+            report.add(
+                Level::Warning,
+                Some(&e.name),
+                format!("Stored original without {pic}; restore the texture or remove it"),
+            );
+            continue;
+        };
+        let current = doc.archive.entries[at].read().ok().and_then(|b| {
+            decoded = decoded.saturating_add(b.len());
+            Pic::parse(&b).ok()
+        });
+        if current.is_some_and(|p| !p.same_layout(&original)) {
+            report.add(
+                Level::Info,
+                Some(&e.name),
+                format!("Raster layout differs from {pic}; Eraser unavailable, Restore texture replaces the whole entry"),
+            );
+        }
+    }
+    if count > 0 {
+        report.add(
+            Level::Info,
+            None,
+            format!("{count} stored original textures (.ORG); remove them for distribution builds"),
+        );
     }
 }
 /// Updates the supplied index. Checks do not modify source data or prohibit
@@ -263,6 +319,7 @@ pub fn inspect_with(
         None,
         format!("{checked} changed payloads pass supported format checks"),
     );
+    originals(doc, &mut report);
     report.add(
         Level::Info,
         None,
@@ -340,6 +397,42 @@ mod tests {
             doc.changes(),
             vec![("UNKNOWN.BIN".into(), ChangeKind::Removed)]
         );
+    }
+    #[test]
+    fn stored_originals_are_checked_as_pictures_and_orphans_warn() {
+        let mut doc = document();
+        let backup = doc.archive.entries[1].renamed("DEMO.ORG").unwrap();
+        doc.transaction(vec![backup], &[]).unwrap();
+        let report = inspect(&doc, &mut Index::default());
+        assert_eq!((report.errors, report.warnings), (0, 0));
+        assert!(report
+            .checks
+            .iter()
+            .any(|c| c.message.contains("1 stored original textures")));
+        let mut small = vec![0; 128];
+        for (at, n) in [(2, 8u32), (6, 8), (10, 64), (14, 64)] {
+            small[at..at + 4].copy_from_slice(&n.to_le_bytes());
+        }
+        doc.transaction(vec![Entry::new("DEMO.PIC", small).unwrap()], &[])
+            .unwrap();
+        let report = inspect(&doc, &mut Index::default());
+        assert!(report.checks.iter().any(|c| c.level == Level::Info
+            && c.entry.as_deref() == Some("DEMO.ORG")
+            && c.message.contains("layout differs")));
+        doc.transaction(Vec::new(), &["DEMO.PIC".into()]).unwrap();
+        let report = inspect(&doc, &mut Index::default());
+        assert!(report.checks.iter().any(|c| c.level == Level::Warning
+            && c.entry.as_deref() == Some("DEMO.ORG")
+            && c.message.contains("without DEMO.PIC")));
+        // A changed ORG that is not a PIC fails its payload check but is never a backup.
+        doc.transaction(vec![Entry::new("DEMO.ORG", b"text".to_vec()).unwrap()], &[])
+            .unwrap();
+        let report = inspect(&doc, &mut Index::default());
+        assert_eq!(report.errors, 1);
+        assert!(!report
+            .checks
+            .iter()
+            .any(|c| c.message.contains("without DEMO.PIC")));
     }
     #[test]
     fn report_limit_preserves_error_counts() {

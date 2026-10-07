@@ -19,6 +19,7 @@ pub mod document;
 pub mod hardpoints;
 pub mod material;
 pub mod model;
+pub mod originals;
 pub mod picture;
 pub mod resource_ops;
 pub mod save;

@@ -192,6 +192,7 @@ pub fn clone_family_texture(
         .find(old)
         .ok_or("Original PIC is not in the active LIB")?;
     entries.push(archive.entries[original].renamed(&new)?);
+    entries.extend(crate::originals::cloned(archive, old, &new)?);
     Ok(entries)
 }
 
@@ -286,5 +287,14 @@ mod tests {
         assert_eq!(idx.incoming("NEW.PIC").count(), 2);
         doc.undo();
         assert_eq!(doc.archive.bytes().unwrap(), before);
+        // A painted texture's stored original is cloned alongside it.
+        let pic = doc.archive.find("DEMO.PIC").unwrap();
+        let backup = doc.archive.entries[pic].renamed("DEMO.ORG").unwrap();
+        doc.transaction(vec![backup.clone()], &[]).unwrap();
+        let entries = clone_family_texture(&doc.archive, "DEMO.PT", "DEMO.PIC", "NEW.PIC").unwrap();
+        assert_eq!(entries.len(), 4);
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "NEW.ORG" && e.same_payload(&backup)));
     }
 }

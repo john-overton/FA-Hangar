@@ -59,7 +59,7 @@ fn resource_extension(s: &str) -> bool {
 pub(crate) fn leaf(s: &str) -> bool {
     matches!(
         ext(s),
-        "PIC" | "PAL" | "FNT" | "5K" | "8K" | "11K" | "22K" | "WAV"
+        "PIC" | "ORG" | "PAL" | "FNT" | "5K" | "8K" | "11K" | "22K" | "WAV"
     )
 }
 fn name_byte(b: u8) -> bool {

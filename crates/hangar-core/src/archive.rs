@@ -43,6 +43,13 @@ impl Entry {
             && self.len == other.len
             && Rc::ptr_eq(&self.source, &other.source)
     }
+    /// Same stored payload and compression flag, ignoring the entry name.
+    pub fn same_payload(&self, other: &Self) -> bool {
+        self.directory[13] == other.directory[13]
+            && self.start == other.start
+            && self.len == other.len
+            && Rc::ptr_eq(&self.source, &other.source)
+    }
     pub fn source_offset(&self) -> usize {
         self.start
     }
