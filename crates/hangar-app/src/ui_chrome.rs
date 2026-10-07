@@ -351,6 +351,7 @@ impl App {
             ],
             _ => vec![
                 Item::new("Controls", Action::Help).key("F1"),
+                Item::new("About T.O.R.E Hangar", Action::About),
                 Item::new("Load synthetic demo", Action::Demo),
             ],
         }
@@ -504,6 +505,11 @@ impl App {
         let base = baseline(y, h, Style::Hint);
         // Right group, laid out from the right edge.
         let mut right = w - space::SPACE_2;
+        // The version, subtle at the far right; Help > About has the rest.
+        let version = concat!("v", env!("CARGO_PKG_VERSION"));
+        right -= text_width(version, Style::Hint);
+        d.styled(right, base, version, c::INK_MUTED, Style::Hint);
+        right -= space::SPACE_4;
         let (state, glyph, color): (String, Option<Icon>, Rgb) = if self.doc.dirty() {
             let n = self.doc.changed_count();
             (

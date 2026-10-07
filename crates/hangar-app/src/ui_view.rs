@@ -11,6 +11,7 @@ pub(super) enum Action {
     Redo,
     Close,
     Help,
+    About,
     Filter,
     /// Outliner type filter: aircraft (0), shapes (1), images (2); again clears.
     TypeFilter(usize),
@@ -624,6 +625,7 @@ impl App {
             Action::File(f) => self.file_prompt(f),
             Action::Demo => self.demo(),
             Action::Close => self.close(),
+            Action::About => self.about_open(),
             Action::Help => {
                 self.dock = 2;
                 self.key(Key::F1, false, false);
@@ -1152,6 +1154,11 @@ impl App {
             }
             return Ok(());
         }
+        if name == "about" {
+            self.mode = Mode::Model;
+            self.about_open();
+            return Ok(());
+        }
         if name == "animation" {
             self.open_animation();
             return Ok(());
@@ -1601,6 +1608,12 @@ impl App {
                 .is_some_and(|p| matches!(p.kind, PromptKind::BaseColor(_) | PromptKind::FaceColor))
             {
                 self.color_dialog(&mut out);
+            } else if self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::About))
+            {
+                self.about_dialog(&mut out);
             } else if self
                 .prompt
                 .as_ref()
@@ -3043,6 +3056,7 @@ impl App {
         }
         self.smoke_widgets();
         self.smoke_chrome();
+        self.smoke_about();
         self.smoke_outliner();
         self.smoke_inspector();
         self.smoke_hit_geometry();
@@ -3217,7 +3231,7 @@ impl App {
     /// window sizes.
     pub(super) fn smoke_hit_geometry(&mut self) {
         for (w, h) in [(1280, 800), (800, 600)] {
-            for state in 0..30 {
+            for state in 0..31 {
                 self.libraries.clear();
                 self.demo();
                 self.width = w;
@@ -3398,6 +3412,10 @@ impl App {
                                 "non-retail part setting"
                             }
                         }
+                    }
+                    30 => {
+                        self.about_open();
+                        "about"
                     }
                     _ => {
                         self.select_entry(1);

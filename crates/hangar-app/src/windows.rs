@@ -398,8 +398,8 @@ struct BitmapInfo {
 /// the life of the process: Tahoma for UI styles, Lucida Console for data.
 /// Negative heights select the em size from `theme::text`; Win9x maps weight
 /// 500 to regular and 600 to bold.
-static mut FONTS: [Handle; 9] = [ptr::null_mut(); 9];
-unsafe fn fonts() -> [Handle; 9] {
+static mut FONTS: [Handle; 10] = [ptr::null_mut(); 10];
+unsafe fn fonts() -> [Handle; 10] {
     let fonts = &mut *ptr::addr_of_mut!(FONTS);
     for style in Style::ALL {
         if fonts[style.index()].is_null() {

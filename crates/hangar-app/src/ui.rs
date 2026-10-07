@@ -40,9 +40,11 @@ pub enum Style {
     Value,
     ValueSm,
     Badge,
+    /// The about box name: the `display` family at 24px (the token is 64px, for a splash).
+    Display,
 }
 impl Style {
-    pub const ALL: [Style; 9] = [
+    pub const ALL: [Style; 10] = [
         Style::Title,
         Style::Body,
         Style::Label,
@@ -52,6 +54,7 @@ impl Style {
         Style::Value,
         Style::ValueSm,
         Style::Badge,
+        Style::Display,
     ];
     pub const fn spec(self) -> theme::TextStyle {
         match self {
@@ -67,6 +70,11 @@ impl Style {
             Style::Value => theme::text::VALUE,
             Style::ValueSm => theme::text::VALUE_SM,
             Style::Badge => theme::text::BADGE,
+            Style::Display => theme::TextStyle {
+                size: 24,
+                line: 28,
+                ..theme::text::DISPLAY
+            },
         }
     }
     pub const fn index(self) -> usize {
@@ -342,6 +350,8 @@ enum PromptKind {
     /// A save into a game folder that would break FA's loader limits
     /// (`save_check`); only Save anyway or Cancel continue.
     GameFolder,
+    /// Help -> About.
+    About,
 }
 /// A save waiting for confirmation because of FA's loader limits.
 struct SaveCheck {
@@ -1747,6 +1757,17 @@ impl App {
             return;
         }
 
+        // About closes on Esc or Enter and ignores every other key.
+        if self
+            .prompt
+            .as_ref()
+            .is_some_and(|p| matches!(p.kind, PromptKind::About))
+        {
+            if matches!(key, Key::Escape | Key::Enter) {
+                self.prompt = None;
+            }
+            return;
+        }
         if self.prompt.is_some() {
             match key {
                 Key::Escape => {
@@ -2167,6 +2188,7 @@ impl App {
                         }
                         PromptKind::Transform(op) => self.apply_transform(op, p.axis, &p.value),
                         PromptKind::Number(t) => self.number_typed(t, &p.value),
+                        PromptKind::About => Ok(()),
                     };
                     if let Err(e) = r {
                         self.status = format!("Error: {e}");
@@ -3072,3 +3094,6 @@ mod palette_ui;
 
 #[path = "ui_gizmo.rs"]
 mod gizmo_ui;
+
+#[path = "ui_about.rs"]
+mod about_ui;
