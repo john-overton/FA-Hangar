@@ -106,6 +106,18 @@ pub struct VertexStatus {
     pub refusal: Option<String>,
 }
 type Resolved = core::result::Result<usize, String>;
+/// Effects of a called block, through nested calls, until each path returns.
+#[derive(Clone, Debug, Default)]
+struct Called {
+    /// Slots any reachable 82 record writes.
+    slots: BTreeSet<usize>,
+    /// Reachable E2/E0 texture selectors (CODE offsets).
+    selectors: Vec<usize>,
+    /// Records that end a path of the block (CODE offsets).
+    returns: Vec<usize>,
+}
+/// `resolve` key for the texture state instead of a vertex slot.
+const MATERIAL: usize = usize::MAX;
 /// Bytes and analysis of one shape.
 #[derive(Clone, Debug)]
 pub struct Geometry {
@@ -114,7 +126,7 @@ pub struct Geometry {
     pub faces: Vec<FaceRecord>,
     /// Every 82 record in CODE order.
     pub buffers: Vec<Buffer>,
-    code: Vec<u8>,
+    pub(crate) code: Vec<u8>,
     /// Frame of each inventory record.
     frames: Vec<Frame>,
     /// 1E records inside a 38 scope of their walk: padding, not a return.
@@ -124,15 +136,15 @@ pub struct Geometry {
     /// Slot -> indices of faces referencing it.
     users: BTreeMap<usize, Vec<usize>>,
     /// Control-flow pointers as (target, field), CODE offsets, sorted.
-    entries: Vec<(usize, usize)>,
+    pub(crate) entries: Vec<(usize, usize)>,
     /// Every CODE pointer target as (target, field), sorted.
-    targets: Vec<(usize, usize)>,
+    pub(crate) targets: Vec<(usize, usize)>,
     /// CODE ranges addressed as data: self-offset targets and x86 stores.
-    data: Vec<(usize, usize)>,
+    pub(crate) data: Vec<(usize, usize)>,
     /// Pointer fields as (CODE offset, width).
-    fields: Vec<(usize, usize)>,
-    /// Slots written by everything reachable from each call target.
-    called: BTreeMap<usize, core::result::Result<BTreeSet<usize>, String>>,
+    pub(crate) fields: Vec<(usize, usize)>,
+    /// What everything reachable from each call target does.
+    called: BTreeMap<usize, core::result::Result<Called, String>>,
     /// (slot, CODE position) -> writer buffer; `None` while in progress.
     memo: RefCell<BTreeMap<(usize, usize), Option<Resolved>>>,
 }
@@ -148,16 +160,16 @@ fn word(c: &[u8], at: usize) -> Result<i32> {
     Ok(u16_at(c, at)? as u16 as i16 as i32)
 }
 /// Field offsets inside an FC record.
-struct FaceLayout {
-    normal: Option<usize>,
-    centre: Option<(usize, bool)>,
-    count: usize,
-    index: usize,
-    wide: bool,
-    uv: Option<(usize, bool)>,
-    end: usize,
+pub(crate) struct FaceLayout {
+    pub normal: Option<usize>,
+    pub centre: Option<(usize, bool)>,
+    pub count: usize,
+    pub index: usize,
+    pub wide: bool,
+    pub uv: Option<(usize, bool)>,
+    pub end: usize,
 }
-fn face_layout(c: &[u8], at: usize) -> Result<FaceLayout> {
+pub(crate) fn face_layout(c: &[u8], at: usize) -> Result<FaceLayout> {
     let h = slice(c, at, 5)?;
     let (content, layout) = (h[1], h[2]);
     let mut p = at + 5;
@@ -389,7 +401,7 @@ impl Geometry {
         let rel = offset.checked_sub(buffer.offset + 6)?;
         (rel % 6 == 0 && rel / 6 < buffer.points.len()).then_some((b, rel / 6))
     }
-    fn span(&self, face: usize) -> (usize, usize) {
+    pub(crate) fn span(&self, face: usize) -> (usize, usize) {
         let a = self.faces[face].offset - self.inventory.code_start;
         (a, a + self.faces[face].len)
     }
@@ -521,12 +533,13 @@ impl Geometry {
             .collect()
     }
     /// Slots written by any 82 record reachable from a call target, through
-    /// nested calls, until each path returns.
-    fn reach_slots(&self, target: usize) -> core::result::Result<BTreeSet<usize>, String> {
+    /// nested calls, until each path returns; the E2/E0 texture selectors
+    /// reachable there and the records that return.
+    fn reach_slots(&self, target: usize) -> core::result::Result<Called, String> {
         let inv = &self.inventory;
         let mut seen = BTreeSet::new();
         let mut work = alloc::vec![target];
-        let mut slots = BTreeSet::new();
+        let mut out = Called::default();
         while let Some(at) = work.pop() {
             let Some(i) = inv.starting_at(at) else {
                 return Err(format!(
@@ -539,10 +552,13 @@ impl Geometry {
             let r = &inv.records[i];
             if r.kind == Kind::Sh(0x82) {
                 let (s, n) = slots_of(&self.code, r.offset)?;
-                slots.extend(s..s + n);
+                out.slots.extend(s..s + n);
+            }
+            if matches!(r.kind, Kind::Sh(0xe2 | 0xe0)) {
+                out.selectors.push(r.offset);
             }
             match self.flow(i) {
-                Flow::Stop => {}
+                Flow::Stop => out.returns.push(r.offset),
                 Flow::Unexplained => {
                     return Err(format!(
                         "a called path reaches unexplained bytes at CODE+{:X}",
@@ -555,7 +571,7 @@ impl Geometry {
                 }
             }
         }
-        Ok(slots)
+        Ok(out)
     }
     /// Walking back, a record lets the path continue from the one before it.
     /// Every 1E counts as falling through: whichever reading holds (return or
@@ -592,12 +608,25 @@ impl Geometry {
     }
     fn resolve_span(&self, slot: usize, x: usize, depth: usize) -> Resolved {
         let inv = &self.inventory;
+        let material = slot == MATERIAL;
+        let what = || {
+            if material {
+                String::from("the texture state")
+            } else {
+                format!("slot {slot}")
+            }
+        };
         let mut found = None;
         let mut start = 0;
         for j in (0..inv.records.partition_point(|r| r.offset < x)).rev() {
             let r = &inv.records[j];
             match r.kind {
-                Kind::Sh(0x82) => {
+                Kind::Sh(0xe2 | 0xe0) if material => {
+                    found = Some(r.offset);
+                    start = r.end();
+                    break;
+                }
+                Kind::Sh(0x82) if !material => {
                     let (s, n) = slots_of(&self.code, r.offset)?;
                     if (s..s + n).contains(&slot) {
                         found = self
@@ -614,11 +643,38 @@ impl Geometry {
                         _ => None,
                     });
                     match t.and_then(|t| self.called.get(&t)) {
-                        Some(Ok(s)) if !s.contains(&slot) => {}
+                        Some(Ok(c)) if material && c.selectors.is_empty() => {}
+                        Some(Ok(c)) if material => {
+                            // The block selects textures: the state after it
+                            // is the one every return of the block leaves.
+                            let mut exit = None;
+                            for ret in &c.returns {
+                                let w = self.resolve(MATERIAL, *ret, depth + 1).map_err(|e| {
+                                    format!("the block called at CODE+{:X} {e}", r.offset)
+                                })?;
+                                match exit {
+                                    None => exit = Some(w),
+                                    Some(x) if self.selector(x) == self.selector(w) => {}
+                                    Some(_) => {
+                                        return Err(format!(
+                                            "the block called at CODE+{:X} returns with different texture states",
+                                            r.offset
+                                        ))
+                                    }
+                                }
+                            }
+                            found = Some(exit.ok_or_else(|| {
+                                format!("the block called at CODE+{:X} never returns", r.offset)
+                            })?);
+                            start = r.end();
+                            break;
+                        }
+                        Some(Ok(c)) if !material && !c.slots.contains(&slot) => {}
                         Some(Ok(_)) => {
                             return Err(format!(
-                                "the block called at CODE+{:X} rewrites slot {slot}",
-                                r.offset
+                                "the block called at CODE+{:X} rewrites {}",
+                                r.offset,
+                                what()
                             ))
                         }
                         Some(Err(e)) => return Err(e.clone()),
@@ -641,9 +697,11 @@ impl Geometry {
             }
         }
         if found.is_none() && start == 0 {
-            return Err(format!(
-                "slot {slot} is not written on the path from the shape start"
-            ));
+            return Err(if material {
+                "no texture record precedes it on the path from the shape start".into()
+            } else {
+                format!("slot {slot} is not written on the path from the shape start")
+            });
         }
         let first = self.entries.partition_point(|(t, _)| *t < start);
         let mut sources = BTreeSet::new();
@@ -665,20 +723,38 @@ impl Geometry {
             })?;
             match found {
                 None => found = Some(w),
-                Some(f) if f == w => {}
+                Some(f) if f == w || (material && self.selector(f) == self.selector(w)) => {}
                 Some(_) => {
                     return Err(format!(
-                        "slot {slot} holds a different vertex when entered from CODE+{source:X}"
+                        "{} differs when entered from CODE+{source:X}",
+                        what()
                     ))
                 }
             }
         }
         found.ok_or_else(|| format!("nothing reaches CODE+{x:X}"))
     }
+    /// Bytes of the E2 (16) or E0 (4) record at a CODE offset.
+    pub fn selector(&self, at: usize) -> &[u8] {
+        let n = if self.code.get(at) == Some(&0xe2) {
+            16
+        } else {
+            4
+        };
+        self.code.get(at..at + n).unwrap_or(&[])
+    }
     /// The buffer whose vertex a face's slot shows, when that is provable.
     pub fn writer(&self, face: usize, slot: usize) -> Resolved {
         let f = self.faces.get(face).ok_or("No such face")?;
         self.resolve(slot, f.offset - self.inventory.code_start, 0)
+    }
+    /// CODE offset of the E2/E0 record whose texture state holds on every
+    /// path reaching a face, proved like a vertex slot: walking back, no
+    /// called block may select a texture, and every entry into that span
+    /// must resolve to the same record.
+    pub fn material(&self, face: usize) -> Resolved {
+        let f = self.faces.get(face).ok_or("No such face")?;
+        self.resolve(MATERIAL, f.offset - self.inventory.code_start, 0)
     }
     /// Refusal when CODE bytes `[a, e)` may not be rewritten: a pointer or
     /// relocation field inside, a pointer target strictly inside, or a
@@ -772,7 +848,7 @@ impl Geometry {
         status
     }
     /// Local corner points of a face, each slot resolved to its writer.
-    fn face_points(&self, face: usize) -> Result<Vec<[i32; 3]>> {
+    pub(crate) fn face_points(&self, face: usize) -> Result<Vec<[i32; 3]>> {
         self.faces[face]
             .slots
             .iter()
@@ -783,7 +859,7 @@ impl Geometry {
             .collect()
     }
     /// Copy an edited CODE payload (same length) into a shape.
-    fn install(&self, source: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
+    pub(crate) fn install(&self, source: &[u8], payload: &[u8]) -> Result<Vec<u8>> {
         let cs = self.inventory.code_start;
         if payload.len() != self.inventory.code_len {
             return Err(invalid("Edited CODE changed size"));
@@ -798,7 +874,7 @@ impl Geometry {
 
 /// The edit kept CODE explained, the stub analysis and bindings identical,
 /// and a shape the model reader accepted still parses.
-fn verify_structure(before: &Geometry, source: &[u8], out: &[u8]) -> Result<Geometry> {
+pub(crate) fn verify_structure(before: &Geometry, source: &[u8], out: &[u8]) -> Result<Geometry> {
     let after = Geometry::parse(out)?;
     if after.inventory.opaque_bytes() != before.inventory.opaque_bytes() {
         return Err(invalid("The edit changed how much of CODE is explained"));
@@ -1175,10 +1251,14 @@ fn satisfying(c: &Condition) -> i32 {
 /// A model pose that draws the face at this file offset, if one is found
 /// among the neutral pose and each binding's condition sets.
 pub fn model_drawing(source: &[u8], inventory: &Inventory, face: usize) -> Option<Model> {
+    pose_drawing(source, inventory, face).map(|(_, m)| m)
+}
+/// `model_drawing` with the pose that draws the face.
+pub fn pose_drawing(source: &[u8], inventory: &Inventory, face: usize) -> Option<(Pose, Model)> {
     let has = |m: &Model| m.faces.iter().any(|f| f.offset == face);
     if let Ok(m) = Model::parse(source) {
         if has(&m) {
-            return Some(m);
+            return Some((Pose::new(), m));
         }
     }
     let mut all = Pose::new();
@@ -1193,12 +1273,15 @@ pub fn model_drawing(source: &[u8], inventory: &Inventory, face: usize) -> Optio
             }
             if let Ok(m) = Model::with_pose(source, &pose) {
                 if has(&m) {
-                    return Some(m);
+                    return Some((pose, m));
                 }
             }
         }
     }
-    Model::with_pose(source, &all).ok().filter(has)
+    Model::with_pose(source, &all)
+        .ok()
+        .filter(has)
+        .map(|m| (all, m))
 }
 /// Texture name and selector record active at a face, when a pose draws it.
 fn material_at(source: &[u8], g: &Geometry, face: usize) -> Option<(String, Vec<u8>)> {
