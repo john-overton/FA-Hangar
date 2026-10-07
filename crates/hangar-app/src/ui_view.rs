@@ -101,6 +101,18 @@ pub(super) enum Action {
     StopAudio,
     PaintToggle,
     Eraser,
+    /// The Replace paint tool beside Brush and Eraser.
+    ReplaceTool,
+    /// Open the Replace color dialog.
+    ReplaceDialog,
+    /// Replace color dialog: scope `replace_ui::SCOPE_*`.
+    ReplaceScope(u8),
+    /// Replace color dialog: the From (0) or To (1) swatch takes the grid.
+    ReplaceSlot(u8),
+    /// Replace color dialog: palette cell.
+    ReplaceSwatch(u8),
+    /// Replace color dialog: pick the active swatch from the image.
+    ReplacePickImage,
     PickColor,
     RestoreTexture,
     RemoveOriginals,
@@ -306,9 +318,10 @@ impl App {
                         self.act(Action::ModelPaint);
                     }
                 } else {
-                    self.paint_enabled = !self.paint_enabled || self.eraser;
+                    self.paint_enabled = !self.paint_enabled || self.eraser || self.replace.on;
                 }
                 self.eraser = false;
+                self.replace.on = false;
                 self.pick_color = false;
             }
             Action::Eraser => {
@@ -323,8 +336,15 @@ impl App {
                     self.paint_enabled = !self.paint_enabled || !self.eraser;
                     self.eraser = self.paint_enabled;
                 }
+                self.replace.on = false;
                 self.pick_color = false;
             }
+            Action::ReplaceTool => self.replace_tool(),
+            Action::ReplaceDialog => self.open_replace_dialog(),
+            Action::ReplaceScope(k) => self.replace_scope(k),
+            Action::ReplaceSlot(k) => self.replace_slot(k),
+            Action::ReplaceSwatch(i) => self.replace_swatch(i),
+            Action::ReplacePickImage => self.replace_pick_image(),
             Action::RestoreTexture => {
                 let result = self.restore_texture();
                 self.result(result);
@@ -354,6 +374,7 @@ impl App {
                 self.model_paint = !self.model_paint;
                 // The paint toggle always starts with the brush, not the eraser.
                 self.eraser = false;
+                self.replace.on = false;
                 self.perspective = false;
                 self.textured = true;
             }
@@ -1030,6 +1051,9 @@ impl App {
         if name == "assign-texture" {
             return self.snapshot_assign();
         }
+        if name.starts_with("replace") {
+            return self.snapshot_replace(name);
+        }
         if name == "paint-model" || name == "paint-side" {
             self.mode = Mode::Model;
             self.act(Action::ModelPaint);
@@ -1494,6 +1518,12 @@ impl App {
                 .is_some_and(|p| matches!(p.kind, PromptKind::AssignTexture))
             {
                 self.assign_dialog(&mut out);
+            } else if self
+                .prompt
+                .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::ReplaceColor))
+            {
+                self.replace_dialog(&mut out);
             } else {
                 self.prompt_layout(&mut out);
             }
@@ -2887,6 +2917,7 @@ impl App {
         self.smoke_edit_mode();
         self.smoke_parts_panel();
         self.smoke_face_textures();
+        self.smoke_replace();
         self.demo();
         self.width = 1280;
         self.height = 800;

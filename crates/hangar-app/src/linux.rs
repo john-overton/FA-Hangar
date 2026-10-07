@@ -434,6 +434,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                 4 | 5 => {
                     let e = &*(event.as_ptr().cast::<XKeyEvent>());
                     app.modifiers(e.state & 4 != 0);
+                    app.alt_modifier(e.state & 8 != 0);
                     app.motion(e.x, e.y, e.state & 1 != 0);
                     if kind == 4 && (e.keycode == 4 || e.keycode == 5) {
                         app.wheel(if e.keycode == 4 { 1 } else { -1 });
@@ -456,6 +457,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                 6 => {
                     let e = &*(event.as_ptr().cast::<XKeyEvent>());
                     app.modifiers(e.state & 4 != 0);
+                    app.alt_modifier(e.state & 8 != 0);
                     app.motion(e.x, e.y, e.state & 1 != 0);
                 }
                 22 => {

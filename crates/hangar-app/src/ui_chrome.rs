@@ -339,6 +339,7 @@ impl App {
                     Action::FaceTexture(texture_ui::TEX_RESTORE),
                 )
                 .enabled(faces),
+                Item::new("Replace color\u{2026}", Action::ReplaceDialog).enabled(faces),
             ],
             _ => vec![
                 Item::new("Controls", Action::Help).key("F1"),

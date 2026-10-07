@@ -628,6 +628,8 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
             let x = lp as u16 as i16 as i32;
             let y = (lp >> 16) as u16 as i16 as i32;
             app.modifiers(ctrl);
+            // VK_MENU: Alt+click picks the Replace source color.
+            app.alt_modifier(GetKeyState(0x12) < 0);
             let (button, down) = match msg {
                 0x201 | 0x203 => (1, true),
                 0x202 => (1, false),
@@ -644,6 +646,8 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
         }
         0x200 => {
             app.modifiers(ctrl);
+            // VK_MENU: Alt+click picks the Replace source color.
+            app.alt_modifier(GetKeyState(0x12) < 0);
             app.motion(
                 lp as u16 as i16 as i32,
                 (lp >> 16) as u16 as i16 as i32,

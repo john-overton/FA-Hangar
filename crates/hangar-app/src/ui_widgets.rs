@@ -597,6 +597,9 @@ pub(super) enum NumberTarget {
     Pose(u8),
     /// Pivot component (right, forward, up) of the selected part.
     Pivot(u8),
+    /// Replace tool and dialog tolerance, in 6-bit palette steps. A tool
+    /// setting: never saved, never in undo.
+    Tolerance,
 }
 /// A number in stored units, fixed-point with `decimals` fractional digits.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -1567,6 +1570,7 @@ impl App {
             }
             NumberTarget::Pose(var) => self.pose_spec(var),
             NumberTarget::Pivot(axis) => self.pivot_spec(axis),
+            NumberTarget::Tolerance => Some(self.tolerance_spec()),
             NumberTarget::Decal(key) => {
                 let p = self.decal_placement;
                 let (value, min, max) = match key {
@@ -1621,6 +1625,7 @@ impl App {
             NumberTarget::Decal(key) => self.decal_setting(key, &format!("{value}"))?,
             NumberTarget::Pose(var) => self.pose_commit(var, value),
             NumberTarget::Pivot(axis) => self.pivot_commit(axis, value)?,
+            NumberTarget::Tolerance => self.tolerance_commit(value),
         }
         Ok(())
     }
@@ -1644,7 +1649,7 @@ impl App {
                     .map(|old| old.value.clone())
             }
             NumberTarget::Pivot(axis) => self.pivot_spec(axis)?.disk.map(|v| v.to_string()),
-            NumberTarget::Decal(_) | NumberTarget::Pose(_) => None,
+            NumberTarget::Decal(_) | NumberTarget::Pose(_) | NumberTarget::Tolerance => None,
         }
     }
     /// Write the saved operand text back to a BRF-backed target, one undo step.
@@ -1689,7 +1694,7 @@ impl App {
                 let v = text.parse::<i64>().map_err(|_| "Saved pivot")?;
                 self.pivot_commit(axis, v)?;
             }
-            NumberTarget::Decal(_) | NumberTarget::Pose(_) => {
+            NumberTarget::Decal(_) | NumberTarget::Pose(_) | NumberTarget::Tolerance => {
                 return Err("No saved value to reset to".into())
             }
         }
@@ -1787,6 +1792,9 @@ impl App {
                     NumberTarget::Decal(_) => "Decal placement".into(),
                     NumberTarget::Pose(_) => "Pose preview value (never saved)".into(),
                     NumberTarget::Pivot(_) => "Part pivot in source units".into(),
+                    NumberTarget::Tolerance => {
+                        "Replace tolerance: RGB distance in 6-bit palette steps (0..64)".into()
+                    }
                 },
                 value: format_number(spec.value, spec.decimals, false),
                 axis: 0,

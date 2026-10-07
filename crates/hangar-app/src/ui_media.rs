@@ -73,6 +73,11 @@ impl App {
         ))
     }
     fn paint_at(&mut self, entry: usize, x: usize, y: usize) {
+        let replace = !self.eraser && self.replace.on;
+        if replace && self.replace.from.is_none() {
+            self.status = "Alt+click the color to replace first, or use Pick".into();
+            return;
+        }
         if self.stroke.as_ref().is_none_or(|s| s.entry != entry)
             && !self.stroke_parked.iter().any(|s| s.entry == entry)
             && self.stroke_parked.len() + usize::from(self.stroke.is_some()) >= 64
@@ -122,6 +127,7 @@ impl App {
                     pic,
                     last: None,
                     erase,
+                    replace: None,
                 })
             })();
             match r {
@@ -147,6 +153,33 @@ impl App {
                 }
             }
         }
+        if replace {
+            let s = self.stroke.as_ref().unwrap();
+            if s.replace.is_none() {
+                match self.replace_stroke(&s.pic) {
+                    Ok(r) => self.stroke.as_mut().unwrap().replace = Some(r),
+                    Err(e) => {
+                        self.status = e;
+                        return;
+                    }
+                }
+            }
+            // Panel lock keeps a Replace stroke inside the locked face's UVs.
+            let s = self.stroke.as_ref().unwrap();
+            let locked = (self.mode == Mode::Model && self.model_paint && self.paint_lock)
+                .then_some(self.selected_face)
+                .flatten();
+            let current = s
+                .replace
+                .as_ref()
+                .and_then(|r| r.lock.as_ref().map(|l| l.0));
+            if locked != current {
+                let lock = self.replace_lock(&s.name, &s.pic);
+                if let Some(r) = self.stroke.as_mut().unwrap().replace.as_mut() {
+                    r.lock = lock;
+                }
+            }
+        }
         self.painting = true;
         let eraser = self.eraser;
         let s = self.stroke.as_mut().unwrap();
@@ -155,11 +188,31 @@ impl App {
         for step in 0..=steps {
             let xx = (px as i64 + (x as i64 - px as i64) * step as i64 / steps as i64) as usize;
             let yy = (py as i64 + (y as i64 - py as i64) * step as i64 / steps as i64) as usize;
-            let painted = match s.erase.as_deref().filter(|_| eraser) {
-                Some(source) => s
-                    .pic
-                    .paint_from(&mut s.bytes, xx, yy, self.brush_radius, source),
-                None => s
+            let painted = match (
+                s.erase.as_deref().filter(|_| eraser),
+                s.replace.as_deref_mut(),
+            ) {
+                (Some(source), _) => {
+                    s.pic
+                        .paint_from(&mut s.bytes, xx, yy, self.brush_radius, source)
+                }
+                (None, Some(r)) if replace => {
+                    let region = r.lock.as_ref().map(|l| l.1.as_slice());
+                    let n = s.pic.replace(
+                        &mut s.bytes,
+                        xx,
+                        yy,
+                        self.brush_radius,
+                        &r.set,
+                        r.to,
+                        region,
+                    );
+                    if let Ok(n) = n {
+                        r.count += n;
+                    }
+                    n
+                }
+                _ => s
                     .pic
                     .paint(&mut s.bytes, xx, yy, self.brush_radius, self.brush),
             };
@@ -174,6 +227,11 @@ impl App {
             format!(
                 "Erasing {} to its original; release to commit one undo step",
                 s.name
+            )
+        } else if let Some(r) = s.replace.as_deref().filter(|_| replace) {
+            format!(
+                "Replacing index {} with {} in {}; release to commit one undo step",
+                r.from, r.to, s.name
             )
         } else {
             format!(
@@ -225,17 +283,12 @@ impl App {
             }
             return;
         };
-        if self.pick_color {
+        if self.atlas_picks() {
             if let Some(p) = self.current_picture() {
                 let i = py * p.width + px;
-                if !p.mask[i] {
-                    self.status = "Transparent pixel; no color picked".into();
-                    return;
-                }
-                self.brush = p.pixels[i];
-                self.status = format!("Picked palette index {}", self.brush);
+                let index = p.mask[i].then(|| p.pixels[i]);
+                self.color_picked(index);
             }
-            self.pick_color = false;
             return;
         }
         if self.paint_enabled {
@@ -256,6 +309,15 @@ impl App {
             strokes.push(s);
             let plan = self.panel_draft.take();
             let generated = strokes.iter().filter(|s| s.original.is_none()).count();
+            // A Replace stroke reports its pixels, indices and textures.
+            let replaced = strokes
+                .iter()
+                .find_map(|s| s.replace.as_ref().map(|r| (r.from, r.to)));
+            let counts: Vec<(String, usize)> = strokes
+                .iter()
+                .filter_map(|s| s.replace.as_ref().map(|r| (s.name.clone(), r.count)))
+                .filter(|(_, n)| *n > 0)
+                .collect();
             let r: Result<Option<Vec<String>>> = (|| {
                 let mut entries = Vec::new();
                 let mut removals = Vec::new();
@@ -321,9 +383,18 @@ impl App {
             self.paint_enabled = enabled;
             self.model_paint = model_paint;
             self.selected_face = face;
-            match r {
-                Ok(None) => self.status = "The stroke changed no pixels".into(),
-                Ok(Some(kept)) => {
+            match (r, replaced) {
+                (Ok(None), Some((from, _))) => {
+                    self.status = format!(
+                        "No pixels {} under the stroke; nothing changed",
+                        self.replace_source_text(from)
+                    )
+                }
+                (Ok(Some(kept)), Some((from, to))) => {
+                    self.status = self.replace_status(&counts, from, to, &kept, generated)
+                }
+                (Ok(None), None) => self.status = "The stroke changed no pixels".into(),
+                (Ok(Some(kept)), None) => {
                     let mut status = String::from("Paint stroke applied");
                     if generated > 0 {
                         status.push_str(&format!(
@@ -337,7 +408,7 @@ impl App {
                     status.push_str(". Ctrl+Z undoes it");
                     self.status = status;
                 }
-                Err(e) => self.status = format!("Error: {e}"),
+                (Err(e), _) => self.status = format!("Error: {e}"),
             }
         }
     }
@@ -658,6 +729,12 @@ impl App {
             if self.eraser {
                 self.status = "Flat-color panel; nothing painted to erase".into();
                 return;
+            }
+            if self.replace.on {
+                if let Err(error) = self.replace_flat(face) {
+                    self.status = error;
+                    return;
+                }
             }
             if let Err(error) = self.start_generated_stroke(face) {
                 self.status = error;
@@ -1023,33 +1100,42 @@ impl App {
                         );
                     }
                 }
-                if let Some(rect) = o.prop(&mut s, "Tool") {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
                     let active = self.model_paint;
+                    let replace = self.replace.on;
                     o.segmented(
-                        rect_h(rect, m::BUTTON_H),
+                        rect,
                         &[
                             (
                                 Btn::new("Brush")
                                     .with_icon(Icon::Brush)
-                                    .on(active && !self.eraser),
+                                    .on(active && !self.eraser && !replace),
                                 Action::PaintToggle,
                             ),
                             (Btn::new("Eraser").on(active && self.eraser), Action::Eraser),
+                            (
+                                Btn::new("Replace").on(active && replace),
+                                Action::ReplaceTool,
+                            ),
                         ],
                     );
                 }
             }
             if self.pic.is_some() {
-                if let Some(rect) = o.prop(&mut s, "Tool") {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
                     let on = self.paint_enabled;
                     o.segmented(
-                        rect_h(rect, m::BUTTON_H),
+                        rect,
                         &[
                             (
-                                Btn::new("Brush").on(on && !self.eraser),
+                                Btn::new("Brush").on(on && !self.eraser && !self.replace.on),
                                 Action::PaintToggle,
                             ),
                             (Btn::new("Eraser").on(on && self.eraser), Action::Eraser),
+                            (
+                                Btn::new("Replace").on(on && self.replace.on),
+                                Action::ReplaceTool,
+                            ),
                             (Btn::new("Pick").on(self.pick_color), Action::PickColor),
                         ],
                     );
@@ -1067,6 +1153,23 @@ impl App {
                         })
                         .collect();
                 o.segmented(rect_h(rect, m::BUTTON_H), &items);
+            }
+            let tool = if self.mode == Mode::Model {
+                self.model_paint
+            } else {
+                self.pic.is_some()
+            };
+            if tool && self.replace.on {
+                self.replace_rows(o, &mut s, &colors);
+            }
+            if self.pic.is_some() || self.texture_target().is_some() {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.button_ex(
+                        rect,
+                        Btn::new("Replace color\u{2026}").with_icon(Icon::Palette),
+                        Action::ReplaceDialog,
+                    );
+                }
             }
             if self.pic.is_some() {
                 if let Some(note) = &self.original_note {

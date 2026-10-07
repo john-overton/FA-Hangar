@@ -176,6 +176,7 @@ impl App {
             pic,
             last: None,
             original: None,
+            replace: None,
         }));
         self.panel_draft = Some(Box::new(plan));
         self.painting = true;

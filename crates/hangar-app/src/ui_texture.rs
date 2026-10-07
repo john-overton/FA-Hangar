@@ -41,7 +41,7 @@ pub(super) struct AssignDraft {
 /// Hangar assignment faces of one shape entry, cached by storage.
 #[derive(Default)]
 pub(super) struct AssignedCache(core::cell::RefCell<Option<(Entry, Vec<usize>)>>);
-fn full(name: &str) -> String {
+pub(super) fn full(name: &str) -> String {
     if name.contains('.') {
         name.to_ascii_uppercase()
     } else {
@@ -655,6 +655,13 @@ impl App {
                     );
                 }
             }
+            if let Some(rect) = o.wide(s, m::BUTTON_H) {
+                o.button_ex(
+                    rect,
+                    Btn::new("Replace color\u{2026}").enabled(!faces.is_empty()),
+                    Action::ReplaceDialog,
+                );
+            }
             let note = if faces.is_empty() {
                 NO_FACES.to_string()
             } else if !clone_ok {
@@ -1008,7 +1015,7 @@ fn boxed_app() -> Box<App> {
     Box::new(App::new())
 }
 #[inline(never)]
-fn texture_app() -> Box<App> {
+pub(super) fn texture_app() -> Box<App> {
     let mut a = boxed_app();
     a.demo();
     a.doc
@@ -1035,7 +1042,7 @@ fn texture_app() -> Box<App> {
 impl App {
     /// A root face of the shown model with (or without) a texture, picked by
     /// the raster at its projected centre.
-    fn smoke_texture_face(&self, textured: bool) -> (usize, [i32; 2]) {
+    pub(super) fn smoke_texture_face(&self, textured: bool) -> (usize, [i32; 2]) {
         let m = self.model_for_paint().unwrap();
         (0..m.faces.len())
             .filter(|f| m.faces[*f].group.is_none() && (m.faces[*f].sub & 4 != 0) == textured)
@@ -1057,7 +1064,7 @@ impl App {
             })
             .expect("A pickable face")
     }
-    fn smoke_menu_pick(&mut self, menu: usize, action: &dyn Fn(Action) -> bool) {
+    pub(super) fn smoke_menu_pick(&mut self, menu: usize, action: &dyn Fn(Action) -> bool) {
         let name = self.smoke_find(&|x| matches!(x, Action::Menu(n) if n == menu));
         self.chrome_click(name);
         let item = self.smoke_find(action);

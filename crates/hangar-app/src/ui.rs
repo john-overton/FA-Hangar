@@ -322,6 +322,8 @@ enum PromptKind {
     FaceClone,
     /// The Assign texture dialog (`ed.assign`); the value filters PIC names.
     AssignTexture,
+    /// The Replace color dialog (`replace.dialog`).
+    ReplaceColor,
     CloseLibrary,
     ResourceName(bool),
     StationValue(usize),
@@ -371,6 +373,8 @@ struct Stroke {
     last: Option<(usize, usize)>,
     /// Eraser target: the texture's original pixels, same layout as `pic`.
     erase: Option<Box<Pic>>,
+    /// Replace tool: matching indices, count and Panel lock footprint.
+    replace: Option<Box<replace_ui::StrokeReplace>>,
 }
 struct Browser {
     folder: String,
@@ -523,6 +527,8 @@ pub struct App {
     /// Ctrl held, reported by the backend (NumberField snapping).
     ctrl: bool,
     scrub: Option<widgets::Scrub>,
+    /// Replace tool and Replace color dialog.
+    replace: Box<replace_ui::ReplaceState>,
 }
 // The CRT-free x86_64 Windows build has no `__chkstk`, so any stack frame over
 // 4 KiB fails to link, and `App::new()` builds the value on the stack before it
@@ -678,6 +684,7 @@ impl App {
             pressed: false,
             ctrl: false,
             scrub: None,
+            replace: Box::default(),
         }
     }
     pub fn demo(&mut self) {
@@ -778,6 +785,7 @@ impl App {
     }
     pub fn select_entry(&mut self, index: usize) {
         self.finish_stroke();
+        self.replace.dialog = None;
         self.selected_face = None;
         self.context_model = None;
         self.context_entry = None;
@@ -1601,6 +1609,10 @@ impl App {
                 return;
             }
         }
+        if self.prompt.is_none() && matches!(key, Key::Escape) && self.replace_picking() {
+            self.replace_pick_cancel();
+            return;
+        }
 
         if self.prompt.is_some() {
             match key {
@@ -1609,6 +1621,17 @@ impl App {
                     if self.clone_unresolved.pick.take().is_some() {
                         return;
                     }
+                    // A typed tolerance returns to the Replace color dialog.
+                    if self.replace.dialog.is_some()
+                        && self.prompt.as_ref().is_some_and(|p| {
+                            matches!(p.kind, PromptKind::Number(widgets::NumberTarget::Tolerance))
+                        })
+                    {
+                        self.replace_show();
+                        self.status = "Tolerance unchanged".into();
+                        return;
+                    }
+                    self.replace.dialog = None;
                     if self
                         .prompt
                         .as_ref()
@@ -1709,6 +1732,7 @@ impl App {
                         PromptKind::TransferReview => self.apply_transfer(),
                         PromptKind::FaceClone => self.clone_face_texture(&p.value),
                         PromptKind::AssignTexture => self.apply_assign(),
+                        PromptKind::ReplaceColor => self.apply_replace(),
                         PromptKind::Isolate => (|| {
                             let to = p.value.trim().to_ascii_uppercase();
                             let shape = self
@@ -2186,6 +2210,19 @@ impl App {
             }
             return;
         }
+        // Pick from image for the hidden Replace color dialog, also in Edit Mesh.
+        if button == 1
+            && down
+            && self.prompt.is_none()
+            && self.mode == Mode::Model
+            && self.replace_picking()
+            && self.in_viewport(x, y)
+        {
+            if let Some((face, uv)) = self.model_hit(x, y) {
+                self.model_pick(face, uv);
+            }
+            return;
+        }
         if button == 1 && down && self.prompt.is_none() && self.mode == Mode::Model {
             let hp = self
                 .layout()
@@ -2265,6 +2302,9 @@ impl App {
                 self.selected_face = Some(face);
                 self.textured = true;
                 self.perspective = false;
+                if self.model_pick(face, uv) {
+                    return;
+                }
                 if self.model_paint {
                     self.paint_model_hit(face, uv);
                 }
@@ -2277,7 +2317,7 @@ impl App {
             && self.mode == Mode::Media
             && self.pic.is_some()
             && self.image_point(x, y).is_some()
-            && (self.paint_enabled || self.pick_color)
+            && (self.paint_enabled || self.atlas_picks())
         {
             self.paint_point(x, y);
             return;
@@ -2791,3 +2831,6 @@ mod edit_ui;
 
 #[path = "ui_texture.rs"]
 mod texture_ui;
+
+#[path = "ui_replace.rs"]
+mod replace_ui;
