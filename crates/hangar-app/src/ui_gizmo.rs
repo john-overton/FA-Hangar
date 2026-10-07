@@ -236,7 +236,6 @@ pub(super) struct VertexHandle {
     pub index: usize,
     pub at: [i32; 2],
     pub depth: i32,
-    pub visible: bool,
 }
 impl App {
     fn view_rect(&self) -> [i32; 4] {
@@ -1074,6 +1073,9 @@ impl App {
             self.pan[1],
             self.width,
             self.height,
+            self.left(),
+            self.right(),
+            self.dock_y(),
             self.flat as i32,
             m.faces.len() as i32,
         ] {
@@ -1085,9 +1087,12 @@ impl App {
         h
     }
     /// Which vertices and faces the shaded view shows. None in wireframe or
-    /// with X-ray on, where everything counts as visible. A vertex shows
-    /// when the raster near it is empty, or drawn by a face with a corner
-    /// at that point, or no nearer than it.
+    /// with X-ray on, where every corner of a drawn face counts as shown.
+    /// A face shows when it has pixels in the raster's face buffer. A
+    /// vertex shows when a shown face has it as a corner and it is not
+    /// occluded: a pixel within one raster px of it is drawn by such a face
+    /// (it lies on that face's visible boundary), or nothing nearer is drawn
+    /// at its pixel (depth test with two raster px of tolerance).
     pub(super) fn occlusion(&self) -> Option<(Vec<bool>, Vec<bool>)> {
         if !self.textured || self.gizmo.xray {
             return None;
@@ -1099,9 +1104,9 @@ impl App {
                 return Some((v.clone(), f.clone()));
             }
         }
-        let (w, h) = (self.right() - self.left() - 2, self.dock_y() - 54);
-        let rw = (w as usize).min(512);
-        let rh = (h as usize * rw / w.max(1) as usize).max(1);
+        let [w, h] = self.view_size();
+        let rw = (w.max(1) as usize).min(512);
+        let rh = (h.max(1) as usize * rw / w.max(1) as usize).max(1);
         let frame = self.raster(rw, rh);
         let view = self.raster_frame(self.view_size())?;
         let mut faces = vec![false; m.faces.len()];
@@ -1110,48 +1115,66 @@ impl App {
                 *v = true;
             }
         }
+        let mut cornered = vec![false; m.vertices.len()];
+        for (f, shown) in m.faces.iter().zip(&faces) {
+            for i in f.indices.iter().filter(|_| *shown) {
+                if let Some(c) = cornered.get_mut(*i) {
+                    *c = true;
+                }
+            }
+        }
+        let tolerance = (2 * view.units_per_px(rw)).max(2 * model::VIEW_FIXED);
+        let corner = |f: usize, p: [i32; 3]| {
+            faces.get(f) == Some(&true)
+                && m.faces[f]
+                    .indices
+                    .iter()
+                    .any(|c| m.vertices.get(*c).is_some_and(|c| c.point == p))
+        };
         let verts: Vec<bool> = m
             .vertices
             .iter()
-            .map(|v| {
+            .zip(&cornered)
+            .map(|(v, cornered)| {
+                if !cornered {
+                    return false;
+                }
                 let [px, py, z] = view.raster16(v.point, [rw, rh]);
                 let (x, y) = (px.div_euclid(16), py.div_euclid(16));
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        let (x, y) = (x + dx, y + dy);
-                        if x < 0 || y < 0 || x >= rw as i32 || y >= rh as i32 {
-                            return true;
-                        }
-                        let i = y as usize * rw + x as usize;
-                        let f = frame.faces[i];
-                        if f == usize::MAX
-                            || m.faces[f]
-                                .indices
-                                .iter()
-                                .any(|c| m.vertices.get(*c).is_some_and(|c| c.point == v.point))
-                            || z as i64 >= frame.depth[i] - 512
-                        {
-                            return true;
-                        }
-                    }
+                if x < 0 || y < 0 || x >= rw as i32 || y >= rh as i32 {
+                    // Off the raster (and the viewport): its faces decide.
+                    return true;
                 }
-                false
+                let on_boundary = (-1..=1).any(|dy| {
+                    (-1..=1).any(|dx| {
+                        let (x, y) = (x + dx, y + dy);
+                        x >= 0
+                            && y >= 0
+                            && x < rw as i32
+                            && y < rh as i32
+                            && corner(frame.faces[y as usize * rw + x as usize], v.point)
+                    })
+                });
+                let i = y as usize * rw + x as usize;
+                on_boundary
+                    || frame.faces[i] == usize::MAX
+                    || z as i64 >= frame.depth[i] - tolerance
             })
             .collect();
         *self.gizmo.occlusion.borrow_mut() = Some((key, verts.clone(), faces.clone()));
         Some((verts, faces))
     }
-    /// Vertex handles: one per screen position and point, only for corners
-    /// of drawn faces, inside the viewport.
+    /// Vertex handles: one per screen position and point, only for shown
+    /// corners (`occlusion`; every corner of a drawn face with X-ray or in
+    /// wireframe) inside the viewport.
     pub(super) fn vertex_handles(&self) -> Vec<VertexHandle> {
         let mut all = self.handle_points();
-        // Copies of a vertex in several frames or buffers draw once, the
-        // shown copy first.
-        all.sort_unstable_by_key(|(h, p)| (h.at, *p, !h.visible, h.index));
+        // Copies of a vertex in several frames or buffers draw once.
+        all.sort_unstable_by_key(|(h, p)| (h.at, *p, h.index));
         all.dedup_by_key(|(h, p)| (h.at, *p));
         all.into_iter().map(|(h, _)| h).collect()
     }
-    /// Every drawn corner inside the viewport with its point; box select
+    /// Every shown corner inside the viewport with its point; box select
     /// takes all copies, so it uses these rather than the handles.
     pub(super) fn handle_points(&self) -> Vec<(VertexHandle, [i32; 3])> {
         let Some(model) = self.shown_model() else {
@@ -1169,9 +1192,12 @@ impl App {
         let inside = |[x, y]: [i32; 2]| {
             x >= self.left() + 40 && x < self.right() - 8 && y >= 60 && y < self.dock_y() - 10
         };
+        let Some(frame) = self.view_frame(self.view_size()) else {
+            return Vec::new();
+        };
         let mut all: Vec<(VertexHandle, [i32; 3])> = Vec::new();
         for (i, v) in model.vertices.iter().enumerate() {
-            if !used[i] {
+            if !used[i] || visible.as_ref().is_some_and(|s| s.get(i) != Some(&true)) {
                 continue;
             }
             let Some(at) = self.hp_project(v.point).filter(|p| inside(*p)) else {
@@ -1181,8 +1207,7 @@ impl App {
                 VertexHandle {
                     index: i,
                     at,
-                    depth: self.camera_point(v.point)[2],
-                    visible: visible.as_ref().is_none_or(|s| s.get(i) == Some(&true)),
+                    depth: frame.project16(v.point)[2] as i32,
                 },
                 v.point,
             ));
@@ -1194,7 +1219,6 @@ impl App {
     pub(super) fn pick_handle(&self, x: i32, y: i32) -> Option<usize> {
         self.vertex_handles()
             .into_iter()
-            .filter(|h| h.visible)
             .filter_map(|h| {
                 let (dx, dy) = ((h.at[0] - x) as i64, (h.at[1] - y) as i64);
                 let d = dx * dx + dy * dy;
@@ -1205,7 +1229,7 @@ impl App {
     }
     /// Vertex handles over the mesh: ink squares with a gm-1000 keyline,
     /// selected amber with an amber-bright ring, the active one 2 px larger,
-    /// the hovered one outlined; hidden ones small and dim.
+    /// the hovered one outlined. Hidden vertices draw nothing.
     pub(super) fn draw_vertex_handles(&self, o: &mut Layout) {
         let handles = self.vertex_handles();
         let hover = (o.mouse[0] != i32::MIN
@@ -1229,7 +1253,7 @@ impl App {
         let active = self.mesh_vertices.first().copied();
         // Crowded: another shown handle within 6 px. Crowded unselected
         // handles draw 2 px smaller so dense meshes stay readable.
-        let mut order: Vec<usize> = (0..handles.len()).filter(|k| handles[*k].visible).collect();
+        let mut order: Vec<usize> = (0..handles.len()).collect();
         order.sort_unstable_by_key(|k| handles[*k].at);
         let mut crowded = vec![false; handles.len()];
         for (n, k) in order.iter().enumerate() {
@@ -1245,31 +1269,14 @@ impl App {
                 }
             }
         }
-        // Hidden first, then unselected, then selected, so selections stay on top.
-        for pass in 0..3 {
+        // Unselected first, then selected, so selections stay on top.
+        for pass in 1..3 {
             for (k, h) in handles.iter().enumerate() {
                 let on = selected.get(h.index) == Some(&true);
-                let layer = if !h.visible {
-                    0
-                } else if on {
-                    2
-                } else {
-                    1
-                };
-                if layer != pass {
+                if 1 + usize::from(on) != pass {
                     continue;
                 }
                 let [x, y] = h.at;
-                if !h.visible {
-                    o.canvas.rect(
-                        x - 1,
-                        y - 1,
-                        2,
-                        2,
-                        if on { c::AMBER_DEEP } else { c::GM_600 },
-                    );
-                    continue;
-                }
                 // 7 px with the keyline (5 when crowded); selected 9, the
                 // active vertex 11.
                 let hovered = hover == Some(h.index);
@@ -1427,7 +1434,7 @@ impl App {
             }
         }
         if name.contains("hover") && mode == G_NONE {
-            if let Some(h) = self.vertex_handles().into_iter().find(|h| h.visible) {
+            if let Some(h) = self.vertex_handles().into_iter().next() {
                 self.motion(h.at[0] + 3, h.at[1] + 2, false);
             }
         }
@@ -1922,18 +1929,22 @@ fn smoke_vertex_handles(w: i32, h: i32) {
     }
     a.zoom = 100;
     // Solid shading from above: the keel vertex (0, -30, -12) is hidden by
-    // the top faces, drawn dim and not pickable until X-ray.
+    // the top faces: not drawn, not pickable until X-ray.
     a.yaw = 0;
     a.pitch = 90;
     a.textured = true;
     a.flat = true;
     let keel = a.hp_project(start[4]).unwrap();
-    let hidden = a
-        .vertex_handles()
-        .into_iter()
-        .find(|h| h.index == 4)
-        .unwrap();
-    assert!(!hidden.visible, "Keel hidden in Solid shading");
+    assert!(
+        a.vertex_handles().iter().all(|h| h.index != 4),
+        "Keel hidden in Solid shading"
+    );
+    let keel_drawn = |a: &App| {
+        a.draw().commands.iter().any(|d| {
+            matches!(d, Draw::Rect(x, y, w, ..) if x + w / 2 == keel[0] && y + w / 2 == keel[1])
+        })
+    };
+    assert!(!keel_drawn(&a), "Hidden vertices draw nothing");
     assert_ne!(a.pick_handle(keel[0], keel[1]), Some(4));
     let boxed = |a: &mut App| {
         a.mesh_vertices.clear();
@@ -1948,6 +1959,7 @@ fn smoke_vertex_handles(w: i32, h: i32) {
     a.alt_key('z');
     assert!(a.gizmo.xray);
     assert_eq!(a.pick_handle(keel[0], keel[1]), Some(4));
+    assert!(keel_drawn(&a), "X-ray draws every corner");
     assert!(boxed(&mut a), "X-ray boxes hidden vertices");
     a.smoke_press(keel[0], keel[1], false);
     assert_eq!(a.mesh_vertices, vec![4]);
@@ -1978,18 +1990,25 @@ fn smoke_handle_precision(w: i32, h: i32) {
     let rh = (vh as usize * rw / vw as usize).max(1);
     let (cx, cy) = (a.left() + 1 + vw / 2, 54 + vh / 2);
     let m = a.model.clone().unwrap();
-    for (zoom, k) in [100, 250, 800]
+    let mut solid = [0; 3];
+    for (z, k, xray) in [100, 250, 800]
         .into_iter()
-        .flat_map(|z| (0..m.vertices.len()).map(move |k| (z, k)))
+        .enumerate()
+        .flat_map(|z| (0..m.vertices.len()).flat_map(move |k| [(z, k, false), (z, k, true)]))
     {
-        // Each corner in turn at the viewport centre.
+        // Each corner in turn at the viewport centre, X-ray off and on.
+        let zoom = z.1;
         a.zoom = zoom;
+        a.gizmo.xray = xray;
         a.pan = [0, 0];
         let at = a.hp_project(m.vertices[k].point).unwrap();
         a.pan = [cx - at[0], cy - at[1]];
         let frame = a.raster(rw, rh);
         let handles = a.vertex_handles();
-        assert!(!handles.is_empty(), "zoom {zoom}: handles");
+        assert!(!xray || !handles.is_empty(), "zoom {zoom}: X-ray handles");
+        if !xray {
+            solid[z.0] += handles.len();
+        }
         for hd in &handles {
             let p = m.vertices[hd.index].point;
             let c = raster_corner(&a, p, [rw, rh]);
@@ -2012,13 +2031,11 @@ fn smoke_handle_precision(w: i32, h: i32) {
                             .is_some_and(|f| f.indices.iter().any(|i| m.vertices[*i].point == p))
                 })
             });
-            assert!(
-                !hd.visible || on,
-                "zoom {zoom}: handle {} off its faces",
-                hd.index
-            );
+            assert!(xray || on, "zoom {zoom}: handle {} off its faces", hd.index);
         }
     }
+    assert!(solid.iter().all(|n| *n > 0), "Solid handles at every zoom");
+    a.gizmo.xray = false;
     // A selected face at 800%, each corner panned to the viewport centre
     // in turn: an amber handle and a pick region on the rasterized corner.
     a.zoom = 100;

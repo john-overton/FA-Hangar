@@ -288,6 +288,11 @@ impl ViewFrame {
             p[2].clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         ]
     }
+    /// Source units x `VIEW_FIXED` one pixel of a `raster_w` wide raster
+    /// spans (orthographic): a depth tolerance that follows the zoom.
+    pub fn units_per_px(&self, raster_w: usize) -> i64 {
+        16 * self.denom(0) * self.size[0].max(1) as i64 / (self.scale() * raster_w.max(1) as i64)
+    }
     /// The point at view position `at` (1/16 px) with `reference`'s depth:
     /// the inverse of an orthographic `project16`.
     pub fn unproject16(&self, at: [i64; 2], reference: [i32; 3]) -> [i32; 3] {

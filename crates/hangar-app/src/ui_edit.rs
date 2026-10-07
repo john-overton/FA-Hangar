@@ -416,7 +416,7 @@ impl App {
             let found: Vec<usize> = self
                 .handle_points()
                 .into_iter()
-                .filter(|(h, _)| h.visible && hit(Some(h.at)))
+                .filter(|(h, _)| hit(Some(h.at)))
                 .map(|(h, _)| h.index)
                 .collect();
             if !b.extend && !b.subtract {
@@ -471,17 +471,17 @@ impl App {
         self.sync_face_vertices();
         self.status = format!("Selected {name}: {}", view::count(n, "face", "faces"));
     }
-    /// L: select the part under the pointer.
+    /// L: select the part under the pointer: a shown vertex handle in
+    /// vertex select, else the shown face there.
     pub(super) fn select_part_at(&mut self, x: i32, y: i32) {
         let Some(model) = &self.model else {
             return;
         };
-        let group = if self.ed.face_select {
-            self.pick_face(x, y).map(|f| model.faces[f].group)
-        } else {
-            self.pick_vertex(x, y)
-                .map(|i| model.vertex_tags.get(i).and_then(|t| t.group))
-        };
+        let vertex = (!self.ed.face_select)
+            .then(|| self.pick_vertex(x, y))
+            .flatten()
+            .map(|i| model.vertex_tags.get(i).and_then(|t| t.group));
+        let group = vertex.or_else(|| self.pick_face(x, y).map(|f| model.faces[f].group));
         match group {
             Some(g) => self.select_group(g),
             None => self.status = "Point at a face or vertex, then press L".into(),
