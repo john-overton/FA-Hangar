@@ -165,6 +165,7 @@ pub fn run() -> Result<()> {
             app.smoke_clone();
             crate::saving::smoke();
             app.smoke_save_policy();
+            println!("App size: {} bytes",core::mem::size_of::<App>());
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
         Some("--stub-census")=>{let report=shape::census(&args[2..])?;platform::write_new(argument(&args,1)?,report.as_bytes())?;println!("Wrote {}",argument(&args,1)?);},

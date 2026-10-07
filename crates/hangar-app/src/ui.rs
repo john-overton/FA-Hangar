@@ -437,7 +437,7 @@ pub struct App {
     data: Vec<u8>,
     brf: Option<Brf>,
     model: Option<Model>,
-    preview: Option<Model>,
+    preview: Option<Box<Model>>,
     detail: String,
     prompt: Option<Prompt>,
     yaw: i32,
@@ -450,7 +450,7 @@ pub struct App {
     filter: String,
     filter_focus: bool,
     pub quit: bool,
-    clone_draft: Option<hangar_core::clone_aircraft::Package>,
+    clone_draft: Option<Box<hangar_core::clone_aircraft::Package>>,
     clone_sources: Vec<String>,
     clone_title: String,
     clone_scroll: usize,
@@ -489,7 +489,7 @@ pub struct App {
     changes_scroll: usize,
     browser: Option<Browser>,
     recent: Vec<String>,
-    pic: Option<Pic>,
+    pic: Option<Box<Pic>>,
     base_palette: Box<[[u8; 3]; 256]>,
     palette_loaded: bool,
     palette_override: Option<Box<[[u8; 3]; 256]>>,
@@ -510,13 +510,13 @@ pub struct App {
     textured: bool,
     /// Solid shading: the textured raster with flat, lit face colors.
     flat: bool,
-    stroke: Option<Stroke>,
+    stroke: Option<Box<Stroke>>,
     stroke_parked: Vec<Stroke>,
     panel_draft: Option<Box<mesh_ui::PanelPlan>>,
     selected_face: Option<usize>,
     model_paint: bool,
     paint_lock: bool,
-    context_model: Option<Model>,
+    context_model: Option<Box<Model>>,
     context_entry: Option<usize>,
     /// Left button held (pressed button faces).
     pressed: bool,
@@ -524,6 +524,14 @@ pub struct App {
     ctrl: bool,
     scrub: Option<widgets::Scrub>,
 }
+// The CRT-free x86_64 Windows build has no `__chkstk`, so any stack frame over
+// 4 KiB fails to link, and `App::new()` builds the value on the stack before it
+// is boxed. Keep new App state in boxed structs (see AGENTS.md) rather than
+// raising this bound.
+const _: () = assert!(
+    core::mem::size_of::<App>() <= 3072,
+    "App must stay small: box large new state (CRT-free x86_64 has no __chkstk; see AGENTS.md)"
+);
 fn extension(name: &str) -> &str {
     name.rsplit('.').next().unwrap_or("")
 }
@@ -854,7 +862,8 @@ impl App {
                 .get(i)
                 .filter(|e| e.name.ends_with(".SH"))
                 .and_then(|e| e.read().ok())
-                .and_then(|b| Model::parse(&b).ok());
+                .and_then(|b| Model::parse(&b).ok())
+                .map(Box::new);
         }
         self.pic = None;
         self.textures.clear();
@@ -939,7 +948,7 @@ impl App {
                                 } else {
                                     format!("{} \u{d7} {} indexed PIC", p.width, p.height)
                                 };
-                                self.pic = Some(p);
+                                self.pic = Some(Box::new(p));
                             }
                             Err(_) if ext == "ORG" => {
                                 self.detail = "Not a PIC payload; not a stored original".into();
@@ -1015,7 +1024,7 @@ impl App {
         if !self.doc.archive.entries.is_empty() {
             self.collapsed[view::category_of(self.name())] = false;
         }
-        if let Some(model) = self.model.as_ref().or(self.context_model.as_ref()) {
+        if let Some(model) = self.model.as_ref().or(self.context_model.as_deref()) {
             for name in &model.textures {
                 let key = if name.contains('.') {
                     name.clone()
@@ -1361,7 +1370,7 @@ impl App {
             FileAction::Obj => {
                 let m = self
                     .preview
-                    .as_ref()
+                    .as_deref()
                     .or(self.model.as_ref())
                     .ok_or("No decoded shape")?;
                 crate::platform::write_new(path, m.obj().as_bytes())?;
@@ -1464,7 +1473,7 @@ impl App {
                 m.transformed(t)
             };
             match result {
-                Ok(m) => self.preview = Some(m),
+                Ok(m) => self.preview = Some(Box::new(m)),
                 Err(e) => {
                     self.preview = None;
                     self.status = e;
@@ -1709,7 +1718,7 @@ impl App {
                             let m = self
                                 .model
                                 .as_ref()
-                                .or(self.context_model.as_ref())
+                                .or(self.context_model.as_deref())
                                 .ok_or("No model")?;
                             let from = if self.pic.is_some() {
                                 self.name().to_string()
@@ -1837,7 +1846,7 @@ impl App {
                             self.clone_unresolved = Default::default();
                             match self.build_clone() {
                                 Ok(package) => {
-                                    self.clone_draft = Some(package);
+                                    self.clone_draft = Some(Box::new(package));
                                     self.clone_scroll = 0;
                                     self.clone_review_prompt();
                                     Ok(())

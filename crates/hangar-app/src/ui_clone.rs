@@ -639,7 +639,7 @@ impl App {
         };
         match self.build_clone() {
             Ok(package) => {
-                self.clone_draft = Some(package);
+                self.clone_draft = Some(Box::new(package));
                 // Keeping more names than were acknowledged asks again.
                 if self.clone_kept() > kept {
                     self.clone_unresolved.ack = false;

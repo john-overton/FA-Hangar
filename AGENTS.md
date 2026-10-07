@@ -71,7 +71,11 @@ committing.
 - **Keep native stack frames small.** Large buffers (palettes, images) go on
   the heap (`Box`), as existing code does. The CRT-free x86_64 build has no
   `__chkstk`, so any frame over 4 KiB fails to link: never put an `App` on
-  the stack (smoke helpers use boxed constructors). Stable sorts (`sort`,
+  the stack (smoke helpers use boxed constructors). A compile-time assert
+  next to `App` in `ui.rs` caps `size_of::<App>()` at 3,072 bytes (currently
+  2,672, also printed by `--smoke-test`): put new `App` state in boxed structs
+  (`Option<Box<T>>` or a sub-struct behind a `Box`) rather than raising the
+  bound. Stable sorts (`sort`,
   `sort_by`) can also pull in a large stack buffer; prefer `sort_unstable*`. After growing `App`,
   `Model` or other large structs, run
   `cargo build --release --locked --target x86_64-pc-windows-msvc`.

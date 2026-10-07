@@ -37,7 +37,7 @@ impl App {
                     .as_ref()
                     .filter(|s| s.entry == self.selected)
                     .map(|s| &s.pic)
-                    .or(self.pic.as_ref())
+                    .or(self.pic.as_deref())
             })
     }
     pub(super) fn image_rect(&self) -> Option<[i32; 4]> {
@@ -83,11 +83,11 @@ impl App {
         if self.stroke.as_ref().is_some_and(|s| s.entry != entry) {
             let mut previous = self.stroke.take().unwrap();
             previous.last = None;
-            self.stroke_parked.push(previous);
+            self.stroke_parked.push(*previous);
         }
         if self.stroke.is_none() {
             if let Some(at) = self.stroke_parked.iter().position(|s| s.entry == entry) {
-                self.stroke = Some(self.stroke_parked.remove(at));
+                self.stroke = Some(Box::new(self.stroke_parked.remove(at)));
             }
         }
         if self.stroke.is_none() {
@@ -125,7 +125,7 @@ impl App {
                 })
             })();
             match r {
-                Ok(s) => self.stroke = Some(s),
+                Ok(s) => self.stroke = Some(Box::new(s)),
                 Err(e) => {
                     // Eraser messages ("No stored original for X.PIC") read as status.
                     self.status = if self.eraser {
@@ -243,7 +243,12 @@ impl App {
         }
     }
     pub(super) fn finish_stroke(&mut self) {
-        if let Some(s) = self.stroke.take().or_else(|| self.stroke_parked.pop()) {
+        if let Some(s) = self
+            .stroke
+            .take()
+            .map(|b| *b)
+            .or_else(|| self.stroke_parked.pop())
+        {
             let enabled = self.paint_enabled;
             let model_paint = self.model_paint;
             let face = self.selected_face;
@@ -337,11 +342,15 @@ impl App {
         }
     }
     pub(super) fn open_texture(&mut self, index: usize) {
-        let m = self.model.as_ref().or(self.context_model.as_ref()).cloned();
+        let m = self
+            .model
+            .as_ref()
+            .or(self.context_model.as_deref())
+            .cloned();
         let entry = self.model_entry.or(self.context_entry);
         let face = self.selected_face;
         self.select_entry(index);
-        self.context_model = m;
+        self.context_model = m.map(Box::new);
         self.context_entry = entry;
         self.selected_face = face;
         self.refresh();
@@ -350,9 +359,9 @@ impl App {
     }
     pub(super) fn model_for_paint(&self) -> Option<&Model> {
         self.preview
-            .as_ref()
+            .as_deref()
             .or(self.model.as_ref())
-            .or(self.context_model.as_ref())
+            .or(self.context_model.as_deref())
     }
     pub(super) fn texture_for(&self, name: &str) -> Option<&Pic> {
         let full = if name.contains('.') {

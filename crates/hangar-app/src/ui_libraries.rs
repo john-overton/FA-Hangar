@@ -12,7 +12,7 @@ pub(super) struct Library {
     pub dependencies: hangar_core::dependencies::Index,
     selected: usize,
     field_state: (usize, usize, Option<hangar_core::definition::Aspect>, i32),
-    context_model: Option<Model>,
+    context_model: Option<Box<Model>>,
     context_entry: Option<usize>,
     selected_face: Option<usize>,
     mode: Mode,

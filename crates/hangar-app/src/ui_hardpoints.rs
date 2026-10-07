@@ -59,7 +59,7 @@ impl App {
         );
     }
     fn hp_model(&self) -> Option<&Model> {
-        self.model.as_ref().or(self.context_model.as_ref())
+        self.model.as_ref().or(self.context_model.as_deref())
     }
     /// Shared viewport framing: the committed model's bounds, never a preview's.
     pub(super) fn model_bounds(&self) -> Option<([i32; 3], i32)> {

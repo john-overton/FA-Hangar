@@ -1255,7 +1255,7 @@ impl App {
             self.begin_clone();
             self.variant_id = "NEWJET".into();
             self.clone_title = "Export object".into();
-            self.clone_draft = Some(self.build_clone()?);
+            self.clone_draft = Some(Box::new(self.build_clone()?));
             self.prompt = Some(Prompt {
                 kind: PromptKind::CloneReview,
                 title: "Review".into(),
@@ -1831,7 +1831,7 @@ impl App {
         let dock = self.dock_y();
         let width = r - l;
         self.viewport_header(o);
-        if let Some(m) = self.preview.as_ref().or(self.model.as_ref()) {
+        if let Some(m) = self.preview.as_deref().or(self.model.as_ref()) {
             if self.textured {
                 self.draw_model(o, l + 1, 54, width - 2, dock - 54);
             } else {
@@ -3222,7 +3222,7 @@ impl App {
                         self.select_entry(1);
                         self.begin_clone();
                         self.variant_id = "NEWJET".into();
-                        self.clone_draft = Some(self.build_clone().unwrap());
+                        self.clone_draft = Some(Box::new(self.build_clone().unwrap()));
                         self.prompt = Some(Prompt {
                             kind: PromptKind::CloneReview,
                             title: "Review".into(),

@@ -161,7 +161,7 @@ impl App {
             },
         )?;
         if self.context_entry == Some(entry) {
-            self.context_model = Some(Model::parse(&bytes)?);
+            self.context_model = Some(Box::new(Model::parse(&bytes)?));
         }
         self.doc.replace(entry, bytes)?;
         self.refresh();
@@ -190,7 +190,8 @@ impl App {
             self.context_model = self.doc.archive.entries[i]
                 .read()
                 .ok()
-                .and_then(|b| Model::parse(&b).ok());
+                .and_then(|b| Model::parse(&b).ok())
+                .map(Box::new);
         }
         self.refresh();
         if let Some(i) = self.doc.archive.find(name.trim()) {

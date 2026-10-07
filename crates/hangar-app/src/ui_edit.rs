@@ -167,7 +167,7 @@ impl App {
     /// Model face indices the operations act on: the selected faces, or in
     /// vertex mode every face whose corners are all selected.
     pub(super) fn selected_faces(&self) -> Vec<usize> {
-        let Some(model) = self.preview.as_ref().or(self.model.as_ref()) else {
+        let Some(model) = self.preview.as_deref().or(self.model.as_ref()) else {
             return Vec::new();
         };
         // Sorted offsets and a vertex mask keep this linear for large selections.
@@ -881,7 +881,9 @@ impl App {
     pub(super) fn pending_preview(&mut self, t: Transform) {
         match self.pending_run(t) {
             Ok(Some(added)) => {
-                self.preview = Model::with_pose(&added.shape, &self.ed.pose).ok();
+                self.preview = Model::with_pose(&added.shape, &self.ed.pose)
+                    .ok()
+                    .map(Box::new);
             }
             Ok(None) => {
                 self.preview = None;
@@ -930,7 +932,7 @@ impl App {
     }
     /// Amber edges of the selected faces in wireframe (the raster fills them).
     pub(super) fn face_edges(&self, o: &mut Layout) {
-        let Some(model) = self.preview.as_ref().or(self.model.as_ref()) else {
+        let Some(model) = self.preview.as_deref().or(self.model.as_ref()) else {
             return;
         };
         if self.textured {
@@ -956,7 +958,7 @@ impl App {
     /// Edit Mesh viewport overlay: vertex markers (vertex select) or face
     /// dots (face select), selected face edges, the box.
     pub(super) fn mesh_overlay(&self, o: &mut Layout) {
-        let Some(model) = self.preview.as_ref().or(self.model.as_ref()) else {
+        let Some(model) = self.preview.as_deref().or(self.model.as_ref()) else {
             return;
         };
         let visible = |[x, y]: [i32; 2]| {
@@ -1059,7 +1061,7 @@ impl App {
             if let Some(v) = (!self.ed.face_select)
                 .then(|| self.mesh_vertices.first())
                 .flatten()
-                .and_then(|i| self.preview.as_ref().unwrap_or(model).vertices.get(*i))
+                .and_then(|i| self.preview.as_deref().unwrap_or(model).vertices.get(*i))
             {
                 o.info(
                     &mut s,

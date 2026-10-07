@@ -3,7 +3,7 @@ use super::*;
 impl App {
     pub(super) fn dominant_color(&self) -> Option<u8> {
         let mut counts = BTreeMap::<u8, usize>::new();
-        for f in &self.model.as_ref().or(self.context_model.as_ref())?.faces {
+        for f in &self.model.as_ref().or(self.context_model.as_deref())?.faces {
             if f.sub & 4 == 0 {
                 *counts.entry(f.color).or_default() += 1;
             }
@@ -16,7 +16,7 @@ impl App {
                 .and_then(|i| {
                     self.model
                         .as_ref()
-                        .or(self.context_model.as_ref())
+                        .or(self.context_model.as_deref())
                         .and_then(|m| m.faces.get(i))
                 })
                 .filter(|f| f.sub & 4 == 0)

@@ -137,7 +137,9 @@ impl App {
             &[],
         )?;
         if self.context_entry == Some(entry) {
-            self.context_model = Some(Model::parse(&self.doc.archive.entries[entry].read()?)?);
+            self.context_model = Some(Box::new(Model::parse(
+                &self.doc.archive.entries[entry].read()?,
+            )?));
         }
         self.refresh();
         self.selected_face = Some(face);
@@ -160,12 +162,12 @@ impl App {
         }
         let plan = self.panel_plan(face)?;
         let pic = Pic::parse(&plan.picture)?;
-        self.preview = Some(Model::parse(&plan.shape)?);
+        self.preview = Some(Box::new(Model::parse(&plan.shape)?));
         self.selected_face = Some(plan.face);
         if let Some(s) = self.stroke.take() {
-            self.stroke_parked.push(s);
+            self.stroke_parked.push(*s);
         }
-        self.stroke = Some(Stroke {
+        self.stroke = Some(Box::new(Stroke {
             entry: self.doc.archive.entries.len() + self.stroke_parked.len(),
             name: plan.name.clone(),
             bytes: plan.picture.clone(),
@@ -174,7 +176,7 @@ impl App {
             pic,
             last: None,
             original: None,
-        });
+        }));
         self.panel_draft = Some(Box::new(plan));
         self.painting = true;
         Ok(())
@@ -264,7 +266,7 @@ impl App {
                 None => "X Y Z locks an axis".into(),
             }
         );
-        self.preview = Some(preview);
+        self.preview = Some(Box::new(preview));
         Ok(())
     }
     /// X/Y/Z during a vertex drag toggles the axis lock, as in the transform prompt.
@@ -547,7 +549,7 @@ impl App {
         a.mesh_vertices = vec![0];
         let [x, y] = a.hp_project(before).unwrap();
         let project = |a: &App, i: usize| {
-            a.hp_project(a.preview.as_ref().or(a.model.as_ref()).unwrap().vertices[i].point)
+            a.hp_project(a.preview.as_deref().or(a.model.as_ref()).unwrap().vertices[i].point)
                 .unwrap()
         };
         // A click below the drag threshold selects without editing.
