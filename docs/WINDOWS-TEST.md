@@ -216,6 +216,14 @@ separately. No retail data is included in the test package.
    source objects; each changed LIB must undo independently.
 3. Check inactive and active workspace tabs look separate from File/Edit menus,
    at 800x600 and a larger window.
+4. Drag an entry slowly over another LIB's rows, a same-type definition, the
+   same LIB and the viewport, and outside the window: the chip follows the
+   pointer, targets highlight, and the status bar names the release action.
+   Release on another LIB opens the review with Copy; Esc and RMB cancel.
+5. Right-click an entry and a LIB root. Check the menu opens at the pointer,
+   stays inside the window near the edges, Copy to and Move to submenus list
+   the other LIBs and open the review with Copy or Move, and a click outside
+   closes it. RMB in the viewport still cancels a G/R/S transform.
 
 ## Generated-panel repair (0.8.2)
 

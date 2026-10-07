@@ -312,7 +312,8 @@ See [the Windows test checklist](WINDOWS-TEST.md).
    switch; the active root expands into its categorized entries. The **+**
    opens a LIB.
 2. Select a resource and press **Ctrl+C**, switch to a destination LIB, then
-   **Ctrl+V**. Alternatively, drag an entry onto another LIB root. The review
+   **Ctrl+V**. Alternatively, drag an entry onto another LIB root, or
+   right-click it and choose **Copy to** or **Move to**. The paste review
    includes discovered dependencies by default, using snapshots of open source
    LIBs. Turn the option off for an intentional single-resource copy.
 3. Resolve different same-name resources with **Keep target** or **Take
@@ -343,9 +344,28 @@ occur when switching libraries or preparing copies.
 
 Each LIB has a collapse arrow in the scrollable outliner. Expanded inactive
 LIBs show their categories and resources too. Drag an entry onto another LIB
-root or one of its rows to review a transfer. Choose **Item only** or **Object
-and linked files**, then **Copy** or **Move**; resolve any name collisions
-before applying. Move removes the selected source item and its unshared linked
+root or one of its rows to review a transfer. The review opens with **Copy**
+selected and **Include linked files** off (this item only); tick the box for the
+object and its linked files, or choose **Move**, then resolve any name
+collisions before applying.
+
+Once a pressed entry moves a few pixels it becomes a drag. A chip beside the
+pointer shows the entry's type icon and name and what releasing would do:
+**Copy to MYMOD.LIB** over a row of another LIB (that row and its LIB root are
+filled amber-deep with an amber outline), **Graft with F18.PT** over a
+same-type definition in the same LIB (outlined in steel), or a short reason
+where a release does nothing, such as **Already in this LIB**. The status bar
+repeats the release action. **Esc** or the right mouse button cancels the drag.
+
+Right-click an entry for its context menu. It selects the entry first
+(switching LIB if needed) and lists **Copy to** and **Move to** submenus with
+every other open LIB, then **Copy**, **Paste**, **Duplicate**, **Rename…**,
+**Export entry…**, **Export object…** for definitions, and **Delete**, with
+their shortcuts. **Copy to** and **Move to** open the same transfer review
+with Copy or Move already chosen. Right-click a LIB root for **Paste**,
+**Collapse** or **Expand**, **Package LIB** and **Close LIB**. Items that cannot
+run (Paste with nothing copied, Copy to with one LIB open) are dimmed. Click
+outside the menu, press Esc or right-click elsewhere to close it. Move removes the selected source item and its unshared linked
 entries. Known shared dependencies remain in the source, and files supplied by
 other open LIBs are copied. Both documents update together in memory; each has
 its own undo step. Files change only when saved. An emptied source remains an
@@ -739,6 +759,8 @@ folds the other way in the viewport. Whether the game agrees is listed in
 | Open LIB / package new LIB | Ctrl+O / Ctrl+S, or File menu |
 | Add entry / export selected entry | Ctrl+I / Ctrl+E |
 | Copy / paste resources | Ctrl+C / Ctrl+V, or drag to another LIB root |
+| Entry or LIB context menu | Right-click it in the outliner |
+| Cancel an entry drag | Esc or right mouse button |
 | Duplicate resource / close active LIB | Ctrl+D / Ctrl+W |
 | Replace / export OBJ | Inspector buttons |
 | Search entry names | Ctrl+F or search field; Esc leaves search |

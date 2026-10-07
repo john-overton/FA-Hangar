@@ -14,6 +14,17 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   Windows. The EXE also carries version information (product name, version,
   GPL notice) for its Properties dialog. On Linux the X11 window sets
   `_NET_WM_ICON`.
+- **Copy is the default transfer.** Dropping an entry on another LIB opens the
+  review with Copy selected; Move is one click away.
+- **Drag feedback.** A dragged outliner entry shows a chip with its icon, name
+  and the release action. Copy targets in other LIBs are filled amber-deep
+  with an amber outline, same-type graft targets are outlined in steel, and
+  invalid spots give a short reason. The status bar says what releasing will
+  do; Esc or RMB cancels.
+- **Outliner context menu.** Right-click an entry for Copy to and Move to
+  submenus listing the other open LIBs, Copy, Paste, Duplicate, Rename,
+  Export entry, Export object and Delete; right-click a LIB root for Paste,
+  Collapse, Package LIB and Close LIB. Unavailable items are dimmed.
 
 ## 0.9.0
 
