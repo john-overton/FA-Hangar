@@ -152,19 +152,16 @@ fn groups(graph: &Graph) -> Vec<BTreeSet<String>> {
     let r = &graph.resources;
     let mut raw: Vec<BTreeSet<String>> = Vec::new();
     if let Some(family) = &graph.family {
-        raw.push(
-            ["A", "B", "C", "D", "S"]
-                .iter()
-                .map(|s| format!("{family}_{s}.SH"))
-                .filter(|n| r.contains(n))
-                .collect(),
-        );
+        raw.push(set(["A", "B", "C", "D", "S"]
+            .iter()
+            .map(|s| format!("{family}_{s}.SH"))
+            .filter(|n| r.contains(n))));
     }
     for name in r {
         if matches!(ext(name), "JT" | "SEE" | "ECM" | "GAS") {
             let icon = format!("${}.PIC", stem(name));
             if r.contains(&icon) {
-                raw.push([name.clone(), icon].into_iter().collect());
+                raw.push(set([name.clone(), icon]));
             }
         }
         if ext(name) == "PIC" {
@@ -174,11 +171,10 @@ fn groups(graph: &Graph) -> Vec<BTreeSet<String>> {
                 .filter_map(|x| s.strip_suffix(x))
                 .find(|b| !b.is_empty() && r.contains(&format!("{b}.PIC")))
                 .unwrap_or(s);
-            let mut g: BTreeSet<String> = SUFFIXES
+            let mut g = set(SUFFIXES
                 .iter()
                 .map(|x| format!("{base}{x}.PIC"))
-                .filter(|n| r.contains(n))
-                .collect();
+                .filter(|n| r.contains(n)));
             g.insert(format!("{base}.PIC"));
             g.retain(|n| r.contains(n));
             if g.len() > 1 {
@@ -227,8 +223,17 @@ fn mentions(bytes: &[u8], name: &str) -> bool {
             && bytes.get(i + n.len()).is_none_or(|b| !word(*b))
     })
 }
+/// Insert one by one: collecting a set sorts a buffer first, and the stable
+/// sort's stack buffer cannot be probed by the CRT-free x86_64 build.
+fn set(names: impl IntoIterator<Item = String>) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    for n in names {
+        out.insert(n);
+    }
+    out
+}
 fn catalog(archive: &Archive) -> BTreeSet<String> {
-    archive.entries.iter().map(|e| e.name.clone()).collect()
+    set(archive.entries.iter().map(|e| e.name.clone()))
 }
 fn read_entry(archive: &Archive, name: &str) -> Result<Vec<u8>> {
     let i = archive
@@ -287,7 +292,7 @@ pub fn ownership(archive: &Archive, aircraft: &str) -> Result<Ownership> {
             .iter()
             .find(|g| g.contains(name))
             .cloned()
-            .unwrap_or_else(|| [name.to_string()].into_iter().collect())
+            .unwrap_or_else(|| set([name.to_string()]))
     };
     let mut private = graph.resources.clone();
     let mut shared = BTreeMap::new();
@@ -341,7 +346,7 @@ impl Ownership {
             .iter()
             .find(|g| g.contains(name))
             .cloned()
-            .unwrap_or_else(|| [name.to_string()].into_iter().collect())
+            .unwrap_or_else(|| set([name.to_string()]))
     }
     /// Copied whatever the review says: the aircraft and a HUD found by its name.
     pub fn always_copied(&self, name: &str) -> bool {
@@ -522,7 +527,7 @@ pub fn rename(archive: &Archive, aircraft: &str, new_id: &str) -> Result<Rename>
     }
     let mut all: Vec<(String, String)> = map.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
     all.extend(companions.iter().cloned());
-    let leaving: BTreeSet<_> = all.iter().map(|(o, _)| o.clone()).collect();
+    let leaving = set(all.iter().map(|(o, _)| o.clone()));
     let mut arriving = BTreeSet::new();
     for (old, new) in &all {
         if !arriving.insert(new.clone()) {

@@ -347,8 +347,13 @@ pub fn graph(
         ..Policy::default()
     };
     let c = collect(catalog, &donor, &policy, &BTreeSet::new(), &mut read)?;
+    // Inserted one by one: collecting a set would use the stable sort.
+    let mut resources = BTreeSet::new();
+    for name in c.graph.keys() {
+        resources.insert(name.clone());
+    }
     Ok(Graph {
-        resources: c.graph.keys().cloned().collect(),
+        resources,
         donor,
         main: c.main,
         shadow: c.shadow,
