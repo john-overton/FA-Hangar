@@ -14,6 +14,23 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   Handling. `throttleAcc` and `throttleDacc` show their unit, %/s. The
   manual's [Negative-G engine cut-out](MANUAL.md#negative-g-engine-cut-out)
   explains how to set it and its limits.
+
+- **Colors without PALETTE.PAL in the LIB.** One resolver chooses the
+  display palette: Load palette, `PALETTE.PAL` in the LIB, the owning
+  object's `<ID>.PAL` (any number of aircraft per LIB; shapes and textures
+  find their aircraft through its references), the only PAL in the LIB,
+  `PALETTE.PAL` in another open LIB or in `FA_2.LIB`/`FA_1.LIB` beside it,
+  and the last game palette, remembered beside the executable. The Paint
+  palette panel and Details name the source; grayscale shows a warning
+  with **Load palette…**. Package checks report aircraft without a palette
+  and a custom `PALETTE.PAL` that would recolor the game.
+- **Copies bring their palette.** Copy to, Move to, drag and drop, paste,
+  Ctrl+D on an object and **Duplicate aircraft** add the object's
+  `<ID>.PAL` (or the palette Hangar showed it with, under that name) as a
+  review row with **Copy** or **Skip**. **Export object** carries it too
+  when the source LIB has no palette of its own. Never `PALETTE.PAL`, which
+  FA would apply to every aircraft. `--palette-check` shows the resolution
+  and a Copy to on a real LIB.
 - **Fix: FA crashed drawing Hangar's generated panel textures** (for example
   the external view of a painted F-5). Generated panel sheets were raw PICs
   with an embedded palette and no row table, which FA's texture mapper reads

@@ -18,6 +18,9 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
 - `validation.rs`: advisory archive/payload/reference report. It checks output
   offsets and untouched compressed bytes, validates supported changed payloads,
   and distinguishes unavailable scans from references outside the current LIB.
+- `palette.rs`: display palette rules (owners through the dependency index,
+  the LIB's own PAL, sibling ranking), the `<ID>.PAL` companion of copies and
+  the palette package checks. See [Display palettes](#display-palettes-and-palette-companions).
 - `authoring.rs`: legacy donor PT + imported main SH workflow. Rewrites five
   identity/reference strings, aliases the reviewed A/B/C/D/S family, copies
   observed pose textures, and reports missing textures/shared stock references.
@@ -1147,3 +1150,54 @@ negative envelope rows, not by `negGLimit`.
 
 Weak-structure damage (fault 30, byte 0x5224EC) is separate. At G >= 6 or
 G < -3, it rolls the RNG and can break up the aircraft (0x410D86).
+
+## Display palettes and palette companions
+
+`hangar-core/src/palette.rs` holds the portable rules; `ui_palette.rs` is the
+one resolver that sets `base_palette` (every view, paint, decal, repair and
+export path reads that field). Order for the selected entry:
+
+1. `palette_override` (Load palette; per open LIB, with its source label);
+2. `PALETTE.PAL` in the current LIB;
+3. the owner's `<ID>.PAL`: `palette::owners` walks the dependency index's
+   reverse links (stored references plus the damage-family, HUD and icon
+   conventions the export and identity graphs follow) breadth first from
+   the entry, PTs first at each distance, and takes the first owner whose
+   `<ID>.PAL` the LIB holds. A PT is its own owner. Bounded at 4,096 names;
+4. the only other valid PAL in the current LIB (`palette::local`);
+5. `PALETTE.PAL` in another open LIB, ranked by `palette::sibling_rank`
+   (FA_2.LIB, FA_1.LIB, other retail names, then by name);
+6. `PALETTE.PAL` in a LIB in the current LIB's folder: the directory-only
+   index and one range read per LIB (`ui_clone::index`, `read_range`),
+   same ranking, at most 32 LIBs, skipping open ones;
+7. the remembered game palette, `tore-hangar-palette.txt` beside the
+   executable (source label, then 1,536 hex digits) through the same
+   sidecar helpers as the recent-file list; a failed write keeps it for the
+   session. Only a retail `PALETTE.PAL` (found, or loaded from a retail LIB
+   or a `PALETTE.PAL` file) is written. The smoke test sets `NO_MEMORY`;
+8. a grayscale ramp (`palette_loaded` false).
+
+Caching: `refresh_data` calls the resolver after the dependency index
+update. The key is the active LIB id and path, the open LIBs' ids and paths,
+the owner's `<ID>.PAL` name, and every `.PAL` entry in every open document
+compared by storage identity; an unchanged key reuses the stored 768 bytes.
+The folder scan is cached per folder until the path or the open LIB set
+changes. A loaded palette bypasses the cache and is applied exactly.
+
+Companions (`palette::companion`): an object (PT, JT, OT, NT) copied to
+another LIB, duplicated, or exported gets `<new ID>.PAL`, from the source's
+own `<ID>.PAL` (stored bytes kept) or else the resolved palette's bytes
+(`palette::encode` turns an expanded palette back into exact 6-bit bytes).
+Skipped when the target has `PALETTE.PAL` or identical bytes under the name;
+different bytes are a normal collision. `Plan::add_palette` adds it as a
+reviewed item (TakeSource is Copy, KeepTarget is Skip) and marks it so
+`move_between` never removes it from the source. `Duplicate::add_palette`
+only fills the gap when the LIB has neither the donor's `<ID>.PAL` (already
+a graph resource with Copy/Share) nor `PALETTE.PAL`. Export inserts
+`PALETTE.PAL` into the catalog and serves the resolved bytes for it when the
+current LIB has neither palette, so `clone_aircraft` maps it to `<ID>.PAL`
+and conflicting sibling copies never stop an export. Nothing writes
+`PALETTE.PAL` into a custom LIB: FA keeps the newest of duplicate names
+across its LIBs, so it would recolor every aircraft. `palette::check` adds
+the package checks (aircraft with no local palette; a custom `PALETTE.PAL`
+that differs from the retail one).

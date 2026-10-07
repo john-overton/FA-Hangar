@@ -911,3 +911,54 @@ finds the **Neg-G cut-out** number field in the Model inspector and the
 `1/256 s` unit drawn beside it. Formatting, strict Clippy, 166 core tests,
 the smoke test and the x86_64 Windows release build with its PE audit (60
 reviewed imports) pass.
+
+## Unreleased display palettes and palette companions
+
+2026-10-07. The user's `TOPGUNFX.LIB` (F14.PT and F5EV.PT, no
+`PALETTE.PAL`) showed grayscale until `PALETTE.PAL` was added by hand.
+Checks ran on copies in `/tmp/claude-1000/palette/` beside copies of
+`FA_2.LIB` and `FA_1.LIB`; the file in Downloads was not written (SHA-256
+unchanged) and nothing from the LIBs is committed.
+
+- **Resolution.** `--palette-check TOPGUNFX.LIB NEW.LIB F5EV.PT F14.PT F14.SH
+  _F14.PIC _F5EV.PIC AIM9M.JT`: every entry, both aircraft included,
+  resolves "PALETTE.PAL from FA_2.LIB" (folder step; FA_2.LIB is the only
+  retail LIB with `PALETTE.PAL`). The 0.9.0 build (fa9e2e3) shows the same
+  Paint view in grayscale ("no palette, grayscale"). In a folder without
+  retail LIBs the palette reads "PALETTE.PAL from FA_2.LIB, remembered";
+  with the remembered file removed, the Paint panel shows the grayscale
+  warning and Load palette.
+- **Copy to.** The same check copies F5EV.PT with its linked files to a new
+  LIB: 51 review rows, the `F5EV.PAL` row from "PALETTE.PAL from FA_2.LIB";
+  the written LIB has `F5EV.PAL` (768 bytes) and no `PALETTE.PAL`.
+- **Export, then copy.** `--clone-check TOPGUNFX.LIB F5EV.PT F5EX …` exports
+  through the wizard; `F5EX.LIB` holds `F5EX.PAL`, byte-identical to FA_2's
+  `PALETTE.PAL`. Opened alone, `F5EX.SH` and `F5EX.PT` resolve `F5EX.PAL`
+  (owner step), and a Copy to of `F5EX.PT` brings "F5EX.PAL in the source".
+
+Renders (not committed): `/tmp/claude-1000/palette/renders/`
+`before_F5EV_PIC_paint.png` and `after_F5EV_PIC_paint.png` (Paint, 1280 ×
+800), `before_F14_paint_model.png` and `after_F14_paint_model.png` (model
+paint), `after_alone_grayscale.png` and `after_alone_remembered.png`
+(800 × 600).
+
+Core tests cover owners through references (nearest first, PT first),
+the local order (PALETTE.PAL, owner, only PAL, invalid PALs skipped),
+sibling ranking, exact 6-bit encoding, companion rules (source `<ID>.PAL`,
+resolved palette, skip on `PALETTE.PAL` or identical bytes, collision on
+different bytes, never for non-objects), the transfer row (Copy, Skip, one
+undo, a move leaves it in the source), rename `F14.PAL` → `F14Z.PAL`,
+duplicate with and without a palette, and the package checks. The smoke
+test, through rendered controls, resolves each PT's `<ID>.PAL` in a two-PT
+LIB, checks the cache, Details and the Paint header, the only-PAL, open-LIB,
+folder and remembered steps, the grayscale notice and **Load palette…**,
+the package checks, Copy to with and without the target's `PALETTE.PAL`,
+the resolved palette as `<ID>.PAL`, Duplicate aircraft with Copy/Skip, and
+the export row; hit geometry of the notice, transfer, duplicate and export
+reviews at 800x600 and 1280x800.
+
+Formatting, strict Clippy (also for both Windows targets), 174 core tests
+and the smoke test pass. `App` is 2,736 bytes. No Win32 API was added; the
+PE audit reports 1,665,024 bytes (32-bit) and 1,890,304 bytes (64-bit) with
+the same 60 reviewed imports. Not yet checked in the original game; steps
+are in WINDOWS-TEST.md.

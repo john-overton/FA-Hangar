@@ -490,6 +490,27 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    throttle returns to the lever setting with no restart. Set it back to 0
    and repeat: the engine keeps running however long the push lasts.
 
+## Display palettes and palette companions (unreleased)
+
+1. Put a copy of a two-aircraft mod LIB without `PALETTE.PAL` (for example
+   `TOPGUNFX.LIB` with F14.PT and F5EV.PT) in a folder with copies of
+   `FA_2.LIB` and `FA_1.LIB`. Open it: both aircraft's textures show in
+   color, and the Paint palette panel and Details read **PALETTE.PAL from
+   FA_2.LIB**.
+2. Close Hangar, move the mod LIB to a folder without retail LIBs and open
+   it: the palette reads **PALETTE.PAL from FA_2.LIB, remembered**. Delete
+   `tore-hangar-palette.txt` beside the executable and open it again: the
+   panel shows grayscale with **No game palette found; colors are
+   approximate.**; **Load palette…** with `FA_2.LIB` restores color.
+3. Copy F5EV.PT to a new LIB with **Copy to**: the review has an `F5EV.PAL`
+   row with **Copy** selected; apply and save. The new LIB has `F5EV.PAL`
+   and no `PALETTE.PAL`, and shows in color on its own.
+4. Load the new LIB in FA next to the retail LIBs: every aircraft keeps the
+   game's colors (FA does not read `F5EV.PAL`).
+5. Repeat 3 into a LIB that has `PALETTE.PAL`: no palette row; the notes
+   say why. Duplicate an aircraft in a LIB without a palette: the review has
+   a `<ID>.PAL` row; **Skip** leaves it out.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

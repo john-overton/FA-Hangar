@@ -31,6 +31,7 @@ the game. No game data ships.
 - [Flight envelope table](#flight-envelope-table)
   - [Negative-G engine cut-out](#negative-g-engine-cut-out)
 - [Paint a livery](#paint-a-livery)
+  - [Display palette](#display-palette)
   - [Select panels](#select-panels)
   - [Per-panel textures](#per-panel-textures)
   - [Remap panels from the view](#remap-panels-from-the-view)
@@ -45,6 +46,7 @@ the game. No game data ships.
   - [Why does Hangar refuse this?](#why-does-hangar-refuse-this)
   - [Textures Hangar creates](#textures-hangar-creates)
   - [Palette](#palette)
+  - [Palette companions](#palette-companions)
   - [Compression and LIB size](#compression-and-lib-size)
   - [Names](#names)
   - [FA loader limits](#fa-loader-limits)
@@ -376,6 +378,10 @@ they face with **Bake current look** through the panel selection and the
 Remap dialog, checks the new PIC's layout, CODE coverage, bindings and every
 other face, renders the side view before and after and the new PIC as PNG,
 runs **Use shape texture** and its undo, and writes `REMAP.LIB` create-new.
+`--palette-check TOPGUN.LIB NEW.LIB F5EV.PT F14.PT F14.SH` prints the
+palette each entry resolves and where it comes from, then copies `F5EV.PT`
+with its linked files into a new LIB through **Copy to** and lists the PALs
+that arrived; the new LIB is written create-new.
 The `replace`, `replace-model` and `replace-dialog` snapshot workspaces show
 the tool and the dialog. `--snapshot
 OUT.svg NEW.LIB F18.SH paint-side 1280x800` renders a textured side view;
@@ -418,9 +424,14 @@ choice. New entries are written in name order, and the donor stays open.
 
 The clone includes explicit BRF resource references, catalog-resolved filename
 literals in module data/code sections, an aircraft's shadow-derived A/B/C/D/S
-family, known cockpit picture families, available store-icon companions and an
-editor palette copy. It inspects whole module sections, so it is not limited to
-the currently displayed shape pose. It preserves imported game symbols,
+family, known cockpit picture families, available store-icon companions and the
+display palette as `<ID>.PAL`: the object's own `<ID>.PAL`, else `PALETTE.PAL`
+from this LIB, else the palette Hangar shows it with (another open LIB or a
+LIB in the folder, see [Display palette](#display-palette)). The review's
+row reads **Palette: PALETTE.PAL from FA_2.LIB** → `A10V1.PAL`; with no
+palette at all, the first note says the new LIB will show in grayscale.
+It inspects whole module sections, so it is not limited to the currently
+displayed shape pose. It preserves imported game symbols,
 compiled addresses and section sizes; short aliases fit small filename fields.
 Geometry, numeric characteristics and leaf image/audio bytes remain unchanged.
 
@@ -533,7 +544,8 @@ and shadow shapes with the A–D damage family, skins and cockpit art, its
 HUD, sensors or stores no other object uses (with their `$` icons) and the
 stored originals (`.ORG`) of renamed textures. The old ID in each name is
 replaced, so `F14_C.SH` becomes `F14Z_C.SH` and `_F14_A.PIC` becomes
-`_F14Z_A.PIC`. Weapons, sounds, the game palette and anything another object
+`_F14Z_A.PIC`. The aircraft's own palette follows: `F14.PAL` becomes
+`F14Z.PAL`. Weapons, sounds, the game palette and anything another object
 in the LIB uses keep their names.
 
 Every recognized reference in the LIB is rewritten: BRF strings (including
@@ -571,6 +583,12 @@ Each row is a resource the new aircraft uses, with **Copy** or **Share**:
   what only it uses, such as its skins.
 - A damage family, a texture with its suffix family (`_F18`, `_F18_A`, …) and
   a store with its icon switch together.
+
+The aircraft's own `<ID>.PAL` is a row like any other. When the LIB has
+neither it nor `PALETTE.PAL`, a **Palette** row offers the palette Hangar
+shows the aircraft with as `<new ID>.PAL`, with **Copy** (the default) or
+**Skip**; see [Palette companions](#palette-companions) for why it is never
+`PALETTE.PAL`.
 
 Names are checked against the whole LIB, and copied textures take their
 stored originals along. **Duplicate aircraft** applies it as one undo step
@@ -615,6 +633,16 @@ The number of open LIBs is limited by available memory rather than an editor
 count cap. Each archive retains its format/size checks. Undo and copy snapshots
 share immutable payload buffers but also consume memory. No automatic writes
 occur when switching libraries or preparing copies.
+
+An object (PT, JT, OT or NT) copied or moved to another LIB brings its
+palette, so Hangar shows its colors there: a review row **`F14.PAL` · Palette
+for Hangar's colors, from …** with **Copy** (the default) or **Skip**. It is
+the source's own `F14.PAL`, or else the palette Hangar showed the object
+with, saved as `F14.PAL`. There is no row when the target already has
+`PALETTE.PAL` or an identical `F14.PAL`; the notes say so. A different
+`F14.PAL` in the target is a collision to resolve like any other. A move
+leaves the palette in the source, where the rest still uses it. **Ctrl+D**
+on an object offers the same row for the new name.
 
 Each LIB has a collapse arrow in the scrollable outliner. Expanded inactive
 LIBs show their categories and resources too. Drag an entry onto another LIB
@@ -768,14 +796,42 @@ is one decoded polygon, not a semantic group of aircraft parts. Surface recolor
 acts on matching untextured face color indices in the decoded pose; it does not
 rewrite Gouraud vertex colors or textured materials.
 
-A full embedded PIC palette or a base palette is needed for painting. Hangar
-loads `PALETTE.PAL` from the current LIB, or you can load a 768-byte 6-bit RGB
-PAL (or another LIB containing PALETTE.PAL) for preview. Missing colors are
-shown in grayscale and painting is blocked until a complete palette is
-available. Span holes are preserved; this brush does not create new opaque
+A full embedded PIC palette or a resolved base palette (see [Display
+palette](#display-palette)) is needed for painting. In grayscale, painting
+is blocked until a complete palette is available. Span holes are preserved; this brush does not create new opaque
 pixels outside existing spans. PNG decal import and bounded per-face UV
 transforms are also available. Arbitrary audio-format conversion and
 topology-aware UV unwrapping remain outside this version.
+
+### Display palette
+
+Retail textures hold palette indices, so the colors on screen depend on the
+PAL Hangar draws with. For the selected entry it uses the first of:
+
+1. **Load palette…** (a 768-byte 6-bit RGB PAL, or a LIB containing
+   `PALETTE.PAL`), for this LIB until it is closed;
+2. `PALETTE.PAL` in this LIB;
+3. `<ID>.PAL` of the object that owns the entry: a PT's own (`F14.PAL` for
+   `F14.PT`); for a shape or texture, the nearest aircraft or object that
+   reaches it through its stored references and the damage-family, HUD and
+   icon conventions. This works with any number of aircraft in one LIB;
+4. the only other valid PAL in this LIB;
+5. `PALETTE.PAL` in another open LIB (retail LIBs first);
+6. `PALETTE.PAL` in a LIB in the same folder, `FA_2.LIB` and `FA_1.LIB`
+   first, read from their directories without loading them;
+7. the last game palette Hangar found, remembered in
+   `tore-hangar-palette.txt` beside the executable (for the session only
+   when that folder is read-only);
+8. otherwise a grayscale ramp.
+
+The **Palette** panel in Paint names the source in its first row, for
+example **Source F14X.PAL** or **Source PALETTE.PAL from FA_2.LIB**; a
+remembered palette reads **…, remembered**. **Details** in the dock shows the
+same line. In grayscale the panel shows **No game palette found; colors are
+approximate.** above **Load palette…**, and the Model overlay repeats the
+warning. A `PALETTE.PAL` found in or loaded from a retail LIB, or a loaded
+file named `PALETTE.PAL`, becomes the remembered palette. The answer is kept until the selection's owner, the
+open LIBs or their PAL entries change, so selecting entries stays fast.
 
 ### Select panels
 
@@ -1408,9 +1464,21 @@ texture…** do not create pixels: they copy or point at existing PICs.
 | Limit | Why | Instead |
 | --- | --- | --- |
 | PIC pixels are indices into the game palette; Hangar writes no embedded palette in textures | Retail SH textures carry none (palette size 0 in all 1,070), so the layout above has none. Whether FA would use an embedded palette on an SH texture is unverified. | Pick colors from the game palette. |
-| Painting a generated sheet, or any PIC without a full palette of its own, needs the base `PALETTE.PAL` | The PIC holds only indices; without the base palette Hangar cannot show or match colors, so it shows grayscale and blocks painting. | Keep `PALETTE.PAL` in the LIB, or load a 768-byte PAL or a LIB containing it (FA_2.LIB has one). |
+| Painting a generated sheet, or any PIC without a full palette of its own, needs a base palette | The PIC holds only indices; without a base palette Hangar cannot show or match colors, so it shows grayscale and blocks painting. Hangar finds one as in [Display palette](#display-palette). | Keep FA_2.LIB in the same folder or open it, or use **Load palette…** with a 768-byte PAL or a LIB containing `PALETTE.PAL`. |
 | A cloned aircraft's `<ID>.PAL` is an editor preview palette | FA's palette lookup is global; Hangar does not override it. | Judge a livery against the game palette. |
 | Repair maps colors to the nearest base color only where the old embedded palette differs | Indices are kept when the embedded palette equals the base PAL (as in TopGun.LIB); otherwise the status says colors were mapped. Without a base PAL, indices are kept and reported as unverified. | Load the base PAL before repairing. |
+
+### Palette companions
+
+Which palette Hangar shows is in [Display palette](#display-palette).
+
+| Limit | Why | Instead |
+| --- | --- | --- |
+| Copies, moves, duplicates and exports carry an object's palette as `<ID>.PAL`, never as `PALETTE.PAL`; a target that has `PALETTE.PAL` gets none | FA loads every LIB in its folder and keeps the newest file's copy of a duplicate name, so a `PALETTE.PAL` in a mod LIB would recolor every aircraft in the game. FA does not read `<ID>.PAL`; only Hangar uses it, to show the object's colors. | Nothing to choose; **Skip** leaves it out. |
+| Package checks warn about a custom `PALETTE.PAL` that differs from the game's | Same reason: it would replace the game palette for everything. | Remove it unless recoloring the whole game is intended. |
+| A shape's or texture's owner comes from stored references and the reviewed naming conventions in the current LIB; a shared texture takes the nearest owner's palette, aircraft first | Names built at run time leave nothing in the bytes, and other LIBs' objects are not scanned. Two owners can have different palettes; one is shown. | Select the owner, or use **Load palette…**. |
+| The folder search reads the directories of up to 32 LIBs beside the current one, once per folder while the same LIBs are open | Selecting entries must stay fast; FA_2.LIB is read first. 32 is a bound, not a game limit. A LIB added to the folder later is found after a LIB is opened or closed. | Open the LIB that has the palette. |
+| Only `PALETTE.PAL` from a retail LIB, or a loaded `PALETTE.PAL` file, is remembered between sessions | A mod's palette must not become the default for every LIB opened later. | **Load palette…** |
 
 ### Compression and LIB size
 
@@ -1547,6 +1615,11 @@ Self-name literals are excluded from navigation. Counts cover observed users
 in the current LIB, not every possible runtime lookup. External catalog matches
 identify possible providers, not game load order or verified external payloads.
 The aircraft-cloning wizard retains its broader source and aliasing rules.
+
+Package checks also report, as information, aircraft whose LIB has no
+palette Hangar can use on its own ("Colors in Hangar need a palette; add one
+with Load palette or copy from FA_2.LIB"), and warn when a custom LIB's
+`PALETTE.PAL` differs from the game's ("This would recolor the whole game").
 
 Package checks are advisory. Supported payload checks apply to changed entries;
 unknown encodings and incomplete scans remain unverified. Opening a saved LIB
