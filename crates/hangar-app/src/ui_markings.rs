@@ -518,6 +518,11 @@ impl App {
                     .incoming(n)
                     .all(|user| edited.iter().any(|e| e.eq_ignore_ascii_case(user)))
         });
+        // A painted sheet takes its stored original along.
+        let removals: Vec<String> = removals
+            .iter()
+            .flat_map(|n| hangar_core::originals::removals(&self.doc.archive, n))
+            .collect();
         let selected = self.name().to_string();
         let context = self.context_name();
         self.doc.transaction(entries, &removals)?;
@@ -954,5 +959,202 @@ impl App {
         a.act(Action::Undo);
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
+    }
+}
+
+#[cfg(not(windows))]
+impl App {
+    /// `--markings-check LIB ENTRY.SH NEW_OUTPUT_DIR`: hide every slot of
+    /// the shape through the panel, render from above and below, save and
+    /// reopen, show every slot (byte-identical to the original entry), make
+    /// the last slot paintable, paint a roundel on its sheet with the brush,
+    /// render, save and reopen. Writes PNGs and LIBs into the new directory.
+    pub fn check_markings(&mut self, entry: &str, out: &str) -> Result<String> {
+        use hangar_core::archive::Archive;
+        let mut report = String::new();
+        let at = self.doc.archive.find(entry).ok_or("SH not found")?;
+        let original = self.doc.archive.entries[at].read()?;
+        let pick = |a: &mut App| -> Result<()> {
+            let at = a.doc.archive.find(entry).ok_or("SH not found")?;
+            a.select_entry(at);
+            a.mode = Mode::Model;
+            a.textured = true;
+            a.width = 1280;
+            a.height = 800;
+            a.frame();
+            a.scroll_to_markings();
+            Ok(())
+        };
+        pick(self)?;
+        let rows = self.marking_rows();
+        if rows.is_empty() {
+            return Err(format!("{entry} selects no runtime slot"));
+        }
+        for r in &rows {
+            report += &format!(
+                "{entry} {}: E0 at CODE+{:X}, faces {:X?}\n",
+                slot_title(r.slot),
+                r.records[0],
+                r.faces
+            );
+        }
+        report += &format!(
+            "  shown, from above: {}\n",
+            self.markings_png(out, "shown-top.png", 90)?
+        );
+        report += &format!(
+            "  shown, from below: {}\n",
+            self.markings_png(out, "shown-bottom.png", -90)?
+        );
+        for r in &rows {
+            self.scroll_to_markings();
+            self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_TOGGLE) if s == r.slot));
+            report += &format!("  {}\n", self.status);
+        }
+        report += &format!(
+            "  hidden, from above: {}\n",
+            self.markings_png(out, "hidden-top.png", 90)?
+        );
+        report += &format!(
+            "  hidden, from below: {}\n",
+            self.markings_png(out, "hidden-bottom.png", -90)?
+        );
+        // Save and reopen: the hide blocks are recognised from the bytes.
+        let saved = format!("{out}/MKHIDE.LIB");
+        crate::platform::write_new(&saved, &self.doc.archive.bytes()?)?;
+        self.open(&saved)?;
+        pick(self)?;
+        let hidden: usize = self.marking_rows().iter().map(|r| r.hidden.len()).sum();
+        report += &format!("  saved {saved} and reopened: {hidden} hidden faces recognised\n");
+        for r in &rows {
+            self.scroll_to_markings();
+            self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_TOGGLE) if s == r.slot));
+            report += &format!("  {}\n", self.status);
+        }
+        let at = self.doc.archive.find(entry).ok_or("SH lost")?;
+        let shown = self.doc.archive.entries[at].read()?;
+        if shown != original {
+            return Err(format!(
+                "{entry}: Show after reopening is not byte-identical"
+            ));
+        }
+        report +=
+            &format!("  shown again after reopening: byte-identical to the original {entry}\n");
+        // Make the last slot paintable and paint a roundel with the brush.
+        let slot = rows.last().map(|r| r.slot).unwrap_or(4);
+        self.scroll_to_markings();
+        self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_PAINT) if s == slot));
+        report += &format!("  {}\n", self.status);
+        let row = self
+            .marking_rows()
+            .into_iter()
+            .find(|r| r.slot == slot)
+            .ok_or("Slot lost")?;
+        let name = row
+            .painted
+            .first()
+            .map(|p| p.1.clone())
+            .ok_or("Not paintable")?;
+        let pic = self.doc.archive.find(&name).ok_or("No sheet")?;
+        let size = Pic::parse(&self.doc.archive.entries[pic].read()?)?;
+        let near = |a: &App, rgb: [i32; 3]| -> u8 {
+            (0..256)
+                .min_by_key(|i| {
+                    let p = a.base_palette[*i];
+                    (0..3).map(|k| (p[k] as i32 - rgb[k]).pow(2)).sum::<i32>()
+                })
+                .unwrap_or(0) as u8
+        };
+        let (blue, white, red) = (
+            near(self, [30, 50, 140]),
+            near(self, [240, 240, 240]),
+            near(self, [200, 30, 30]),
+        );
+        let u = row
+            .painted
+            .first()
+            .and_then(|p| {
+                self.model
+                    .as_ref()?
+                    .faces
+                    .iter()
+                    .find(|f| f.offset == p.0)
+                    .map(|f| f.uv.clone())
+            })
+            .unwrap_or_default();
+        let (w, h) = (
+            u.iter().map(|p| p[0]).max().unwrap_or(1) + 1,
+            u.iter().map(|p| p[1]).max().unwrap_or(1) + 1,
+        );
+        let (cx, cy, radius) = (w / 2, size.height as i32 - 1 - h / 2, w.min(h) / 2);
+        self.brush_radius = 0;
+        for (color, r) in [(blue, radius), (white, radius * 2 / 3), (red, radius / 3)] {
+            self.brush = color;
+            for y in cy - r..=cy + r {
+                for x in cx - r..=cx + r {
+                    if (x - cx).pow(2) + (y - cy).pow(2) <= r * r && x >= 0 && y >= 0 {
+                        self.paint_at(pic, x as usize, y as usize);
+                    }
+                }
+            }
+        }
+        self.finish_stroke();
+        report += &format!(
+            "  painted {name} ({} x {}): roundel of indices {blue}, {white}, {red}, radius {radius} px. {}\n",
+            size.width, size.height, self.status
+        );
+        report += &format!(
+            "  painted, from below: {}\n",
+            self.markings_png(out, "painted-bottom.png", -90)?
+        );
+        report += &format!(
+            "  painted, from above: {}\n",
+            self.markings_png(out, "painted-top.png", 90)?
+        );
+        let saved = format!("{out}/MKPAINT.LIB");
+        crate::platform::write_new(&saved, &self.doc.archive.bytes()?)?;
+        let reopened = Archive::parse(crate::platform::read(&saved)?)?;
+        let sheet = reopened.find(&name).ok_or("Sheet not saved")?;
+        let bytes = reopened.entries[sheet].read()?;
+        let shape = reopened.entries[reopened.find(entry).ok_or("SH not saved")?].read()?;
+        let painted = mk::markings(&shape)?
+            .into_iter()
+            .find(|r| r.slot == slot)
+            .map_or(0, |r| r.painted.len());
+        report += &format!(
+            "  saved {saved} and reopened: {name} retail layout {}, {painted} face drawn from it\n",
+            picture::is_retail_texture(&bytes)
+        );
+        // Restore runtime marking: the entry and the entry list as before.
+        self.scroll_to_markings();
+        self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_RESTORE) if s == slot));
+        report += &format!("  {}\n", self.status);
+        let at = self.doc.archive.find(entry).ok_or("SH lost")?;
+        let back = self.doc.archive.entries[at].read()?;
+        let org = hangar_core::originals::companion(&name).unwrap_or_default();
+        if back != original
+            || self.doc.archive.find(&name).is_some()
+            || self.doc.archive.find(&org).is_some()
+        {
+            return Err(format!(
+                "{entry}: Restore runtime marking did not return the original bytes"
+            ));
+        }
+        report += &format!(
+            "  restored: {entry} byte-identical to the original, {name} and {org} removed\n"
+        );
+        Ok(report)
+    }
+    /// The textured viewport from above (pitch 90) or below (-90) as a
+    /// 640 x 400 PNG in `out`.
+    fn markings_png(&mut self, out: &str, file: &str, pitch: i32) -> Result<String> {
+        let (yaw, was) = (self.yaw, self.pitch);
+        self.yaw = 0;
+        self.pitch = pitch;
+        let rgba = self.render_rgba(640, 400);
+        (self.yaw, self.pitch) = (yaw, was);
+        let path = format!("{out}/{file}");
+        crate::platform::write_new(&path, &picture::rgba_png(640, 400, &rgba))?;
+        Ok(path)
     }
 }

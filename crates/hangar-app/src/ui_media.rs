@@ -72,7 +72,7 @@ impl App {
             ((y - r[1]) * p.height as i32 / r[3]) as usize,
         ))
     }
-    fn paint_at(&mut self, entry: usize, x: usize, y: usize) {
+    pub(super) fn paint_at(&mut self, entry: usize, x: usize, y: usize) {
         let replace = !self.eraser && self.replace.on;
         if replace && self.replace.from.is_none() {
             self.status = "Alt+click the color to replace first, or use Pick".into();
