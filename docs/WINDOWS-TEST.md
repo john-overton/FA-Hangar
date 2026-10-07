@@ -1,8 +1,9 @@
 # First Windows test
 
-Use `tore-hangar-win64.zip` on a modern 64-bit Windows box. Use
-`tore-hangar-win98-me-pentium4.zip` on Windows 98/ME with an SSE2-capable CPU.
-Extract to a writable folder with an ASCII path and launch `tore-hangar.exe`.
+Use `tore-hangar-<version>-win64.zip` on a modern 64-bit Windows box. Use
+`tore-hangar-<version>-win98-me-pentium4.zip` on Windows 98/ME with an
+SSE2-capable CPU. Extract to a writable folder with an ASCII path and launch
+`tore-hangar-<version>.exe`.
 The EXE is portable; the other files are documentation and licensing.
 
 ## Quick application check

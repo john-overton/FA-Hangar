@@ -7,6 +7,18 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **CI runs on demand or when a release is published, and names builds by
+  version.** The Windows workflow no longer runs on every push and pull
+  request. It reads the version from `Cargo.toml`, requires a release tag of
+  `v<version>`, and produces `tore-hangar-<version>-win98-me-pentium4` and
+  `tore-hangar-<version>-win64` packages holding
+  `tore-hangar-<version>.exe` and a `SHA256.txt` in `sha256sum` format. On a
+  release it also attaches both ZIPs to the release. See
+  [RELEASING.md](RELEASING.md).
+- **Help > About T.O.R.E Hangar.** A window with the app icon, the version,
+  the build target, the licence and the project address; the version also
+  shows at the right of the status bar.
+
 - **Make paintable fills the sheet with the colour the marking sits on.**
   The new sheet was filled with the marking face's stored colour, which on
   the F-5 is index 0, so a painted roundel sat in a black square. A new

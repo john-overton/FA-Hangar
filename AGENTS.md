@@ -47,9 +47,11 @@ cargo run --locked -- --help             # CLI commands (list/inspect/validate/.
 Windows targets cross-build from Linux with the bundled `rust-lld`; see
 `.cargo/config.toml` and the README "Windows builds" section. After any change
 that could add a Win32 import, build both targets and run
-`python3 tools/check_pe.py [--legacy] <exe>`. CI (`.github/workflows/windows.yml`)
-runs fmt, core tests, clippy, release builds, the PE audit and the smoke test
+`python3 tools/check_pe.py [--legacy] <exe>`. CI (`.github/workflows/windows.yml`,
+on demand or when a release is published) runs fmt, core tests, clippy, release builds, the PE audit and the smoke test
 on both `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc`.
+
+To cut a release (version bump, tag, CI-attached zips) see `docs/RELEASING.md`.
 
 All of fmt, clippy (`-D warnings`), tests and the smoke test must pass before
 committing.

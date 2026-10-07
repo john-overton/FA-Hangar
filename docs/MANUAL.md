@@ -112,7 +112,12 @@ sizes and weights.
 - **Status bar.** Key hints for the current workspace and mode (or the last
   message), then `ENTRY · LIB` and the save state: the dirty dot with the
   number of unsaved edits, **Saved**, **Validated** after a passing package
-  check, or the validation error count.
+  check, or the validation error count. The version, such as `v0.9.0`, sits at
+  the far right.
+- **Help.** **Controls** (F1) lists the main keys in the status bar.
+  **About T.O.R.E Hangar** opens a window with the app icon, the version, the
+  build (Windows 98/ME i686, Windows x64 or Linux), the licence and the
+  project address. Close, Esc or Enter dismisses it.
 - **Viewport header.** The mode select switches between **Object Mode**,
   **Edit Mesh**, **Hardpoints**, **Parts** and **Texture Paint**. **View**
   holds Frame all, Front, Side, Top and Toggle projection. At the right, the

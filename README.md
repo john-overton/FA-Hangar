@@ -3,7 +3,7 @@
 <h1 align="center">T.O.R.E Hangar</h1>
 
 <p align="center">
-  <a href="https://github.com/john-overton/T.O.R.E-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/T.O.R.E-Hangar/windows.yml?branch=main&label=windows%20build" alt="Windows build status"></a>
+  <a href="https://github.com/john-overton/T.O.R.E-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/T.O.R.E-Hangar/windows.yml?event=release&label=release%20build" alt="Release build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only"></a>
   <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.0-orange" alt="Version 0.9.0"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.91.1-b7410e?logo=rust" alt="Rust 1.91.1"></a>
@@ -62,8 +62,16 @@ The full feature list and how-to guides are in the [manual](docs/MANUAL.md).
 
 ### Download
 
-[GitHub Actions](.github/workflows/windows.yml) runs only on Windows and emits
-separate `tore-hangar-win98-me-pentium4` and `tore-hangar-win64` ZIP artifacts.
+Each [GitHub release](https://github.com/john-overton/T.O.R.E-Hangar/releases)
+carries two ZIPs with the version in their names:
+`tore-hangar-<version>-win98-me-pentium4.zip` and
+`tore-hangar-<version>-win64.zip`, each holding `tore-hangar-<version>.exe`,
+`SHA256.txt` and the documentation. The same packages are workflow artifacts of
+[GitHub Actions](.github/workflows/windows.yml), which runs only on Windows and
+only on demand (Actions, Run workflow) or when a release is published, so the
+build badge shows the last release build and reads "no status" until the first
+one. **Help > About** in the app shows the version. To cut a release, see
+[docs/RELEASING.md](docs/RELEASING.md).
 The legacy executable's smoke test runs on the modern Windows runner, not on
 Windows 98. Source and notices are included in the repository; packages carry
 the license and notices alongside the executable.
@@ -124,6 +132,7 @@ The audit also checks the embedded app icon and version resources;
 | [Architecture](docs/ARCHITECTURE.md) | Layers, format evidence, writing policy and remaining writer work |
 | [Validation](docs/VALIDATION.md) | What each test build was verified against |
 | [Compatibility](docs/COMPATIBILITY.md) | Platform limits and legacy acceptance still required |
+| [Releasing](docs/RELEASING.md) | Version bump, tag and the release workflow |
 | [Windows test](docs/WINDOWS-TEST.md) | Manual Windows and game acceptance checklist |
 | [Design system](tore-hangar-design/README.md) | Gunmetal tokens, components and [brand voice](tore-hangar-design/BRAND.md) |
 
