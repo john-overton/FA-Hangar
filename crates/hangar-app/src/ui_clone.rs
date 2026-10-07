@@ -18,7 +18,7 @@ fn normalized(path: &str) -> String {
         p
     }
 }
-pub(super) fn index(path: &str) -> Result<Option<Vec<IndexedEntry>>> {
+pub(crate) fn index(path: &str) -> Result<Option<Vec<IndexedEntry>>> {
     let size = crate::platform::file_size(path)?;
     if size < 7 {
         return Ok(None);

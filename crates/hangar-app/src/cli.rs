@@ -10,11 +10,125 @@ fn argument(args: &[String], n: usize) -> Result<&str> {
         .map(String::as_str)
         .ok_or_else(|| "Missing argument; run --help".into())
 }
+/// Source LIBs are read like the GUI wizard reads them: directory only, then
+/// bounded range reads of the payloads the export needs, so no LIB is loaded whole.
+fn export_object(args: &[String]) -> Result<()> {
+    use hangar_core::{
+        archive::{decode_payload, IndexedEntry},
+        clone_aircraft::{build_with, Policy, Resolution},
+        dependencies::Evidence,
+    };
+    let mut policy = Policy::default();
+    let mut positional = Vec::new();
+    let mut rest = args.iter().skip(1);
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--keep-unresolved" => policy.keep_unresolved = true,
+            "--substitute" => {
+                let value = rest.next().ok_or("--substitute needs OLD.PIC=NEW.PIC")?;
+                let (old, new) = value
+                    .split_once('=')
+                    .ok_or("--substitute needs OLD.PIC=NEW.PIC")?;
+                let key = (String::new(), old.trim().to_ascii_uppercase());
+                if policy
+                    .substitutes
+                    .insert(key, new.trim().to_ascii_uppercase())
+                    .is_some()
+                {
+                    return Err(format!("{old} has more than one --substitute"));
+                }
+            }
+            _ => positional.push(arg.as_str()),
+        }
+    }
+    if positional.len() < 5 {
+        return Err("Missing argument; run --help".into());
+    }
+    let mut libraries: Vec<(&str, Vec<IndexedEntry>)> = Vec::new();
+    let mut catalog = std::collections::BTreeSet::new();
+    let mut providers = std::collections::BTreeMap::new();
+    for path in std::iter::once(positional[0]).chain(positional[5..].iter().copied()) {
+        if libraries.len() >= 64 {
+            return Err("More than 64 source LIBs".into());
+        }
+        let entries = crate::ui::library_index(path)?
+            .ok_or_else(|| format!("{path}: not an EALIB archive"))?;
+        for (i, e) in entries.iter().enumerate() {
+            catalog.insert(e.name.clone());
+            // Earlier LIBs win, as in the input-first source order.
+            providers
+                .entry(e.name.clone())
+                .or_insert((libraries.len(), i));
+        }
+        libraries.push((path, entries));
+    }
+    let package = build_with(
+        &catalog,
+        positional[1],
+        positional[2],
+        positional[3],
+        &policy,
+        |name| {
+            let (l, i) = providers
+                .get(name)
+                .ok_or_else(|| format!("Missing referenced resource {name}"))?;
+            let (path, entries) = &libraries[*l];
+            let e = &entries[*i];
+            decode_payload(e.flag, platform::read_range(path, e.offset, e.size)?)
+        },
+    )
+    .map_err(|e| {
+        if !e.starts_with("Unresolved in source") {
+            return e;
+        }
+        let mut e = if e.contains("substitute a packaged texture") {
+            format!("{e}. Use --keep-unresolved or --substitute OLD.PIC=NEW.PIC")
+        } else {
+            format!("{e}. Use --keep-unresolved")
+        };
+        if positional.len() == 5 {
+            e.push_str("; no source LIBs were given, so list the LIBs that provide shared resources after OUTPUT.LIB");
+        }
+        e
+    })?;
+    crate::saving::library(positional[4], &package.archive.bytes()?)?;
+    for (old, new) in &package.mapping {
+        println!("{old:13} -> {new}");
+    }
+    for u in &package.unresolved {
+        let drawn = if u.drawn() == Some(false) {
+            "; not drawn by any pose"
+        } else {
+            ""
+        };
+        let label = u.evidence.label();
+        match &u.resolution {
+            Resolution::Keep if u.evidence == Evidence::Convention => println!(
+                "{:13} absent, as in source ({}, {label})",
+                u.target, u.resource
+            ),
+            Resolution::Keep => println!(
+                "{:13} kept unresolved, as in source ({}, {label}{drawn})",
+                u.target, u.resource
+            ),
+            Resolution::Substitute(new) => println!(
+                "{:13} -> {new} in {} ({label}{drawn})",
+                u.target, u.resource
+            ),
+        }
+    }
+    println!(
+        "{} private resources; {} bytes",
+        package.archive.entries.len(),
+        package.archive.bytes()?.len()
+    );
+    Ok(())
+}
 pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  --shape-inventory INPUT.LIB [ENTRY.SH]\n  --shape-pose INPUT.LIB ENTRY.SH [NAME=VALUE...]\n  --stub-census NEW_OUTPUT.txt INPUT.LIB...\n  --geometry-check OUTPUT_DIR INPUT.LIB [ENTRY.SH...]\n  --edit-check INPUT.LIB ENTRY.SH...\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]...\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...] [--keep-unresolved] [--substitute OLD.PIC=NEW.PIC]...\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  --shape-inventory INPUT.LIB [ENTRY.SH]\n  --shape-pose INPUT.LIB ENTRY.SH [NAME=VALUE...]\n  --stub-census NEW_OUTPUT.txt INPUT.LIB...\n  --geometry-check OUTPUT_DIR INPUT.LIB [ENTRY.SH...]\n  --edit-check INPUT.LIB ENTRY.SH...\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -100,14 +214,7 @@ pub fn run() -> Result<()> {
             let s=app.draw().svg(app.width,app.height);platform::write_new(argument(&args,1)?,s.as_bytes())?;
         },
         Some("--clone-check")=>{app.open(argument(&args,1)?)?;app.clone_export_check(argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,argument(&args,5)?)?;println!("PASS selected-object wizard, automatic sources, review, named LIB export and reopen");},
-        Some("clone-aircraft"|"export-object") => {
-            let mut sources=vec![Archive::parse(platform::read(argument(&args,1)?)?)?];
-            for path in args.iter().skip(6){sources.push(Archive::parse(platform::read(path)?)?);}
-            let refs:Vec<_>=sources.iter().collect();let package=hangar_core::clone_aircraft::build(&refs,argument(&args,2)?,argument(&args,3)?,argument(&args,4)?,&Default::default())?;
-            crate::saving::library(argument(&args,5)?,&package.archive.bytes()?)?;
-            for (old,new) in &package.mapping{println!("{old:13} -> {new}");}
-            println!("{} private resources; {} bytes",package.archive.entries.len(),package.archive.bytes()?.len());
-        },
+        Some("clone-aircraft"|"export-object") => export_object(&args)?,
         Some("variant") => {
             let source=Archive::parse(platform::read(argument(&args,1)?)?)?;
             let mut variant=hangar_core::authoring::create(&source,argument(&args,2)?,platform::read(argument(&args,3)?)?,argument(&args,4)?,argument(&args,5)?)?;

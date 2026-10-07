@@ -2650,6 +2650,8 @@ mod media;
 
 #[path = "ui_clone.rs"]
 mod cloning_ui;
+#[cfg(not(windows))]
+pub(crate) use cloning_ui::index as library_index;
 
 #[path = "ui_dependencies.rs"]
 mod dependencies_ui;
