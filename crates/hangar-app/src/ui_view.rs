@@ -1139,6 +1139,9 @@ impl App {
             self.menu = Some(n.parse().map_err(|_| "Menu number")?);
             return Ok(());
         }
+        if name.starts_with("vertex-") {
+            return self.snapshot_vertex(name);
+        }
         if name.starts_with("gizmo") || name.starts_with("handles") {
             return self.snapshot_gizmo(name);
         }

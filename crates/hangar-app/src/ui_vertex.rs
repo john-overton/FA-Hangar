@@ -243,9 +243,9 @@ impl App {
             );
             faces.sort_unstable();
             faces.dedup();
-            if faces.len() > 2 {
+            if faces.len() > 8 {
                 return Err(format!(
-                    "{} faces share that edge; split edges shared by at most two",
+                    "{} faces share that edge; split edges shared by at most eight",
                     faces.len()
                 ));
             }
@@ -649,7 +649,7 @@ fn smoke_add_split(w: i32, h: i32) {
     a.chrome_click(menu);
     let item = a.smoke_find(&|x| matches!(x, Action::MeshOp(super::edit_ui::OP_SPLIT_EDGE)));
     a.chrome_click(item);
-    if sharing.len() <= 2 {
+    if sharing.len() <= 8 {
         let m = a.model.as_ref().unwrap();
         assert_eq!(
             m.faces.len(),
@@ -815,4 +815,108 @@ fn smoke_connect(w: i32, h: i32) {
         );
     }
     assert_eq!(a.doc.archive.bytes().unwrap(), original);
+}
+
+#[cfg(not(windows))]
+impl App {
+    /// Snapshot states (`--native-snapshot OUT LIB SH vertex-...`): the
+    /// `edit-vertices` view at 250% on the largest shown root face (most
+    /// raster pixels; a wing panel when one shows), panned to its centre. `vertex-add` hovers the Add
+    /// vertex tool 3 px off the midpoint of its longest edge (snapped);
+    /// `vertex-placed` clicks there; `vertex-split` Shift+clicks its centre;
+    /// `vertex-split-edge` Shift+clicks the edge midpoint; `vertex-connect`
+    /// connects corners 0 and 2 of the largest shown face with 4 corners.
+    pub(super) fn snapshot_vertex(&mut self, name: &str) -> Result<()> {
+        self.workspace("edit-vertices")?;
+        self.mesh_vertices.clear();
+        self.ed.mesh_faces.clear();
+        let [w, h] = self.view_size();
+        let rw = (w.max(1) as usize).min(512);
+        let rh = (h.max(1) as usize * rw / w.max(1) as usize).max(1);
+        let frame = self.raster(rw, rh);
+        let model = self.model.as_ref().ok_or("No model")?;
+        let mut count = vec![0usize; model.faces.len()];
+        for f in &frame.faces {
+            if let Some(c) = count.get_mut(*f) {
+                *c += 1;
+            }
+        }
+        let quads = name == "vertex-connect";
+        // A wing panel when there is one: its centre well off the centreline.
+        let (middle, span) = super::hardpoint_ui::bounds(model);
+        let centre_of = |f: usize| {
+            surface::centre(
+                &model.faces[f]
+                    .indices
+                    .iter()
+                    .map(|i| model.vertices[*i].point)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let wing = |f: usize| (centre_of(f)[0] - middle[0]).abs() > span / 8;
+        // The face the raster draws at its own centre, so a click there hits it.
+        let view = self.raster_frame([w, h]).ok_or("No view")?;
+        let on_top = |f: usize| {
+            let r = view.raster16(centre_of(f), [rw, rh]);
+            let (x, y) = (r[0].div_euclid(16), r[1].div_euclid(16));
+            x >= 0
+                && y >= 0
+                && (x as usize) < rw
+                && (y as usize) < rh
+                && frame.faces[y as usize * rw + x as usize] == f
+        };
+        let face = (0..model.faces.len())
+            .filter(|f| model.faces[*f].group.is_none())
+            // Splits and cuts need a face without per-vertex shading.
+            .filter(|f| !(quads || name.contains("split")) || model.faces[*f].sub & 0x80 == 0)
+            .filter(|f| !quads || model.faces[*f].indices.len() >= 4)
+            .filter(|f| on_top(*f))
+            .max_by_key(|f| (wing(*f), count[*f]))
+            .ok_or("No shown root face")?;
+        let f = &model.faces[face];
+        let points: Vec<[i32; 3]> = f.indices.iter().map(|i| model.vertices[*i].point).collect();
+        let corners = f.indices.clone();
+        let n = points.len();
+        let len2 = |k: usize| -> i64 {
+            let (a, b) = (points[k], points[(k + 1) % n]);
+            (0..3).map(|c| (a[c] as i64 - b[c] as i64).pow(2)).sum()
+        };
+        let edge = (0..n).max_by_key(|k| len2(*k)).unwrap_or(0);
+        let mid = surface::midpoint(points[edge], points[(edge + 1) % n]);
+        let centre = surface::centre(&points);
+        self.zoom = 250;
+        self.pan = [0, 0];
+        let c = self.hp_project(centre).ok_or("No view")?;
+        let (cx, cy) = (self.left() + 1 + w / 2, 54 + h / 2);
+        self.pan = [cx - c[0], cy - c[1]];
+        if quads {
+            self.mesh_vertices = vec![corners[0], corners[2]];
+            return self.connect_vertices();
+        }
+        self.add_vertex_tool(false);
+        let q = self.hp_project(mid).ok_or("No view")?;
+        let (dx, dy) = (cx - q[0], cy - q[1]);
+        let len = hangar_core::gizmo::isqrt(dx as i64 * dx as i64 + dy as i64 * dy as i64).max(1);
+        let near = [
+            q[0] + (3 * dx as i64 / len) as i32,
+            q[1] + (3 * dy as i64 / len) as i32,
+        ];
+        match name {
+            "vertex-add" => self.motion(near[0], near[1], false),
+            "vertex-placed" => {
+                self.motion(near[0], near[1], false);
+                self.add_vertex_click(near[0], near[1], false)?;
+            }
+            "vertex-split" => {
+                self.motion(cx, cy, true);
+                self.add_vertex_click(cx, cy, true)?;
+            }
+            "vertex-split-edge" => {
+                self.motion(near[0], near[1], true);
+                self.add_vertex_click(near[0], near[1], true)?;
+            }
+            _ => return Err(format!("Unknown snapshot state {name}")),
+        }
+        Ok(())
+    }
 }

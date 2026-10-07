@@ -647,6 +647,7 @@ impl App {
                 ("X", "Delete"),
                 ("E", "Extrude"),
                 ("F", "Make face"),
+                ("J", "Connect"),
                 ("Tab", "Object mode"),
             ],
             Mode::Model if self.animation_tool => &[
