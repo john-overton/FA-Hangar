@@ -389,6 +389,32 @@ Tomcat` kept, the duplicate listed as `F/A- 18D Hornet variant`).
    missions that name `F14.PT`) and record what the game does without
    `F14.PT`: an error, a substitute aircraft or a missing flight.
 
+## Per-panel textures and sized panel sheets (unreleased)
+
+Use a copy of a LIB holding the aircraft (save under a new custom name).
+
+1. Select `F18.SH`, press **Tab**, then **3**. Click one tail fin face
+   (Shift+click to add its neighbours). The **Face textures** panel lists
+   `_F18.PIC`. Choose **Mesh > Clone texture for selected faces**, accept
+   `_F18T1.PIC` and check that only the selected faces are listed on it.
+2. Leave Edit Mesh, turn on **Paint on the model** and **Lock strokes to the
+   panel**, and paint a bright mark on the fin. Check that the other fin,
+   other aircraft using `_F18.PIC` and the rest of the F-18 are unchanged.
+   Ctrl+Z twice returns the LIB to unchanged; repeat steps 1 and 2.
+3. Select another face and use **Mesh > Assign texture…** with a PIC of a
+   different size: **Keep** is off with its reason; apply **Scale**. Select
+   it again and apply **Use shape texture**; it returns to `_F18.PIC`.
+4. On an untextured rectangular panel (for example a flat underside panel of
+   a ground object or a long fuselage strip), paint with the brush. The new
+   sheet's size in the status follows the panel's proportions, and the brush
+   dabs stay round on the model.
+5. Save, install the LIB, start Fighters Anthology and fly the F/A-18 (or
+   view it in the hangar/arming screen). Check the painted fin shows the
+   mark, the other fin and the rest of the livery are stock, the fin is
+   drawn in the right order, damage states still appear, and no panel is
+   missing. Record whether a generated sheet narrower than 256
+   pixels displays (every retail shape texture is 256 wide).
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

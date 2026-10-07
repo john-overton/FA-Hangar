@@ -792,9 +792,10 @@ span tables and glyph data stay untouched. A stroke that ends byte-identical to
 the saved entry or the stored original reuses that entry's storage; erasing all
 the way back to the saved entry also drops an `X.ORG` added in the session.
 
-Generated panel sheets are recognized by Hangar's raw square sheet header, a
-name made of an SH stem (first six characters) and two hex digits, and the SH
-face records that name them. Their original is the face's color byte in the
+Generated panel sheets are recognized by Hangar's raw sheet header (8 to 256
+pixels a side; square before per-panel sizing), a name made of an SH stem
+(first six characters) and two hex digits, and the SH face records that name
+them. Their original is the face's color byte in the
 SH, so a sheet generated in this session keeps no `.ORG`. A sheet already in
 the saved LIB is backed up like any PIC, so a mistaken match never loses
 artwork. The session's saved entries are only a fallback.
@@ -807,6 +808,90 @@ rather than overwriting it; texture clones copy the companion when present.
 Package checks parse changed `.ORG` payloads as PIC, warn on originals without
 their PIC and note raster-layout mismatches. FA is expected to ignore entries it
 never looks up by name; original-game acceptance is listed in WINDOWS-TEST.md.
+
+## Texture state proof and per-face texture assignment
+
+SH faces carry no texture name. An E2 record selects a texture (E0 selects an
+untextured state) and every later textured FC draws with it, so one E2 near
+the start of a retail aircraft serves the whole atlas. `Geometry::material`
+proves which selector holds at a face the way slot liveness is proved:
+walking back to the nearest E2/E0, every pointer entering that span must
+resolve to a selector with the same bytes. A 12/6E/C4/C6 call whose block
+reaches no selector is transparent; one that does passes on the state that
+every return of the block resolves to (they must agree). `Model` clears its
+selector after an F0 stub because native code runs there; the proof sees
+through the stub's resumes. Over the neutral F-18, F-16 and A-10 models it
+proves every drawn face (FA_2.LIB, 2026-10-07).
+
+`shape_texture::assign_texture` gives faces their own texture. Selected
+faces are grouped into runs: contiguous records with the same texture and
+restore selector and no pointer target at an inner record start. Each run
+gets one continuation, placed in space freed by a rebuilt assignment or
+appended before the end marker through `shape_layout`:
+
+`E2 NEW.PIC (16)` · copies · restore selector (E2 16 or E0 4, the proved
+record's exact bytes) · `48` back to the end of the run · stored originals
+
+The first site becomes `48` to the continuation, `1E` fill and a closing
+`48` to its own end; later sites of the run jump to their own end (never
+reached). The originals are never reached either; they are why the format is
+self-describing. A continuation is recognised only structurally: an E2, one
+or more FC copies, a 16-byte E2 or 4-byte E0, a `48` whose target ends a run
+of sites whose lengths are the originals' lengths, each site holding exactly
+the stub bytes, and each copy drawing the same slots as its original. Retail
+code, legacy `texture_panel` continuations and other appended geometry do
+not match.
+
+UV modes: Keep copies the UVs; Scale computes `(uv * to + from / 2) / from`
+per axis, keeping word UVs and widening byte UVs that exceed 255; Project
+fits a planar projection (the faces' own plane with the longest edge along
+U, or a fixed Top/Side/Front plane) into the PIC with one scale for both
+axes. Untextured faces are only projected; their content becomes
+`(content & 0x60) | 4` as for generated panels, refusing other subtypes and
+special colour words. Faces already drawn from a Hangar assignment are taken
+from their continuation with its originals and restore, so assignments never
+nest; the rest of that continuation is rebuilt and its old bytes are filled
+with `1E`. `restore_texture_assignment` writes each stored original back to
+its site, taking the copy's current normal, centre and corner order (a later
+vertex move or flip), and rebuilds the remaining faces. Faces that are not
+drawn from an assignment are refused: "No Hangar texture assignment to
+remove".
+
+Refused: faces a part stub resumes drawing at (the binding's target record
+would change), faces `face_refusal` rejects (pointer or relocation fields,
+inner pointer targets, native addressing, never drawn), faces whose texture
+state cannot be proved, rebuilding a continuation that another record jumps
+into or that carries foreign pointers, and the usual layout limits
+(virtual-address and relocation room, ±32 KiB jump reach, native end
+marker). Each result is re-parsed: CODE coverage and opaque bytes, stubs and
+bindings unchanged; every new continuation recognised with its sites; and,
+in the neutral pose and each pose that draws a moved face, the same number of
+drawn faces, each moved face at its new offset with the expected texture,
+same corners and same part, every other face identical. A no-op (Keep onto
+the texture faces already use) returns the input bytes.
+
+The app's Clone texture for selected faces runs Keep onto a renamed copy of
+the faces' PIC (stored bytes and flag shared, `.ORG` copied by
+`originals::cloned`) in one transaction. Painting follows the faces' texture
+name, so the brush writes only the new PIC on them. Applying an assignment
+to the damage family is not offered: in FA_2.LIB no face of the F-18,
+F-16, A-10, F-22, F-14, MiG-29 or Su-27 main shape has a record with the same
+bytes at the same CODE offset in any `_A`..`_D` shape, so faces cannot be
+matched safely.
+
+Generated panel sheets use the same planar projection. The sheet size comes
+from the shape's texel density (`atlas_density`: summed UV edge length over
+summed model edge length of named textured faces; 2.2 texels per unit on
+the A-10, 3.1 on the F-18, 9.4 on the F-14, median 2.8 over 1,073 FA_2.LIB
+shapes; 3 is the fallback), rounded per side,
+scaled together so the longer side is at most 256 and the shorter at least
+8. Sheets are raw kind-0 PICs; every texture a retail shape uses is 256 wide
+with any height, so other widths are unverified in the game (as the earlier
+64 × 64 sheets were). `coplanar_panels` groups connected flat faces of one
+colour, subtype and part whose normals agree within about 2.5° and whose
+corners lie within one unit of the first face's plane; they keep one legacy
+continuation each but share the sheet and one projection. When `Model` has
+no selector for the panel, its continuation restores the proved one.
 
 ## Identity, rename and duplicate ownership
 

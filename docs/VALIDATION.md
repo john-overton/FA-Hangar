@@ -602,3 +602,92 @@ are inserted one by one. The PE audit reports 1,343,488 bytes (32-bit) and
 1,537,536 bytes (64-bit) with the same 60 reviewed imports. Neither aircraft
 has been listed or flown in the original game yet; steps are in
 WINDOWS-TEST.md.
+
+## Unreleased per-panel textures and sized panel sheets
+
+Read-only probes on a copy of the user's retail `FA_2.LIB` (2026-10-07; the
+original file was not modified, and no game data is in the repository):
+
+- **Texture state proof.** `Geometry::material` proves the selector for
+  116,558 of the 137,959 faces the neutral models of 1,250 decodable shapes
+  draw, and for every face in 966 of them. Where `Model` also knows the
+  selector (107,599 faces) the proof names the same bytes in every case. The
+  unproved faces are mostly in shapes with no E2/E0 before them. The neutral
+  F-18, F-16 and A-10 are proved completely, including the 64, 48 and 126
+  textured faces for which `Model` has no selector (it clears it at F0
+  stubs).
+- **Every face assigns and restores.** On `F18.SH` (287 drawn faces),
+  `F16.SH` (361) and `A10.SH` (299), each face alone was assigned to a new
+  PIC (Keep for textured faces, Project for flat ones) and then restored:
+  947 of 947 succeeded, each verified by the core's own re-parse.
+- **App-driven check.** `--face-texture-check FA_2.LIB FA2_TEX.LIB F18.SH
+  F16.SH A10.SH` picked the four highest side-facing textured faces in the
+  rear 30% of each aircraft (the vertical tails; on the A-10 also an engine
+  nacelle side) and ran Clone texture for selected faces through the Mesh
+  menu action and its name prompt:
+
+  | Shape | Copy | Continuations | SH bytes | Bindings | Faces |
+  | --- | --- | --- | --- | --- | --- |
+  | `F18.SH` | `_F18T1.PIC` | 2 | 33,280 unchanged | 18 unchanged | 287 = 287 |
+  | `F16.SH` | `_F16T1.PIC` | 2 | 37,376 unchanged | 19 unchanged | 361 = 361 |
+  | `A10.SH` | `_A10T1.PIC` | 4 | 25,088 unchanged | 12 unchanged | 299 = 299 |
+
+  The continuations fit the existing CODE padding, so no SH grew. Inventory
+  coverage stayed complete (0 opaque bytes), all four faces draw from the
+  copy, and every other face keeps its offset, texture and UVs. A 15 px brush
+  at each face's UV centre under Panel lock changed 149, 298 and 447 pixels
+  of the copies; `_F18.PIC`, `_F16.PIC` and `_A10.PIC` stayed byte-identical.
+  Use shape texture put every original record back byte for byte at its site
+  with every drawn face (offset, texture, UVs, flags) identical to the
+  untouched shape, and its undo restored the assigned bytes. The written LIB
+  (5,411 entries) reopened and every edited SH re-parsed.
+- **Renders.** `--snapshot OUT.svg LIB SHAPE paint-side 1280x800` before
+  (`FA_2.LIB`) and after (`FA2_TEX.LIB`) show the magenta marks only on the
+  F-18 and F-16 tail fins and the A-10 fin and nacelle; the rest of each
+  livery is unchanged. Renders stayed in `/tmp/claude-1000/face-tex/`
+  (not committed).
+- **Generated panel sheets.** At each shape's measured density (3.1, 2.6 and
+  2.2 texels per unit on the F-18, F-16 and A-10) single flat panels give
+  sheets in their own proportions, for example 16 × 11, 19 × 8, 25 × 10,
+  38 × 8 and 31 × 25 on the F-18 (41, 28 and 26 distinct sizes). Before the proved-selector fallback 44 of 104,
+  55 of 102 and 87 of 143 flat faces were refused for an unresolved material
+  state; now all 349 convert. 27, 20 and 52 flat faces have at least one
+  coplanar neighbour of the same colour to share a sheet with.
+- **Damage family.** No face of the F-18, F-16, A-10, F-22, F-14, MiG-29 or
+  Su-27 main shape has a record with the same bytes at the same CODE offset
+  in any `_A`..`_D` shape (50 F-18 faces recur in `F18_C.SH` at other
+  offsets), so applying an assignment to the family is not offered.
+- **Texture widths.** Every one of the 457 distinct PICs that FA_2.LIB shapes
+  name is 256 pixels wide; heights run from 11 to 1,037. Generated sheets of
+  other widths, like the earlier 64 × 64 sheets, are unverified in the game.
+
+Core tests cover a single face, a contiguous run sharing one detour,
+scattered faces, a flat face projected and restored to its exact record,
+byte and word UVs with Keep, Scale (widening to words, keeping word UVs) and
+Project (fixed planes, square texels), refusals (inner pointer, part-stub
+resume target, stored originals, bad names, nothing to remove), the no-op
+identity, the reverse round trip, a face in a C4 part under two gear poses,
+a second assignment moving faces without nesting and restoring in steps, a
+flip of the copy kept by the restore, every face of the synthetic textured
+kit, truncated and corrupted shapes, and sheet sizing (4:1, upright, rotated
+30°, skewed, a triangle, clamping both ways, a coplanar pair, degenerate
+refusal, density). The smoke test drives, through rendered controls, Edit
+Mesh face select, the disabled per-face actions and their reason, Clone
+texture for selected faces from the Mesh menu (the SH and the new PIC change,
+one undo step), a Panel-lock stroke on the assigned face that changes only
+the copy, undo to the exact archive bytes, the clone from a face picked in
+the Model workspace beside Clone texture for whole shape and its hint, Assign
+texture with Keep refused for another size, Scale, Project on the Top plane
+and Keep onto a same-size PIC, Use shape texture and both undos, the "No
+Hangar texture assignment to remove" refusal and an untextured clone refusal,
+and the Assign texture dialog's controls inside the window and apart at
+800x600 and 1280x800. The panel smoke checks that a generated sheet's size
+and UVs follow the panel instead of 64 × 64.
+
+Formatting, strict Clippy, all tests and the smoke test pass. New state
+lives in the boxed Edit Mesh state, so `App` keeps its size; sets in the new
+code are filled by insertion, since collecting one pulled in the stable
+sort's 4 KiB stack buffer. The PE audit reports 1,461,248 bytes (32-bit) and
+1,662,464 bytes (64-bit) with the same 60 reviewed imports. Per-face
+textures and the new sheet sizes have not been loaded in the original game
+yet; steps are in WINDOWS-TEST.md.

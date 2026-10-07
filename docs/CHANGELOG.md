@@ -7,6 +7,31 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Per-panel textures.** Selected faces can draw from their own PIC while
+  the rest of the aircraft keeps its atlas. **Clone texture for selected
+  faces** (Edit Mesh **Mesh** menu and inspector, and the inspector for a
+  face picked in the Model workspace) copies the faces' PIC to a free private
+  8.3 name with its stored original and moves only those faces to it, in one
+  undo step. **Assign texture…** picks any PIC in the LIB from a filterable
+  list with Keep, Scale or Project UVs (Keep is off, with the reason, when
+  the sizes differ); untextured faces can be projected. **Use shape
+  texture** puts the faces' original records back. Painting those faces
+  changes only their PIC.
+- **Clone texture for whole shape.** The former **Clone texture for this
+  shape** is renamed and sits beside the per-face clone with a hint saying
+  which faces each one affects.
+- **Generated panel sheets fit the panel.** Painting an untextured panel no
+  longer makes a 64 × 64 square that skewed rectangular panels: the sheet
+  takes the panel's proportions and orientation at the shape's own texel
+  density (8 to 256 pixels a side), and with Panel lock off coplanar
+  neighbours of the same color share one sheet. Panels after native code
+  (most flat faces of retail aircraft, for example 87 of 143 on the A-10),
+  which were refused for an unresolved material state, now convert. Sheets
+  made by earlier versions are unchanged.
+- **`--face-texture-check`** clones, paints and restores tail-face textures
+  of named shapes through the app and saves the result create-new; snapshot
+  workspaces `paint-side` and `assign-texture`.
+
 - **Identity panel.** PT, NT, JT and OT definitions open with an Identity
   panel: the short and long names edit in place (one undo step each, amber
   with the saved value and a reset) and the reference ID shows beside

@@ -44,7 +44,9 @@ the game. No game data ships.
   gear swing range and direction, rotation axis and pivot.
 - Paint PIC textures on the atlas or directly on the model, erase back to or
   restore the original artwork, edit palettes and UVs, and bake PNG,
-  tail-number and national decals.
+  tail-number and national decals. Give selected panels their own PIC
+  (cloned, or any PIC with kept, scaled or projected UVs) while the rest of
+  the aircraft keeps its atlas.
 - Preview PCM audio and PIC images; export WAV, PNG and geometry-only OBJ.
 - Lossless by default: unedited archives round-trip byte-for-byte, retail LIB
   names are protected and custom saves keep numbered backups.

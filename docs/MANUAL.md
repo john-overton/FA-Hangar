@@ -27,6 +27,7 @@ the game. No game data ships.
 - [Work across LIBs](#work-across-libs)
 - [Flight envelope table](#flight-envelope-table)
 - [Paint a livery](#paint-a-livery)
+  - [Per-panel textures](#per-panel-textures)
   - [Erase and restore textures](#erase-and-restore-textures)
 - [Hardpoints, materials and decals](#hardpoints-materials-and-decals)
 - [Ship, ground and animation tools](#ship-ground-and-animation-tools)
@@ -253,7 +254,13 @@ in-memory copies and writes the results create-new to `NEW_DIR`;
 `--edit-check FA_2.LIB F18.SH` drives Edit Mesh and Parts through the app,
 undoing each step; `--identity-check FA_2.LIB F14.PT F14Z F18.PT F18Z
 NEW.LIB` renames one aircraft and duplicates another through their reviews,
-checks that undo restores the exact bytes and saves the result create-new.
+checks that undo restores the exact bytes and saves the result create-new;
+`--face-texture-check FA_2.LIB NEW.LIB F18.SH F16.SH A10.SH` clones the PIC
+for four tail faces of each shape through **Clone texture for selected
+faces**, paints the copy, checks that nothing else changed, runs **Use shape
+texture** and its undo, and saves the painted result create-new. `--snapshot
+OUT.svg NEW.LIB F18.SH paint-side 1280x800` renders a textured side view;
+the `assign-texture` workspace shows the Assign texture dialog.
 
 Use `inspect` to confirm field indices and values for your own file first.
 The example changes the recognized object weight operand, in its source units.
@@ -541,12 +548,25 @@ face. Both are one undo step. Textured surfaces get their color from their PIC;
 the UI points to Materials when no flat-color faces are present.
 
 For a supported panel without a texture, click the viewport **brush icon** or
-enable **Paint model / auto-create texture**. Hangar stages a private 64x64 PIC
+enable **Paint model / auto-create texture**. Hangar stages a private PIC
 filled with the panel's original color and maps the polygon onto it. Release
 commits the sheet, SH mapping and first stroke together; Esc cancels, and
 Ctrl+Z removes the entire change. The base palette must be loaded. **Create
 paintable panel texture** also performs this step explicitly, before adding a
 decal.
+
+Generated panel sheets follow the panel. The polygon is projected onto its
+own plane, its longer side along the sheet's width, and the sheet takes the
+panel's proportions at the shape's own texel density (the texels per unit its
+textured faces already use; 3 per unit when it has none), so pixels are square
+on the model and a 4:1 panel gets a 4:1 sheet. Each side is kept between 8 and
+256 pixels, scaling both sides together. With **Panel lock** off, flat panels
+of the same color that share an edge and lie in one plane get one sheet sized
+to all of them, so a stroke crosses them without a seam; with Panel lock on,
+only the panel under the brush is converted. The status names the sheet and
+its size, for example "Created F1800.PIC, 42 × 8, mapped to 2 coplanar
+panels". Sheets made by earlier versions stay 64 × 64; nothing is converted
+retroactively.
 
 Automatic mapping supports ordinary opaque polygons with a known material
 state. Special shading, unresolved state, insufficient CODE space or jump
@@ -557,8 +577,10 @@ retain their material and UVs. This is planar panel mapping, not full UV unwrap.
 2. Click a visible panel. The inspector identifies its face and named PIC.
 3. **Export object** now creates private copies of the discovered textures,
    including the damage family. Paint those copies for a separate livery.
-   **Clone texture for this shape** remains available for individual changes;
-   that narrower command only retargets references in the decoded pose.
+   To give only some panels their own PIC, use **Clone texture for selected
+   faces** (see [Per-panel textures](#per-panel-textures)). **Clone texture
+   for whole shape** retargets every reference to the PIC in the decoded
+   pose, so the whole aircraft moves to the copy.
 4. Click **UV / paint …**. Amber outlines show that face's footprint on the
    atlas. Choose a palette swatch and **Brush**. The lower **3D preview** updates
    during the stroke. Wheel zooms the atlas; middle-drag pans it. Middle-drag
@@ -591,6 +613,59 @@ pixels outside existing spans. PNG decal import and bounded per-face UV
 transforms are also available. Arbitrary audio-format conversion and
 topology-aware UV unwrapping remain outside this version.
 
+### Per-panel textures
+
+An aircraft normally draws every textured face from one atlas PIC: the shape
+selects the texture once and every face after it uses it. To paint some
+panels without changing the rest, give them their own PIC.
+
+Select the faces in **Edit Mesh** (face select, **3**), or click a face in
+the Model workspace. The **Face textures** panel in the inspector (and the
+**Mesh** menu in Edit Mesh) lists each selected face's texture and offers:
+
+- **Clone texture for selected faces** (the primary action) copies the
+  faces' PIC to a new private 8.3 name, suggested as the first six letters of
+  the source and `T1` (`_F18.PIC` becomes `_F18T1.PIC`), and draws only the
+  selected faces from the copy with their UVs unchanged. Every other face
+  keeps the original PIC. A stored original `X.ORG` is copied with it, as for
+  other clones. The SH, the new PIC and its original are one undo step. The
+  name must be unused in this LIB, the other open LIBs and the source
+  catalogs.
+- **Assign texture…** opens a list of the PICs in this LIB. Type to filter
+  it, click a row or use Up and Down, and choose the UV mapping:
+  - **Keep** leaves the stored UVs as they are. It needs a PIC of the same
+    size as the faces' current one; otherwise it is off and the dialog says
+    why.
+  - **Scale** scales the UVs from the current PIC's size to the new one,
+    rounding to whole pixels. Faces whose UVs no longer fit a byte are
+    widened to word UVs.
+  - **Project** maps the faces flat onto the PIC with square pixels, fitted
+    to its size: **Auto** uses the faces' own plane (longest edge along the
+    width), **Top**, **Side** and **Front** look along an axis. Untextured
+    faces can only be projected; they become textured faces.
+- **Use shape texture** returns faces to the shape's own texture: their
+  original records go back exactly, keeping later moves or flips of the face.
+  It applies to faces Hangar assigned; on any other face the status reads "No
+  Hangar texture assignment to remove".
+
+Without a selection the per-face actions are off and the panel reads "Select
+faces in Edit Mesh or pick a face to paint". **Clone texture for whole shape**
+stays beside them for the whole-aircraft copy.
+
+Once assigned, the faces paint into their own PIC: the brush, eraser and
+decals on those faces change only that PIC. Turn on **Panel lock** to keep a
+stroke on the selected panel; without it, a stroke that crosses onto a
+neighbouring face paints that face's PIC.
+
+Assigned faces keep their part, so moving parts still move them, and their
+draw order. Selected faces that follow each other in the shape share one
+detour; scattered faces get one each. A face that a part stub resumes
+drawing at, a face with a pointer or relocation inside it, and a face whose
+texture state cannot be proved are refused with the reason. Damage shapes
+(`_A` to `_D`) are separate geometry: their faces never match the main shape
+by position and bytes in retail data, so Hangar does not offer to apply an
+assignment to them; assign their faces separately.
+
 ### Erase and restore textures
 
 The first time a stroke, decal, PIC palette edit or **Replace entry** changes
@@ -620,9 +695,9 @@ Undoing that first edit removes both.
 - `.ORG` entries appear under **Original textures** in the outliner, collapsed
   by default. Selecting one previews it read-only, with **Open X.PIC** and
   **Restore texture**. Painting, decals and palette edits apply to the PIC.
-- Rename, Delete, Ctrl+D, copy and move between LIBs, **Clone texture for this
-  shape**, family texture clones and **Export object** carry the stored
-  original with its PIC. CLI `replace` also keeps it.
+- Rename, Delete, Ctrl+D, copy and move between LIBs, **Clone texture for
+  whole shape**, **Clone texture for selected faces**, family texture clones
+  and **Export object** carry the stored original with its PIC. CLI `replace` also keeps it.
 - **Package > Remove stored originals** removes every `.ORG` as one undo step
   for a distribution build. A later edit keeps a new original, taken from the
   entry as it was at the last open or save, so remove them just before
@@ -779,6 +854,9 @@ offset.
 | Extrude, then move | **E**, then a move as for G | **Mesh > Extrude** |
 | Make a face from the selected vertices | **F** | **Mesh > Make face** |
 | Add a vertex at the median | | **Mesh > Add vertex at median** |
+| Give the selected faces a copy of their PIC | | **Mesh > Clone texture for selected faces** |
+| Draw the selected faces from another PIC | | **Mesh > Assign texture…** |
+| Return faces to the shape's texture | | **Mesh > Use shape texture** |
 
 - **Pivot.** R and S turn or scale about the selection's median. With
   **Pivot: Individual** (inspector or Mesh menu) in face select, each
@@ -796,6 +874,8 @@ offset.
   the flat colour picked in **Flat colour** (the base colour dialog). A
   textured neighbour gives its colour only, because its UVs do not fit the
   new corners.
+- **Face textures** are described under
+  [Per-panel textures](#per-panel-textures).
 - New faces and vertices are drawn where an existing face of the same part
   is drawn: Hangar appends them before the shape's end marker and routes that
   face through them. They take free vertex slots below 640, the largest slot
@@ -998,3 +1078,9 @@ replaced PIC is written uncompressed (flag 0), so it is larger than a
 compressed retail texture. Untouched entries, stored originals (`.ORG`),
 texture clones within a LIB and an exact Restore texture keep their stored
 bytes and compression flag. **Export object** writes its copies uncompressed.
+
+Every texture a retail FA_2.LIB shape uses is 256 pixels wide (heights vary
+from 11 to 1,037). Generated panel sheets are 8 to 256 pixels wide, sized to
+the panel; like the earlier 64 × 64 sheets, a width other than 256 has not
+yet been confirmed in the original game (see [WINDOWS-TEST.md](WINDOWS-TEST.md)).
+Assigned textures can be any PIC in the LIB.
