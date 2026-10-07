@@ -913,11 +913,11 @@ impl App {
                             Ok(p) => {
                                 self.detail = if ext == "ORG" {
                                     format!(
-                                        "{} x {} / stored original, read-only",
+                                        "{} \u{d7} {}, stored original, read-only",
                                         p.width, p.height
                                     )
                                 } else {
-                                    format!("{} x {} / indexed PIC", p.width, p.height)
+                                    format!("{} \u{d7} {} indexed PIC", p.width, p.height)
                                 };
                                 self.pic = Some(p);
                             }
@@ -929,7 +929,7 @@ impl App {
                     } else if matches!(ext, "5K" | "11K" | "WAV") {
                         self.detail = match Pcm::parse(&e.name, &data) {
                             Ok(p) => {
-                                format!("{} Hz / {} samples / PCM8 mono", p.rate, p.samples.len())
+                                format!("{} Hz, {} samples, PCM8 mono", p.rate, p.samples.len())
                             }
                             Err(e) => e,
                         };
@@ -1114,9 +1114,9 @@ impl App {
             FileAction::Palette => "Load display palette (.PAL or a LIB containing PALETTE.PAL)",
             FileAction::Open => "Open LIB",
             FileAction::Variant => "Export object",
-            FileAction::VariantSh => "New aircraft from loose SH / step 1: select SH file",
+            FileAction::VariantSh => "New aircraft from a loose SH, step 1: select the SH file",
             FileAction::CloneSource => "Additional source LIB for object dependencies",
-            FileAction::Save => "Save LIB / retail names protected / custom LIBs saved with backup",
+            FileAction::Save => "Save LIB: retail names are protected; custom LIBs keep a backup",
             FileAction::Import => "Add entry: path to a resource file",
             FileAction::Replace => "Replace selected entry: resource file path",
             FileAction::Export => "Export selected entry: new file path",
@@ -1259,7 +1259,7 @@ impl App {
                 self.variant_draft = None;
                 self.prompt = Some(Prompt {
                     kind: PromptKind::VariantId,
-                    title: "New aircraft / step 2: unique ID (1..6 letters/digits)".into(),
+                    title: "New aircraft, step 2: unique ID of 1 to 6 letters or digits".into(),
                     value: String::new(),
                     axis: 0,
                 });
@@ -1321,7 +1321,7 @@ impl App {
                     .get(self.selected)
                     .ok_or("No selected entry")?;
                 if old.read().ok().as_deref() == Some(bytes.as_slice()) {
-                    self.status = "Replacement is identical / nothing changed".into();
+                    self.status = "The replacement is identical; nothing changed".into();
                     return Ok(());
                 }
                 let entry = Entry::new(&old.name.clone(), bytes)?;
@@ -1330,7 +1330,9 @@ impl App {
                 self.doc.transaction(entries, &[])?;
                 self.refresh();
                 self.status = match kept {
-                    Some(org) => format!("Entry replaced / original kept as {org} | Ctrl+Z undo"),
+                    Some(org) => {
+                        format!("Entry replaced; original kept as {org}. Ctrl+Z undoes it")
+                    }
                     None => "Entry replaced | Ctrl+Z undo".into(),
                 };
                 Ok(())
@@ -1390,14 +1392,10 @@ impl App {
             self.prompt = Some(Prompt {
                 kind: PromptKind::Field(index),
                 title: format!(
-                    "{} | {}{}",
+                    "{} ({}{})",
                     f.label,
                     f.kind,
-                    if f.scaled {
-                        " | ^ scaled, raw units"
-                    } else {
-                        ""
-                    }
+                    if f.scaled { ", scaled raw units" } else { "" }
                 ),
                 value: f.value.clone(),
                 axis: 0,
@@ -1546,7 +1544,7 @@ impl App {
                 self.panel_draft = None;
                 self.refresh();
                 (self.paint_enabled, self.model_paint) = tool;
-                self.status = "Stroke discarded / nothing changed".into();
+                self.status = "Stroke discarded; nothing changed".into();
                 return;
             }
             self.finish_stroke();
@@ -1568,7 +1566,7 @@ impl App {
                         self.browser = None;
                         self.prompt = Some(Prompt {
                             kind: PromptKind::CloneTitle,
-                            title: "Export object / step 2: display name".into(),
+                            title: "Export object, step 2: display name".into(),
                             value: self.clone_title.clone(),
                             axis: 0,
                         });
@@ -1744,7 +1742,7 @@ impl App {
                                     self.variant_id = id;
                                     self.prompt = Some(Prompt {
                                         kind: PromptKind::CloneTitle,
-                                        title: "Export object / step 2: display name".into(),
+                                        title: "Export object, step 2: display name".into(),
                                         value: self.clone_title.clone(),
                                         axis: 0,
                                     });
@@ -1761,7 +1759,7 @@ impl App {
                                     self.clone_scroll = 0;
                                     self.prompt = Some(Prompt {
                                         kind: PromptKind::CloneReview,
-                                        title: "Export object / review private resources".into(),
+                                        title: "Export object: review private resources".into(),
                                         value: String::new(),
                                         axis: 0,
                                     });
@@ -1809,7 +1807,7 @@ impl App {
                                 self.variant_id = id;
                                 self.prompt = Some(Prompt {
                                     kind: PromptKind::VariantTitle,
-                                    title: "New aircraft / step 3: display name".into(),
+                                    title: "New aircraft, step 3: display name".into(),
                                     value: String::new(),
                                     axis: 0,
                                 });
@@ -1967,7 +1965,7 @@ impl App {
             Key::Char('a')|Key::Char('A') if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_toggle_all(),
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.mesh_edit&&self.mode==Mode::Model=>self.mesh_transform_prompt(ch.to_ascii_lowercase()),
             Key::Tab if self.mode==Mode::Model=>self.act(view::Action::MeshMode),
-            Key::Char('g')|Key::Char('G') if self.hp_tool&&self.mode==Mode::Model => {self.prompt=Some(Prompt{kind:PromptKind::StationMove,title:"Move station / X Y Z axis, source-unit offset".into(),value:"0".into(),axis:0});},
+            Key::Char('g')|Key::Char('G') if self.hp_tool&&self.mode==Mode::Model => {self.prompt=Some(Prompt{kind:PromptKind::StationMove,title:"Move station along X, Y or Z in source units".into(),value:"0".into(),axis:0});},
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.model.is_some()=>{
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
                 self.transform_prompt(ch.to_ascii_lowercase());
@@ -1991,9 +1989,13 @@ impl App {
             self.prompt = Some(Prompt {
                 kind: PromptKind::Discard,
                 title: format!(
-                    "Unsaved edits in {} LIBs / close without saving?",
-                    usize::from(self.doc.dirty())
-                        + self.libraries.iter().filter(|l| l.doc.dirty()).count()
+                    "Close without saving {}?",
+                    view::count(
+                        usize::from(self.doc.dirty())
+                            + self.libraries.iter().filter(|l| l.doc.dirty()).count(),
+                        "LIB",
+                        "LIBs"
+                    )
                 ),
                 value: String::new(),
                 axis: 0,
@@ -2268,7 +2270,9 @@ impl App {
         }
         if let Some((_, _, start)) = self.resource_drag {
             if (x - start[0]).abs() + (y - start[1]).abs() > 6 {
-                self.status = "Drop on a LIB to review copy/move / same-type entry to graft".into();
+                self.status =
+                    "Drop on a LIB to review a copy or move, or on a same-type entry to graft"
+                        .into();
             }
         }
 

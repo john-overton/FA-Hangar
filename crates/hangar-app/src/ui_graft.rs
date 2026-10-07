@@ -87,7 +87,7 @@ impl App {
             .apply(&self.data, extension(self.name()))?;
         self.doc.replace(self.selected, bytes)?;
         self.refresh();
-        self.status = format!("Grafted {count} values / one Ctrl+Z undo step");
+        self.status = format!("Grafted {count} values in one undo step");
         Ok(())
     }
     pub(super) fn graft_row_count(&self) -> usize {

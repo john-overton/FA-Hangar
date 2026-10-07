@@ -185,7 +185,7 @@ impl App {
             self.doc.replace(d.entry, bytes)?;
             self.refresh();
             self.hp_selected = d.station;
-            self.status = "Station moved / Ctrl+Z undo".into();
+            self.status = "Station moved. Ctrl+Z undoes it".into();
         }
         Ok(())
     }
@@ -227,7 +227,7 @@ impl App {
         self.hp_selected = count;
         self.hp_visible = true;
         self.hp_tool = true;
-        self.status = "Station added / one Ctrl+Z undo step".into();
+        self.status = "Station added in one undo step".into();
         Ok(())
     }
     pub(super) fn station_remove(&mut self) -> Result<()> {
@@ -236,7 +236,7 @@ impl App {
         let bytes = hardpoints::remove(&self.doc.archive.entries[entry].read()?, self.hp_selected)?;
         self.doc.replace(entry, bytes)?;
         self.refresh();
-        self.status = "Station removed / Ctrl+Z undo".into();
+        self.status = "Station removed. Ctrl+Z undoes it".into();
         Ok(())
     }
     pub(super) fn station_prompt(&mut self, column: usize) {
@@ -248,13 +248,13 @@ impl App {
         };
         let (title, value) = if column == 12 {
             (
-                "Default store / JT, SEE, ECM, GAS; empty clears".into(),
+                "Default store: a JT, SEE, ECM or GAS entry; empty clears it".into(),
                 s.store.clone().unwrap_or_default(),
             )
         } else {
             let f = &c.brf.fields[s.fields[column]];
             (
-                format!("HP{} / {} / source value", self.hp_selected + 1, f.label),
+                format!("HP{} {} in source units", self.hp_selected + 1, f.label),
                 f.value.clone(),
             )
         };
@@ -288,7 +288,7 @@ impl App {
         };
         self.doc.replace(entry, bytes)?;
         self.refresh();
-        self.status = "Station updated / Ctrl+Z undo".into();
+        self.status = "Station updated. Ctrl+Z undoes it".into();
         Ok(())
     }
     /// Control for station column `column`: a NumberField, or a text field

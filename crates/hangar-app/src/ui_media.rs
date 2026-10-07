@@ -172,12 +172,12 @@ impl App {
         s.last = Some((x, y));
         self.status = if eraser {
             format!(
-                "Erasing {} to its original / release to commit one undo step",
+                "Erasing {} to its original; release to commit one undo step",
                 s.name
             )
         } else {
             format!(
-                "Painting index {} / release to commit one undo step",
+                "Painting index {}; release to commit one undo step",
                 self.brush
             )
         };
@@ -229,7 +229,7 @@ impl App {
             if let Some(p) = self.current_picture() {
                 let i = py * p.width + px;
                 if !p.mask[i] {
-                    self.status = "Transparent pixel / no color picked".into();
+                    self.status = "Transparent pixel; no color picked".into();
                     return;
                 }
                 self.brush = p.pixels[i];
@@ -317,19 +317,19 @@ impl App {
             self.model_paint = model_paint;
             self.selected_face = face;
             match r {
-                Ok(None) => self.status = "Stroke changed no pixels / nothing changed".into(),
+                Ok(None) => self.status = "The stroke changed no pixels".into(),
                 Ok(Some(kept)) => {
                     let mut status = String::from("Paint stroke applied");
                     if generated > 0 {
                         status.push_str(&format!(
-                            " / {generated} flat panel{} converted to new textures",
+                            "; {generated} flat panel{} converted to new textures",
                             if generated == 1 { "" } else { "s" }
                         ));
                     }
                     if !kept.is_empty() {
-                        status.push_str(&format!(" / original kept as {}", kept.join(", ")));
+                        status.push_str(&format!("; original kept as {}", kept.join(", ")));
                     }
-                    status.push_str(" / Ctrl+Z undo");
+                    status.push_str(". Ctrl+Z undoes it");
                     self.status = status;
                 }
                 Err(e) => self.status = format!("Error: {e}"),
@@ -618,7 +618,7 @@ impl App {
                 return;
             }
             if self.eraser {
-                self.status = "Flat-color panel / nothing painted to erase".into();
+                self.status = "Flat-color panel; nothing painted to erase".into();
                 return;
             }
             if let Err(error) = self.start_generated_stroke(face) {
@@ -1303,7 +1303,7 @@ impl App {
             let (entries, removals) = originals::restore(&self.doc.archive, &name, saved.as_ref())?;
             let org = removals[0].clone();
             self.doc.transaction(entries, &removals)?;
-            format!("Restored {name} from {org} / one undo step")
+            format!("Restored {name} from {org} in one undo step")
         } else if let Some(color) = self.panel_color(&name) {
             let at = at.ok_or("Texture missing")?;
             let mut bytes = self.doc.archive.entries[at].read()?;
@@ -1314,13 +1314,13 @@ impl App {
             }
             self.doc
                 .transaction(vec![self.exact_entry(&name, bytes)?], &[])?;
-            format!("Restored {name} to panel color {color} / one undo step")
+            format!("Restored {name} to panel color {color} in one undo step")
         } else if let (Some(at), Some(saved)) = (at, self.doc.saved_entry(&name).cloned()) {
             if saved.same_storage(&self.doc.archive.entries[at]) {
                 return Err(format!("No stored original for {name}"));
             }
             self.doc.transaction(vec![saved], &[])?;
-            format!("Restored {name} from the saved entry / one undo step")
+            format!("Restored {name} from the saved entry in one undo step")
         } else {
             return Err(format!("No stored original for {name}"));
         };
@@ -1402,7 +1402,7 @@ impl App {
         self.doc.transaction(Vec::new(), &names)?;
         self.reselect(&selected, context);
         self.status = format!(
-            "Removed {} stored original{} (.ORG) / textures unchanged / Ctrl+Z undo",
+            "Removed {} stored original{} (.ORG); textures unchanged. Ctrl+Z undoes it",
             names.len(),
             if names.len() == 1 { "" } else { "s" }
         );
@@ -1813,7 +1813,7 @@ impl App {
         drag(&mut a, &[(8, 8), (9, 9)]);
         let repainted = a.doc.archive.entries[entry].read().unwrap();
         press(&mut a, |x| matches!(x, Action::RestoreTexture));
-        assert_eq!(a.status, "Restored DEMO.PIC from DEMO.ORG / one undo step");
+        assert_eq!(a.status, "Restored DEMO.PIC from DEMO.ORG in one undo step");
         assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
         assert!(a.doc.archive.find("DEMO.ORG").is_none());
         assert_eq!(a.doc.changed_count(), 0);

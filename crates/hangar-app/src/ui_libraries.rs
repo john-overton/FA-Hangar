@@ -1,5 +1,5 @@
 //! Multiple documents share immutable payload buffers and retain independent history.
-use super::view::{border, label_fit, text_fit, Action, Layout};
+use super::view::{count, Action, Icon, Layout};
 use super::*;
 use hangar_core::resource_ops::{self, Choice};
 
@@ -172,7 +172,7 @@ impl App {
         self.libraries.insert(at, current);
         self.restore_library(incoming);
         self.scroll = scroll;
-        self.status = "Active LIB changed / edits and undo history retained".into();
+        self.status = "Active LIB changed; its edits and undo history are kept".into();
         Ok(())
     }
     pub(super) fn other_library_at(&self, path: &str) -> bool {
@@ -284,7 +284,7 @@ impl App {
             path: self.path.clone(),
         });
         self.status = format!(
-            "Copied {} snapshot / select a target LIB and Paste resources",
+            "Copied a snapshot of {}. Select a target LIB and paste resources",
             self.name()
         );
         Ok(())
@@ -335,9 +335,9 @@ impl App {
         self.prompt = Some(Prompt {
             kind: PromptKind::ResourceName(duplicate),
             title: if duplicate {
-                "Duplicate resource / new 8.3 name".into()
+                "Duplicate resource: new 8.3 name".into()
             } else {
-                "Rename resource and reviewed references / new 8.3 name".into()
+                "Rename resource and its reviewed references: new 8.3 name".into()
             },
             value: self.name().into(),
             axis: 0,
@@ -406,10 +406,8 @@ impl App {
         }
         self.transfer_plan = None;
         self.refresh();
-        self.status = moved.map_or("Resources copied / one undo step".into(), |n| {
-            format!(
-                "Moved {n} source entries / shared dependencies kept / undo available in each LIB"
-            )
+        self.status = moved.map_or("Resources copied in one undo step".into(), |n| {
+            format!("Moved {n} source entries; shared dependencies stay; each LIB has its own undo")
         });
         self.transfer_source = None;
         self.transfer_move = false;
@@ -433,80 +431,88 @@ impl App {
         pages
     }
     pub(super) fn transfer_review(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, notched, Btn, Check};
         let Some(plan) = &self.transfer_plan else {
             return;
         };
         let (w, h) = ((self.width - 32).min(900), (self.height - 48).min(650));
         let (x, y) = ((self.width - w) / 2, (self.height - h) / 2);
         o.hits.clear();
-        o.canvas.rect(x, y, w, h, c::GM_800);
-        border(&mut o.canvas, x, y, w, h, c::LINE_STRONG);
-        label_fit(
-            &mut o.canvas,
-            x + 14,
-            y + 25,
-            w - 28,
-            self.prompt
-                .as_ref()
-                .map_or("Resource review", |p| p.title.as_str()),
+        let title = self
+            .prompt
+            .as_ref()
+            .map_or("Resource review", |p| p.title.as_str());
+        let [bx, by, bw, _] = self.dialog_frame(o, [x, y, w, h], title);
+        let summary = if self.transfer_move {
+            format!(
+                "{} incoming. Shared links stay at the source; one undo step per LIB.",
+                count(plan.items.len(), "resource", "resources")
+            )
+        } else {
+            format!(
+                "Target {}: {}, {}, one undo step.",
+                self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path),
+                count(plan.items.len(), "resource", "resources"),
+                count(plan.removals.len(), "removal", "removals")
+            )
+        };
+        o.canvas.styled(
+            bx,
+            baseline(by, m::ROW_H, Style::Label),
+            &fit(&summary, bw, Style::Label),
             c::INK,
+            Style::Label,
         );
-        label_fit(
-            &mut o.canvas,
-            x + 14,
-            y + 49,
-            w - 28,
-            &if self.transfer_move {
-                format!(
-                    "{} incoming / shared links kept at source / one undo per LIB",
-                    plan.items.len()
-                )
-            } else {
-                format!(
-                    "Target: {} / {} resources / {} removals / 1 undo step",
-                    self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path),
-                    plan.items.len(),
-                    plan.removals.len()
-                )
-            },
-            c::STEEL,
-        );
+        // Scope and Copy / Move.
+        let sy = by + m::ROW_H + space::SPACE_1;
+        let mut room = bw;
+        if self.transfer_source.is_some() {
+            let items = [
+                (
+                    Btn::new("Copy").on(!self.transfer_move),
+                    Action::TransferMove(false),
+                ),
+                (
+                    Btn::new("Move").on(self.transfer_move),
+                    Action::TransferMove(true),
+                ),
+            ];
+            let sw = Layout::segmented_width(&items).max(120);
+            o.segmented([bx + bw - sw, sy, sw, m::BUTTON_H], &items);
+            room -= sw + space::SPACE_3;
+        }
         if self.transfer_is_copy {
-            o.button(
-                [
-                    x + 14,
-                    y + 60,
-                    if self.transfer_source.is_some() {
-                        w - 226
-                    } else {
-                        w - 28
-                    },
-                    24,
-                ],
+            o.checkbox_row(
+                [bx, sy + 1, room, m::ROW_H],
+                Some(Icon::Link),
+                "Include linked files",
                 if self.include_dependencies {
-                    "[x] Object and linked files"
+                    "object and its resources"
                 } else {
-                    "[ ] Item only / click for linked files"
+                    "this item only"
+                },
+                if self.include_dependencies {
+                    Check::On
+                } else {
+                    Check::Off
                 },
                 Action::TransferDependencies,
-                self.include_dependencies,
             );
         }
-        if self.transfer_source.is_some() {
-            o.button(
-                [x + w - 200, y + 60, 88, 24],
-                "Copy",
-                Action::TransferMove(false),
-                !self.transfer_move,
-            );
-            o.button(
-                [x + w - 104, y + 60, 90, 24],
-                "Move",
-                Action::TransferMove(true),
-                self.transfer_move,
-            );
-        }
-        let visible = ((h - 235) / 46).max(1) as usize;
+        // One row per incoming resource; collisions choose keep or take.
+        let pages = self.transfer_note_pages(w);
+        let page = self.transfer_note.min(pages.len().saturating_sub(1));
+        let note = pages
+            .get(page)
+            .map(|lines| lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" "));
+        let note_h = note
+            .as_ref()
+            .map_or(0, |t| widgets::notice_height(bw, t.trim()));
+        let list = sy + m::BUTTON_H + space::SPACE_3;
+        let notes_y = y + h - space::SPACE_4 - m::BUTTON_H - space::SPACE_3 - note_h;
+        let pitch = 2 * m::ROW_H + space::SPACE_1;
+        let visible = ((notes_y - space::SPACE_2 - list) / pitch).max(1) as usize;
         for (row, item) in plan
             .items
             .iter()
@@ -515,117 +521,129 @@ impl App {
             .enumerate()
         {
             let i = row + self.transfer_scroll;
-            let yy = y + 96 + row as i32 * 46;
-            o.canvas.rect(x + 12, yy, w - 24, 43, c::GM_900);
-            text_fit(
-                &mut o.canvas,
-                x + 22,
-                yy + 16,
-                w - 260,
-                &item.entry.name,
-                c::INK,
-            );
-            label_fit(
-                &mut o.canvas,
-                x + 22,
-                yy + 35,
-                w - 260,
-                if plan.follows_kept(item) {
-                    "Stored original of a kept target PIC / not copied"
-                } else if item.conflict {
-                    "Different target resource"
-                } else if item.previous.is_some() {
-                    "Existing / unchanged or rewritten"
-                } else {
-                    "New resource"
-                },
+            let yy = list + row as i32 * pitch;
+            let d = &mut o.canvas;
+            notched(d, [bx, yy, bw, 2 * m::ROW_H], Some(c::GM_900), None);
+            let choice_w = 2 * 104 + 2;
+            let tw = bw - choice_w - 3 * space::SPACE_2;
+            d.icon(
+                bx + 6,
+                yy + 2,
+                super::view::group_icon(&item.entry.name),
                 c::INK_MUTED,
+                c::GM_900,
             );
+            d.styled(
+                bx + 6 + m::ICON + space::SPACE_2,
+                baseline(yy, m::ROW_H, Style::Value),
+                &fit(&item.entry.name, tw - m::ICON, Style::Value),
+                c::INK,
+                Style::Value,
+            );
+            d.styled(
+                bx + 6 + m::ICON + space::SPACE_2,
+                baseline(yy + m::ROW_H, m::ROW_H, Style::Label),
+                &fit(
+                    if plan.follows_kept(item) {
+                        "Stored original of a kept target PIC; not copied"
+                    } else if item.conflict {
+                        "A different resource with this name is in the target"
+                    } else if item.previous.is_some() {
+                        "Already in the target; unchanged or rewritten"
+                    } else {
+                        "New resource"
+                    },
+                    tw - m::ICON,
+                    Style::Label,
+                ),
+                c::INK_MUTED,
+                Style::Label,
+            );
+            let cx = bx + bw - space::SPACE_2 - choice_w;
             if item.conflict && !plan.follows_kept(item) {
-                o.button(
-                    [x + w - 236, yy + 9, 102, 25],
-                    "Keep target",
-                    Action::TransferChoice(i, false),
-                    item.choice == Choice::KeepTarget,
-                );
-                o.button(
-                    [x + w - 126, yy + 9, 102, 25],
-                    "Take source",
-                    Action::TransferChoice(i, true),
-                    item.choice == Choice::TakeSource,
+                o.segmented(
+                    [
+                        cx,
+                        yy + (2 * m::ROW_H - m::BUTTON_H) / 2,
+                        choice_w,
+                        m::BUTTON_H,
+                    ],
+                    &[
+                        (
+                            Btn::new("Keep target").on(item.choice == Choice::KeepTarget),
+                            Action::TransferChoice(i, false),
+                        ),
+                        (
+                            Btn::new("Take source").on(item.choice == Choice::TakeSource),
+                            Action::TransferChoice(i, true),
+                        ),
+                    ],
                 );
             } else {
-                label_fit(
-                    &mut o.canvas,
-                    x + w - 212,
-                    yy + 25,
-                    184,
-                    if plan.follows_kept(item) {
-                        "Follows its PIC"
-                    } else if item.choice == Choice::TakeSource {
-                        "Apply"
-                    } else {
-                        "Keep identical target"
-                    },
-                    c::STEEL,
+                let state = if plan.follows_kept(item) {
+                    "Follows its PIC"
+                } else if item.choice == Choice::TakeSource {
+                    "Applies"
+                } else {
+                    "Keeps the identical target"
+                };
+                o.canvas.styled(
+                    cx,
+                    baseline(yy, 2 * m::ROW_H, Style::Label),
+                    &fit(state, choice_w, Style::Label),
+                    c::INK_MUTED,
+                    Style::Label,
                 );
             }
         }
-        let pages = self.transfer_note_pages(w);
-        let page = self.transfer_note.min(pages.len().saturating_sub(1));
-        if let Some(lines) = pages.get(page) {
-            for (i, line) in lines.iter().enumerate() {
-                text_fit(
-                    &mut o.canvas,
-                    x + 14,
-                    y + h - 130 + i as i32 * 18,
-                    w - 28,
-                    line,
-                    c::AMBER,
-                );
-            }
-        }
-        if pages.len() > 1 {
-            o.button(
-                [x + w - 152, y + h - 83, 138, 24],
-                &format!("Notes {}/{}", page + 1, pages.len()),
-                Action::TransferNote,
-                false,
+        if let Some(text) = &note {
+            widgets::notice(
+                &mut o.canvas,
+                bx,
+                notes_y,
+                bw,
+                widgets::Tone::Warn,
+                text.trim(),
             );
         }
-        label_fit(
-            &mut o.canvas,
-            x + 14,
-            y + h - 65,
-            w - 184,
-            "Wheel scroll / one undo step",
-            c::INK_FAINT,
-        );
-        o.button(
-            [x + 14, y + h - 47, 92, 28],
-            "Cancel",
-            Action::Cancel,
-            false,
-        );
-        if plan.ready() {
-            o.button(
-                [x + w - 168, y + h - 47, 154, 28],
-                if self.transfer_move {
+        let ready = plan.ready();
+        let left_buttons: Vec<(String, Action)> = if pages.len() > 1 {
+            vec![(
+                format!("Notes {} of {}", page + 1, pages.len()),
+                Action::TransferNote,
+            )]
+        } else {
+            Vec::new()
+        };
+        let left: Vec<(&str, Action)> =
+            left_buttons.iter().map(|(t, a)| (t.as_str(), *a)).collect();
+        self.dialog_actions(
+            o,
+            [x, y, w, h],
+            &left,
+            Some("Cancel"),
+            Some(
+                Btn::new(if self.transfer_move {
                     "Move resources"
                 } else {
                     "Apply resources"
-                },
-                Action::Apply,
-                true,
-            );
-        } else {
-            label_fit(
-                &mut o.canvas,
-                x + 126,
-                y + h - 27,
-                w - 144,
-                "Resolve all collisions to apply",
-                c::AMBER,
+                })
+                .primary()
+                .enabled(ready),
+            ),
+            Action::Apply,
+        );
+        if !ready {
+            let ey = y + h - space::SPACE_4 - m::BUTTON_H;
+            let ex = x + w / 3;
+            o.canvas
+                .icon(ex, ey + 3, Icon::Warning, c::AMBER, c::GM_800);
+            o.canvas.styled(
+                ex + m::ICON + space::SPACE_1,
+                baseline(ey, m::BUTTON_H, Style::Label),
+                &fit("Resolve every collision to apply", w / 3, Style::Label),
+                c::INK,
+                Style::Label,
             );
         }
     }
@@ -853,12 +871,12 @@ impl App {
         self.transfer_plan.as_mut().unwrap().notes.push("When moving, known shared dependencies stay in the source. Linked files supplied by other LIBs are copied. Each changed LIB has its own undo step.".into());
         if let Some(prompt) = &mut self.prompt {
             prompt.title = format!(
-                "Transfer {} / choose scope and Copy or Move",
+                "Transfer {}: choose scope, then Copy or Move",
                 self.clipboard.as_ref().unwrap().name
             );
         }
         self.status =
-            "Review item only or linked resources before moving / files are unchanged until saved"
+            "Review the item or its linked resources before moving; files change only when saved"
                 .into();
         Ok(())
     }

@@ -1,4 +1,4 @@
-use super::view::{border, icon, label_fit, text_fit, Action, Icon, Layout};
+use super::view::{Action, Icon, Layout};
 use super::*;
 impl App {
     pub(super) fn browser_path(&self, value: &str) -> String {
@@ -138,6 +138,8 @@ impl App {
         }
     }
     pub(super) fn browser_layout(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, notched, subhead, Btn};
         let Some(p) = &self.prompt else {
             return;
         };
@@ -146,164 +148,174 @@ impl App {
         };
         let w = (self.width - 32).min(900);
         let h = (self.height - 48).min(620);
-        let x = (self.width - w) / 2;
-        let y = (self.height - h) / 2;
-        let side = 180;
+        let (x, y) = ((self.width - w) / 2, (self.height - h) / 2);
         o.hits.clear();
-        let d = &mut o.canvas;
-        d.rect(x + 4, y + 5, w, h, c::GM_1000);
-        d.rect(x, y, w, h, c::GM_800);
-        border(d, x, y, w, h, c::LINE_STRONG);
-        d.rect(x + 1, y + 1, w - 2, 31, c::GM_700);
-        label_fit(d, x + 12, y + 22, w - 28, &p.title, c::INK);
-        o.button([x + 10, y + 41, 52, 24], "Up", Action::BrowserUp, false);
-        o.button(
-            [x + 69, y + 41, 69, 24],
-            "Drives",
+        let [bx, by, bw, _] = self.dialog_frame(o, [x, y, w, h], &p.title);
+        let side = 172;
+        let lx = bx + side;
+        let lw = bw - side;
+        // Navigation: Up, Drives, then the current folder.
+        let up = Btn::new("Up").with_icon(Icon::ChevronLeft);
+        let uw = up.width();
+        o.button_ex([bx, by, uw, m::BUTTON_H], up, Action::BrowserUp);
+        let drives = Btn::new("Drives").with_icon(Icon::Folder);
+        o.button_ex(
+            [
+                bx + uw + space::SPACE_1,
+                by,
+                side - uw - space::SPACE_1 - space::SPACE_2,
+                m::BUTTON_H,
+            ],
+            drives,
             Action::BrowserRoots,
-            false,
         );
-        o.canvas
-            .rect(x + side, y + 40, w - side - 12, 25, c::GM_950);
-        text_fit(
-            &mut o.canvas,
-            x + side + 8,
-            y + 58,
-            w - side - 28,
-            &b.folder,
+        let d = &mut o.canvas;
+        notched(
+            d,
+            [lx, by, lw, m::BUTTON_H],
+            Some(c::GM_950),
+            Some(c::LINE_STRONG),
+        );
+        d.styled(
+            lx + 8,
+            baseline(by, m::BUTTON_H, Style::Value),
+            &fit(&b.folder, lw - 16, Style::Value),
             c::INK_MUTED,
+            Style::Value,
         );
-        o.canvas.label(x + 14, y + 94, "RECENT LIBS", c::INK_FAINT);
+        // Recent LIBs.
+        let ry = by + m::BUTTON_H + space::SPACE_2;
+        subhead(d, bx, ry, side - space::SPACE_2, "Recent LIBs");
+        let foot = y + h - 150;
         for (i, path) in self.recent.iter().enumerate() {
-            let yy = y + 109 + i as i32 * 46;
-            if yy + 38 > y + h - 134 {
+            let yy = ry + m::ROW_H + i as i32 * 38;
+            if yy + 36 > foot {
                 break;
             }
+            let rect = [bx, yy, side - space::SPACE_2, 36];
+            let fill = if o.over(rect) { c::GM_700 } else { c::GM_900 };
+            let d = &mut o.canvas;
+            notched(d, rect, Some(fill), None);
             let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-            o.canvas.rect(x + 8, yy, side - 18, 40, c::GM_900);
-            text_fit(&mut o.canvas, x + 16, yy + 16, side - 34, name, c::INK);
-            text_fit(
-                &mut o.canvas,
-                x + 16,
-                yy + 33,
-                side - 34,
-                path,
-                c::INK_FAINT,
+            d.styled(
+                bx + 6,
+                baseline(yy + 2, 16, Style::Value),
+                &fit(name, side - 22, Style::Value),
+                c::INK,
+                Style::Value,
             );
-            o.hit([x + 8, yy, side - 18, 40], Action::Recent(i));
+            d.styled(
+                bx + 6,
+                baseline(yy + 18, 16, Style::ValueSm),
+                &fit(path, side - 22, Style::ValueSm),
+                c::INK_MUTED,
+                Style::ValueSm,
+            );
+            o.hit(rect, Action::Recent(i));
         }
-        let list_y = y + 78;
-        let list_h = h - 218;
-        o.canvas
-            .rect(x + side, list_y, w - side - 12, list_h, c::GM_950);
+        // Folder contents.
+        let list_y = ry;
+        let list_h = foot - list_y;
+        o.canvas.rect(lx, list_y, lw, list_h, c::GM_950);
         for (row, (i, item)) in b
             .files
             .iter()
             .enumerate()
             .skip(b.scroll)
-            .take((list_h / 24) as usize)
+            .take((list_h / m::ROW_H) as usize)
             .enumerate()
         {
-            let yy = list_y + row as i32 * 24;
+            let yy = list_y + row as i32 * m::ROW_H;
+            let rect = [lx, yy, lw, m::ROW_H];
             let selected = p.value == item.path;
-            o.canvas.rect(
-                x + side,
-                yy,
-                w - side - 12,
-                24,
-                if selected {
-                    c::AMBER_DEEP
-                } else if row % 2 == 0 {
-                    c::GM_900
-                } else {
-                    c::GM_950
-                },
-            );
-            icon(
-                &mut o.canvas,
-                x + side + 8,
-                yy + 4,
+            let fill = if selected {
+                c::AMBER_DEEP
+            } else if o.over(rect) {
+                c::GM_700
+            } else if row % 2 == 0 {
+                c::GM_900
+            } else {
+                c::GM_950
+            };
+            let d = &mut o.canvas;
+            d.rect(lx, yy, lw, m::ROW_H, fill);
+            d.icon(
+                lx + 6,
+                yy + 2,
                 if item.directory {
+                    Icon::Folder
+                } else {
                     Icon::Lib
-                } else {
-                    Icon::Mission
                 },
-                if item.directory {
-                    c::STEEL
-                } else {
-                    c::INK_MUTED
-                },
+                if selected { c::AMBER } else { c::INK_MUTED },
+                fill,
             );
-            text_fit(
-                &mut o.canvas,
-                x + side + 33,
-                yy + 17,
-                w - side - 51,
-                &item.name,
-                if selected { c::AMBER } else { c::INK },
+            d.styled(
+                lx + 6 + m::ICON + space::SPACE_2,
+                baseline(yy, m::ROW_H, Style::Value),
+                &fit(&item.name, lw - 40, Style::Value),
+                if selected { c::AMBER_BRIGHT } else { c::INK },
+                Style::Value,
             );
-            o.hit([x + side, yy, w - side - 12, 24], Action::BrowserPick(i));
+            o.hit(rect, Action::BrowserPick(i));
         }
-        o.canvas.label(
-            x + side,
-            y + h - 122,
-            if matches!(p.kind, PromptKind::File(FileAction::Save)) {
-                if hangar_core::save::protected_name(&p.value).is_some() {
-                    "Protected retail name: choose a different LIB filename."
-                } else {
-                    "Save custom LIB; an existing file gets a numbered .bak backup."
-                }
+        let d = &mut o.canvas;
+        let hint = if matches!(p.kind, PromptKind::File(FileAction::Save)) {
+            if hangar_core::save::protected_name(&p.value).is_some() {
+                "Retail LIB names are protected. Choose a different file name."
             } else {
-                "Click a folder to enter; select a file, then Open / Apply."
-            },
-            c::INK_FAINT,
-        );
-        o.canvas.label(
-            x + 12,
-            y + h - 103,
-            "FILE / PATH (type to edit; Ctrl+A clears)",
+                "Saves a custom LIB; an existing file is kept as a numbered .bak."
+            }
+        } else {
+            "Click a folder to open it; select a file, then confirm."
+        };
+        d.styled(
+            bx,
+            baseline(foot + space::SPACE_1, m::ROW_H, Style::Label),
+            &fit(hint, bw, Style::Label),
             c::INK_MUTED,
+            Style::Label,
         );
-        o.canvas.rect(x + 12, y + h - 93, w - 24, 28, c::GM_950);
-        border(&mut o.canvas, x + 12, y + h - 93, w - 24, 28, c::FOCUS);
-        let tail: String = p
-            .value
-            .chars()
-            .rev()
-            .take(((w - 46) / 7) as usize)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        o.canvas
-            .text(x + 20, y + h - 74, &format!("{tail}_"), c::INK);
-        if self.status.starts_with("Error:") {
-            label_fit(
-                &mut o.canvas,
-                x + 12,
-                y + h - 47,
-                w - 244,
-                &self.status,
+        d.styled(
+            bx,
+            baseline(foot + m::ROW_H + space::SPACE_1, m::ROW_H, Style::Label),
+            "File path",
+            c::INK_MUTED,
+            Style::Label,
+        );
+        self.dialog_input(
+            o,
+            [bx, foot + 2 * m::ROW_H + space::SPACE_1, bw, 26],
+            &p.value,
+        );
+        if let Some(error) = self.status.strip_prefix("Error: ") {
+            let ey = y + h - space::SPACE_4 - m::BUTTON_H;
+            o.canvas
+                .icon(bx, ey + 3, Icon::Warning, c::DANGER, c::GM_800);
+            o.canvas.styled(
+                bx + m::ICON + space::SPACE_1,
+                baseline(ey, m::BUTTON_H, Style::Label),
+                &fit(error, bw - 260, Style::Label),
                 c::DANGER,
+                Style::Label,
             );
         }
-        o.button(
-            [x + w - 224, y + h - 46, 96, 29],
-            "Cancel",
-            Action::Cancel,
-            false,
-        );
-        o.button(
-            [x + w - 116, y + h - 46, 104, 29],
-            if matches!(p.kind, PromptKind::File(FileAction::Open)) {
-                "Open LIB"
-            } else if matches!(p.kind, PromptKind::File(FileAction::Save)) {
-                "Save LIB"
-            } else {
-                "Apply"
-            },
+        self.dialog_actions(
+            o,
+            [x, y, w, h],
+            &[],
+            Some("Cancel"),
+            Some(
+                Btn::new(if matches!(p.kind, PromptKind::File(FileAction::Open)) {
+                    "Open LIB"
+                } else if matches!(p.kind, PromptKind::File(FileAction::Save)) {
+                    "Save LIB"
+                } else {
+                    "Apply"
+                })
+                .primary(),
+            ),
             Action::Apply,
-            true,
         );
     }
 }

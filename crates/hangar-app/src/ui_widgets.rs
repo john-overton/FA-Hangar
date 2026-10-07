@@ -1648,7 +1648,15 @@ impl App {
             self.scrub = None;
             self.prompt = Some(Prompt {
                 kind: PromptKind::Number(t),
-                title: "Type a value".into(),
+                title: match t {
+                    NumberTarget::Field(i) => self
+                        .brf
+                        .as_ref()
+                        .and_then(|b| b.fields.get(i))
+                        .map_or("Value".into(), |f| f.label.clone()),
+                    NumberTarget::Station(_) => format!("HP{} value", self.hp_selected + 1),
+                    NumberTarget::Decal(_) => "Decal placement".into(),
+                },
                 value: format_number(spec.value, spec.decimals).replace(',', ""),
                 axis: 0,
             });

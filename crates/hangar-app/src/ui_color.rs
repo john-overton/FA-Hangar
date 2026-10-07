@@ -1,4 +1,4 @@
-use super::view::{border, label_fit, Action, Layout};
+use super::view::{Action, Layout};
 use super::*;
 impl App {
     pub(super) fn dominant_color(&self) -> Option<u8> {
@@ -26,7 +26,7 @@ impl App {
         };
         let Some(color) = color else {
             self.media_tab = 1;
-            self.status = "This surface uses a texture; edit its PIC in Paint / Materials".into();
+            self.status = "This surface uses a texture; edit its PIC in Paint or Materials".into();
             return;
         };
         self.base_color_from = color;
@@ -38,7 +38,7 @@ impl App {
             title: if face {
                 "Panel color".into()
             } else {
-                "Base color / matching visible flat-color faces".into()
+                "Base color of the visible flat-color faces".into()
             },
             value: String::new(),
             axis: 0,
@@ -61,38 +61,34 @@ impl App {
         };
         self.doc.replace(entry, bytes)?;
         self.refresh();
-        self.status = "Model color changed / one undo step / textures remain separate".into();
+        self.status = "Model color changed in one undo step; textures are unchanged".into();
         Ok(())
     }
     pub(super) fn color_dialog(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, Btn};
         let (w, h) = ((self.width - 40).min(600), (self.height - 60).min(610));
         let (x, y) = ((self.width - w) / 2, (self.height - h) / 2);
-        let cell = ((w - 28) / 16).min((h - 128) / 16);
-        let gx = x + (w - cell * 16) / 2;
         o.hits.clear();
-        o.canvas.rect(x, y, w, h, c::GM_800);
-        border(&mut o.canvas, x, y, w, h, c::LINE_STRONG);
-        label_fit(
-            &mut o.canvas,
-            x + 14,
-            y + 24,
-            w - 28,
-            self.prompt
-                .as_ref()
-                .map_or("Base color", |p| p.title.as_str()),
+        let title = self
+            .prompt
+            .as_ref()
+            .map_or("Base color", |p| p.title.as_str());
+        let [bx, by, bw, bh] = self.dialog_frame(o, [x, y, w, h], title);
+        o.canvas.styled(
+            bx,
+            baseline(by, m::ROW_H, Style::Value),
+            &format!("Index {} \u{2192} {}", self.base_color_from, self.brush),
             c::INK,
+            Style::Value,
         );
-        label_fit(
-            &mut o.canvas,
-            x + 14,
-            y + 49,
-            w - 28,
-            &format!("Palette index {} -> {}", self.base_color_from, self.brush),
-            c::AMBER,
-        );
+        let grid_top = by + m::ROW_H + space::SPACE_2;
+        let room = bh - m::ROW_H - space::SPACE_2 - 2 * m::ROW_H - m::BUTTON_H;
+        let cell = (bw / 16).min(room / 16);
+        let gx = x + (w - cell * 16) / 2;
         for i in 0..256 {
             let xx = gx + (i % 16) * cell;
-            let yy = y + 66 + (i / 16) * cell;
+            let yy = grid_top + (i / 16) * cell;
             let rgb = self.base_palette[i as usize];
             o.canvas.rect(
                 xx,
@@ -102,33 +98,36 @@ impl App {
                 theme::Rgb((rgb[0] as u32) << 16 | (rgb[1] as u32) << 8 | rgb[2] as u32),
             );
             if i == self.brush as i32 {
-                border(&mut o.canvas, xx - 1, yy - 1, cell + 1, cell + 1, c::INK);
+                widgets::frame(&mut o.canvas, [xx - 1, yy - 1, cell + 1, cell + 1], c::INK);
             }
-            o.hit([xx, yy, cell, cell], Action::Brush(i as u8));
+            o.hit([xx, yy, cell - 1, cell - 1], Action::Brush(i as u8));
         }
-        label_fit(
-            &mut o.canvas,
-            x + 14,
-            y + h - 49,
-            w - 28,
-            if self.palette_loaded {
-                "Shared SH users see this color change."
-            } else {
-                "Palette missing: indices shown in grayscale."
-            },
+        o.canvas.styled(
+            bx,
+            baseline(
+                grid_top + 16 * cell + space::SPACE_1,
+                m::ROW_H,
+                Style::Label,
+            ),
+            &fit(
+                if self.palette_loaded {
+                    "Every user of a shared SH sees this color change."
+                } else {
+                    "No palette loaded: indices show in grayscale."
+                },
+                bw,
+                Style::Label,
+            ),
             c::INK_MUTED,
+            Style::Label,
         );
-        o.button(
-            [x + 14, y + h - 37, 92, 26],
-            "Cancel",
-            Action::Cancel,
-            false,
-        );
-        o.button(
-            [x + w - 150, y + h - 37, 136, 26],
-            "Apply color",
+        self.dialog_actions(
+            o,
+            [x, y, w, h],
+            &[],
+            Some("Cancel"),
+            Some(Btn::new("Apply color").primary()),
             Action::Apply,
-            true,
         );
     }
 }

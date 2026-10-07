@@ -179,10 +179,6 @@ pub(super) fn category_of(name: &str) -> usize {
 pub(super) fn group_icon(name: &str) -> Icon {
     GROUPS[category_of(name)].2
 }
-/// Draw a generated icon on the default editor ground (`gm-800`).
-pub(super) fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
-    d.icon(x, y, i, color, c::GM_800);
-}
 pub(super) fn border(d: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Rgb) {
     d.line(x, y, x + w - 1, y, color);
     d.line(x, y + h - 1, x + w - 1, y + h - 1, color);
@@ -253,7 +249,7 @@ impl App {
             }
             Action::BrowserRoots => {
                 self.browser = Some(Browser {
-                    folder: "Drives / locations".into(),
+                    folder: "Drives and locations".into(),
                     files: crate::platform::roots()
                         .into_iter()
                         .map(|p| FileItem {
@@ -379,7 +375,7 @@ impl App {
                 self.model_paint = false;
                 self.paint_enabled = false;
                 self.pick_color = false;
-                self.status = "Select tool / click a face to select it".into();
+                self.status = "Select tool: click a face to select it".into();
             }
             Action::MeshAll => self.mesh_toggle_all(),
             Action::MeshMove => self.mesh_transform_prompt('g'),
@@ -408,7 +404,7 @@ impl App {
                     self.clone_draft = None;
                     self.prompt = Some(Prompt {
                         kind: PromptKind::CloneTitle,
-                        title: "Export object / step 2: display name".into(),
+                        title: "Export object, step 2: display name".into(),
                         value: self.clone_title.clone(),
                         axis: 0,
                     });
@@ -418,7 +414,7 @@ impl App {
                     }
                     self.prompt = Some(Prompt {
                         kind: PromptKind::CloneId,
-                        title: "Export object / step 1: new object ID".into(),
+                        title: "Export object, step 1: new object ID".into(),
                         value: self.variant_id.clone(),
                         axis: 0,
                     });
@@ -624,7 +620,9 @@ impl App {
             Action::AnimationState(address) => {
                 self.prompt = Some(Prompt {
                     kind: PromptKind::AnimationState(address),
-                    title: format!("Preview state {address:08X} / integer value; does not edit SH"),
+                    title: format!(
+                        "Preview state {address:08X}: integer value; the SH is not edited"
+                    ),
                     value: self
                         .animation_state
                         .get(&address)
@@ -686,7 +684,7 @@ impl App {
             Action::DecalLibrary => {
                 self.prompt = Some(Prompt {
                     kind: PromptKind::DecalLibrary,
-                    title: "Imported PNG / squadron library".into(),
+                    title: "Squadron library".into(),
                     value: String::new(),
                     axis: 0,
                 });
@@ -710,7 +708,7 @@ impl App {
             Action::DecalInk => {
                 self.prompt = Some(Prompt {
                     kind: PromptKind::DecalInk,
-                    title: "Tail-text ink / palette index 0..255".into(),
+                    title: "Tail-text ink: palette index 0 to 255".into(),
                     value: format!("{}", self.text_ink()),
                     axis: 0,
                 })
@@ -718,7 +716,7 @@ impl App {
             Action::DecalText => {
                 self.prompt = Some(Prompt {
                     kind: PromptKind::DecalText,
-                    title: "Tail number / letters, digits, space, dash, slash, period".into(),
+                    title: "Tail number: letters, digits, space, dash, slash, period".into(),
                     value: self.decal_text.clone(),
                     axis: 0,
                 })
@@ -1959,43 +1957,39 @@ impl App {
             return;
         }
         // Shape: a Select of the shapes this entry uses; the link button
-        // shows its references in the dock.
-        let select = self.shape_select_rect();
-        let y = select[1];
-        o.prop_row(
-            [
-                r + 1 + space::SPACE_1 + space::SPACE_2,
-                y,
-                self.width
-                    - space::SPACE_1
-                    - 4
-                    - space::SPACE_2
-                    - (r + 1 + space::SPACE_1 + space::SPACE_2),
-                m::ROW_H,
-            ],
-            "Shape",
-        );
+        // shows its references in the dock. Entries without one skip the row.
         let shapes = self.shape_items();
-        match shapes.first() {
-            Some((name, _)) => o.select(
-                select,
-                Some(Icon::Shape),
-                name,
-                Action::Menu(chrome::MENU_SHAPE),
-                self.menu == Some(chrome::MENU_SHAPE),
-            ),
-            None => o.text_field(select, "No linked shape", false, Action::Dock(4)),
-        }
-        o.icon_button(
-            select[0] + select[2] + space::SPACE_1,
-            y - 1,
-            Btn::icon(Icon::Link)
-                .ghost()
-                .on(self.dock == 4)
-                .enabled(!self.doc.archive.entries.is_empty()),
-            Action::Dock(4),
-        );
-        let mut s = self.inspector_stack(y + m::FIELD_H + space::SPACE_2, 0);
+        let mut s = match shapes.first() {
+            Some((name, _)) => {
+                let select = self.shape_select_rect();
+                let y = select[1];
+                let x = r + 1 + space::SPACE_1 + space::SPACE_2;
+                o.prop_row(
+                    [
+                        x,
+                        y,
+                        self.width - space::SPACE_1 - 4 - space::SPACE_2 - x,
+                        m::ROW_H,
+                    ],
+                    "Shape",
+                );
+                o.select(
+                    select,
+                    Some(Icon::Shape),
+                    name,
+                    Action::Menu(chrome::MENU_SHAPE),
+                    self.menu == Some(chrome::MENU_SHAPE),
+                );
+                o.icon_button(
+                    select[0] + select[2] + space::SPACE_1,
+                    y - 1,
+                    Btn::icon(Icon::Link).ghost().on(self.dock == 4),
+                    Action::Dock(4),
+                );
+                self.inspector_stack(y + m::FIELD_H + space::SPACE_2, 0)
+            }
+            None => self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, 0),
+        };
         let rows = self.property_rows();
         let mut group = "";
         for (section, label, i) in &rows {
@@ -2446,72 +2440,102 @@ impl App {
             h - DIALOG_HEAD - space::SPACE_3 - space::SPACE_4,
         ]
     }
+    /// Sunken text input with a `focus` border, the end of `value` and a caret.
+    pub(super) fn dialog_input(&self, o: &mut Layout, rect: [i32; 4], value: &str) {
+        use widgets::{baseline, notched};
+        let [x, y, w, h] = rect;
+        notched(&mut o.canvas, rect, Some(c::GM_950), Some(c::FOCUS));
+        let mut text = value.to_string();
+        while !text.is_empty() && text_width(&text, Style::Value) > w - 20 {
+            text.remove(0);
+        }
+        o.canvas.styled(
+            x + 8,
+            baseline(y, h, Style::Value),
+            &text,
+            c::INK,
+            Style::Value,
+        );
+        let cx = x + 9 + text_width(&text, Style::Value);
+        o.canvas.rect(cx, y + 5, 1, h - 10, c::INK);
+    }
+    /// Dialog footer buttons, right-aligned at the bottom of `rect`: a ghost
+    /// Cancel (when given) and the dialog's action; `left` buttons start at
+    /// the left edge.
+    pub(super) fn dialog_actions(
+        &self,
+        o: &mut Layout,
+        rect: [i32; 4],
+        left: &[(&str, Action)],
+        cancel: Option<&str>,
+        main: Option<widgets::Btn>,
+        action: Action,
+    ) {
+        use theme::{metric as m, space};
+        use widgets::Btn;
+        let [x, y, w, h] = rect;
+        let by = y + h - space::SPACE_4 - m::BUTTON_H;
+        let mut lx = x + space::SPACE_4;
+        for (title, a) in left {
+            let b = Btn::new(title);
+            let bw = b.width();
+            o.button_ex([lx, by, bw, m::BUTTON_H], b, *a);
+            lx += bw + space::SPACE_2;
+        }
+        let mut rx = x + w - space::SPACE_4;
+        if let Some(b) = main {
+            let bw = b.width().max(80);
+            rx -= bw;
+            o.button_ex([rx, by, bw, m::BUTTON_H], b, action);
+            rx -= space::SPACE_2;
+        }
+        if let Some(title) = cancel {
+            let b = Btn::new(title).ghost();
+            let bw = b.width();
+            o.button_ex([rx - bw, by, bw, m::BUTTON_H], b, Action::Cancel);
+        }
+    }
     fn prompt_layout(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, notice, Btn, Tone};
         let p = self.prompt.as_ref().unwrap();
-        let w = (self.width - 48).min(710);
-        let x = (self.width - w) / 2;
-        let y = self.height / 2 - 112;
+        let w = (self.width - 48).min(640);
+        let h = 196;
+        let rect = [(self.width - w) / 2, self.height / 2 - h / 2, w, h];
         o.hits.clear();
-        let d = &mut o.canvas;
-        d.rect(x, y, w, 224, c::GM_800);
-        border(d, x, y, w, 224, c::LINE_STRONG);
-        d.rect(x + 1, y + 1, w - 2, 34, c::GM_700);
-        icon(d, x + 12, y + 9, Icon::Lib, c::STEEL);
-        label_fit(d, x + 38, y + 22, w - 54, &p.title, c::INK);
+        let body = self.dialog_frame(o, rect, &p.title);
+        let [bx, by, bw, _] = body;
         if matches!(p.kind, PromptKind::Discard | PromptKind::CloseLibrary) {
-            label_fit(
-                d,
-                x + 18,
-                y + 70,
-                w - 36,
-                "Unsaved edits will be discarded. Saved files are unchanged.",
-                c::INK_MUTED,
+            notice(
+                &mut o.canvas,
+                bx,
+                by,
+                bw,
+                Tone::Warn,
+                "Unsaved edits will be discarded. Files on disk are unchanged; Cancel returns to the editor.",
             );
-            label_fit(
-                d,
-                x + 18,
-                y + 102,
-                w - 36,
-                "Cancel returns to the editor.",
-                c::INK_MUTED,
-            );
-            o.button(
-                [x + w - 300, y + 181, 110, 26],
-                "Cancel",
-                Action::Cancel,
-                true,
-            );
-            o.button(
-                [x + w - 176, y + 181, 158, 26],
-                "Discard changes",
+            self.dialog_actions(
+                o,
+                rect,
+                &[],
+                Some("Cancel"),
+                Some(Btn::new("Discard changes").with_icon(Icon::Close).danger()),
                 Action::DiscardChanges,
-                false,
             );
             return;
         }
-        d.label(
-            x + 18,
-            y + 60,
+        o.canvas.styled(
+            bx,
+            baseline(by, m::ROW_H, Style::Label),
             if matches!(p.kind, PromptKind::File(_)) {
                 "File path"
             } else {
                 "Value"
             },
             c::INK_MUTED,
+            Style::Label,
         );
-        d.rect(x + 16, y + 74, w - 32, 31, c::GM_950);
-        border(d, x + 16, y + 74, w - 32, 31, c::FOCUS);
-        let limit = ((w - 54) / 7) as usize;
-        let value: String = p
-            .value
-            .chars()
-            .rev()
-            .take(limit)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect();
-        d.text(x + 26, y + 94, &format!("{value}_"), c::INK);
+        self.dialog_input(o, [bx, by + m::ROW_H, bw, 26], &p.value);
         let hint = if let PromptKind::Transform(op) = p.kind {
             let lock = match (p.axis, op) {
                 (0..=2, _) => format!("Axis {}", ['X', 'Y', 'Z'][p.axis]),
@@ -2519,46 +2543,57 @@ impl App {
                 (_, 'r') => format!("View axis {}", ['X', 'Y', 'Z'][self.view_axis()]),
                 _ => "Uniform".into(),
             };
-            format!("{lock} / X Y Z toggles the axis lock / integer value")
+            format!("{lock}. X, Y or Z toggles the axis lock; integer values.")
         } else if matches!(p.kind, PromptKind::StationMove) {
             format!(
-                "Axis {} / X Y Z to constrain / integer value",
+                "Axis {}. X, Y or Z picks the axis; integer offset.",
                 ['X', 'Y', 'Z'][p.axis.min(2)]
             )
         } else {
-            "Enter applies / Esc cancels / Ctrl+A clears".into()
+            "Enter applies, Esc cancels, Ctrl+A clears.".into()
         };
-        label_fit(d, x + 18, y + 129, w - 36, &hint, c::INK_MUTED);
-        if self.status.starts_with("Error:") {
-            icon(d, x + 18, y + 143, Icon::Warning, c::DANGER);
-            label_fit(d, x + 42, y + 157, w - 60, &self.status, c::DANGER);
-        }
-        if matches!(p.kind, PromptKind::CloneTitle) {
-            o.button(
-                [x + 16, y + 181, 138, 26],
-                "Add source LIB",
-                Action::File(FileAction::CloneSource),
-                false,
+        let hy = by + m::ROW_H + 26 + space::SPACE_1;
+        o.canvas.styled(
+            bx,
+            baseline(hy, m::ROW_H, Style::Label),
+            &fit(&hint, bw, Style::Label),
+            c::INK_MUTED,
+            Style::Label,
+        );
+        if let Some(error) = self.status.strip_prefix("Error: ") {
+            let ey = hy + m::ROW_H + space::SPACE_1;
+            o.canvas
+                .icon(bx, ey + 2, Icon::Warning, c::DANGER, c::GM_800);
+            o.canvas.styled(
+                bx + m::ICON + space::SPACE_1,
+                baseline(ey, m::ROW_H, Style::Label),
+                &fit(error, bw - m::ICON - space::SPACE_1, Style::Label),
+                c::DANGER,
+                Style::Label,
             );
         }
-        if matches!(p.kind, PromptKind::CloneTitle) {
-            o.button([x + 167, y + 181, 78, 26], "Back", Action::CloneBack, false);
-        }
-        o.button(
-            [x + w - 204, y + 181, 86, 26],
-            "Cancel",
-            Action::Cancel,
-            false,
-        );
-        o.button(
-            [x + w - 107, y + 181, 89, 26],
-            if matches!(p.kind, PromptKind::File(FileAction::Open)) {
-                "Open LIB"
-            } else {
-                "Apply"
-            },
+        let left: &[(&str, Action)] = if matches!(p.kind, PromptKind::CloneTitle) {
+            &[
+                ("Add source LIB", Action::File(FileAction::CloneSource)),
+                ("Back", Action::CloneBack),
+            ]
+        } else {
+            &[]
+        };
+        self.dialog_actions(
+            o,
+            rect,
+            left,
+            Some("Cancel"),
+            Some(
+                Btn::new(if matches!(p.kind, PromptKind::File(FileAction::Open)) {
+                    "Open LIB"
+                } else {
+                    "Apply"
+                })
+                .primary(),
+            ),
             Action::Apply,
-            true,
         );
     }
 }

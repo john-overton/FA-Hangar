@@ -75,13 +75,13 @@ impl App {
     pub(super) fn material_prompt(&mut self, kind: u8) {
         let (title, value, prompt) = match kind {
             0 => (
-                "Palette index / 0..255".into(),
+                "Palette index, 0 to 255".into(),
                 format!("{}", self.brush),
                 PromptKind::PaletteIndex,
             ),
             1 => match self.palette_rgb() {
                 Ok(p) => (
-                    "RGB / three source components 0..63".into(),
+                    "RGB: three source components, 0 to 63".into(),
                     format!("{} {} {}", p[0], p[1], p[2]),
                     PromptKind::PaletteColor,
                 ),
@@ -96,7 +96,7 @@ impl App {
                 PromptKind::UvMaterial,
             ),
             _ => (
-                "Clone texture across aircraft SH family / new PIC name".into(),
+                "Clone the texture across the aircraft SH family: new PIC name".into(),
                 "LIVERY.PIC".into(),
                 PromptKind::FamilyTexture,
             ),
@@ -121,7 +121,7 @@ impl App {
         let source = self.doc.archive.entries[entry].read()?;
         let bytes = material::palette_color(&source, pic, self.brush as usize, rgb)?;
         if bytes == source {
-            self.status = "Palette color unchanged / nothing changed".into();
+            self.status = "Palette color unchanged".into();
             return Ok(());
         }
         if pic {
@@ -133,7 +133,7 @@ impl App {
         }
         self.refresh();
         self.status =
-            "Palette color changed / all users of this palette see the change / Ctrl+Z undo".into();
+            "Palette color changed for every user of this palette. Ctrl+Z undoes it".into();
         Ok(())
     }
     pub(super) fn uv_edit(&mut self, value: &str) -> Result<()> {
@@ -166,7 +166,8 @@ impl App {
         self.doc.replace(entry, bytes)?;
         self.refresh();
         self.selected_face = Some(face);
-        self.status = "UV record updated / shared instances use the same UVs / Ctrl+Z undo".into();
+        self.status =
+            "UV record updated; shared instances use the same UVs. Ctrl+Z undoes it".into();
         Ok(())
     }
     pub(super) fn family_texture(&mut self, name: &str) -> Result<()> {
@@ -197,7 +198,7 @@ impl App {
             self.media_tab = 0;
         }
         self.status = format!(
-            "Texture cloned / {shapes} SH modules retargeted across stored states / one undo step"
+            "Texture cloned; {shapes} SH modules retargeted across stored states in one undo step"
         );
         Ok(())
     }
@@ -399,7 +400,7 @@ impl App {
         self.doc.transaction(entries, &[])?;
         self.refresh();
         self.decal_active = false;
-        self.status = format!("Decal baked into {count} indexed pixels / one Ctrl+Z undo step");
+        self.status = format!("Decal baked into {count} indexed pixels in one undo step");
         Ok(())
     }
     pub(super) fn material_inspector(&self, o: &mut Layout, top: i32) {

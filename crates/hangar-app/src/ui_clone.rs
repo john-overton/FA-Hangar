@@ -1,4 +1,4 @@
-use super::view::{border, label_fit, Action, Layout};
+use super::view::{Action, Icon, Layout};
 use super::*;
 use alloc::collections::BTreeSet;
 use hangar_core::{
@@ -63,7 +63,7 @@ impl App {
         self.prompt = Some(Prompt {
             kind: PromptKind::CloneId,
             title: format!(
-                "Export object from {} / step 1: new ID (1..6 letters/digits)",
+                "Export object from {}, step 1: new ID of 1 to 6 letters or digits",
                 self.name()
             ),
             value: format!("{prefix}V1"),
@@ -81,7 +81,7 @@ impl App {
         self.clone_sources.push(path.into());
         self.prompt = Some(Prompt {
             kind: PromptKind::CloneTitle,
-            title: "Export object / step 2: display name".into(),
+            title: "Export object, step 2: display name".into(),
             value: self.clone_title.clone(),
             axis: 0,
         });
@@ -210,48 +210,53 @@ impl App {
         )
     }
     pub(super) fn clone_review(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, Btn};
         let Some(package) = &self.clone_draft else {
             return;
         };
         let w = (self.width - 32).min(900);
         let h = (self.height - 48).min(660);
-        let x = (self.width - w) / 2;
-        let y = (self.height - h) / 2;
+        let (x, y) = ((self.width - w) / 2, (self.height - h) / 2);
         o.hits.clear();
+        let title = format!(
+            "Review export: {} \u{2192} {}.{}",
+            package.donor,
+            package.id,
+            extension(&package.donor)
+        );
+        let [bx, by, bw, _] = self.dialog_frame(o, [x, y, w, h], &title);
         let d = &mut o.canvas;
-        d.rect(x + 4, y + 5, w, h, c::GM_1000);
-        d.rect(x, y, w, h, c::GM_800);
-        border(d, x, y, w, h, c::LINE_STRONG);
-        d.rect(x + 1, y + 1, w - 2, 32, c::GM_700);
-        label_fit(
-            d,
-            x + 14,
-            y + 22,
-            w - 28,
-            &format!(
-                "Export object / review: {} -> {}.{}",
-                package.donor,
-                package.id,
-                extension(&package.donor)
+        d.styled(
+            bx,
+            baseline(by, m::ROW_H, Style::Label),
+            &fit(
+                &format!(
+                    "{} private resources. Source files are preserved; suggested output {}.LIB.",
+                    package.archive.entries.len(),
+                    package.id
+                ),
+                bw,
+                Style::Label,
             ),
             c::INK,
+            Style::Label,
         );
-        label_fit(
-            d,
-            x + 14,
-            y + 55,
-            w - 28,
-            &format!(
-                "{} private resources / source files preserved / output suggested: {}.LIB",
-                package.archive.entries.len(),
-                package.id
-            ),
-            c::STEEL,
-        );
-        d.rect(x + 12, y + 69, w - 24, 24, c::GM_900);
-        d.label(x + 22, y + 85, "FROM DONOR", c::INK_MUTED);
-        d.label(x + w / 2, y + 85, "IN NEW LIB", c::INK_MUTED);
-        let rows = ((h - 266) / 22).max(1) as usize;
+        let head = by + m::ROW_H + space::SPACE_2;
+        d.rect(bx, head, bw, m::ROW_H, c::GM_900);
+        let nx = bx + bw / 2;
+        for (hx, label) in [(bx + 8, "FROM DONOR"), (nx, "IN NEW LIB")] {
+            d.styled(
+                hx,
+                baseline(head, m::ROW_H, Style::Section),
+                label,
+                c::INK_MUTED,
+                Style::Section,
+            );
+        }
+        let notes = package.notes.len().min(4) as i32;
+        let foot = y + h - space::SPACE_4 - m::BUTTON_H - space::SPACE_3 - (notes + 1) * m::ROW_H;
+        let rows = ((foot - head - m::ROW_H) / m::ROW_H).max(1) as usize;
         for (row, (old, new)) in package
             .mapping
             .iter()
@@ -259,58 +264,73 @@ impl App {
             .take(rows)
             .enumerate()
         {
-            let yy = y + 93 + row as i32 * 22;
+            let yy = head + m::ROW_H + row as i32 * m::ROW_H;
             d.rect(
-                x + 12,
+                bx,
                 yy,
-                w - 24,
-                22,
+                bw,
+                m::ROW_H,
                 if row % 2 == 0 { c::GM_950 } else { c::GM_900 },
             );
-            d.text(x + 22, yy + 16, old, c::INK_MUTED);
-            d.text(x + w / 2, yy + 16, new, c::AMBER);
-        }
-        label_fit(
-            d,
-            x + 14,
-            y + h - 157,
-            w - 28,
-            "Wheel scrolls the rename list. No exported filename replaces a scanned resource.",
-            c::INK_FAINT,
-        );
-        for (i, note) in package.notes.iter().take(4).enumerate() {
-            label_fit(
-                d,
-                x + 14,
-                y + h - 132 + i as i32 * 20,
-                w - 28,
-                note,
-                if i >= 3 { c::AMBER } else { c::INK_MUTED },
+            let base = baseline(yy, m::ROW_H, Style::Value);
+            d.styled(
+                bx + 8,
+                base,
+                &fit(old, nx - bx - 16, Style::Value),
+                c::INK_MUTED,
+                Style::Value,
+            );
+            d.styled(
+                nx,
+                base,
+                &fit(new, bx + bw - nx - 8, Style::Value),
+                c::AMBER,
+                Style::Value,
             );
         }
-        o.button(
-            [x + 12, y + h - 45, 146, 28],
-            "Add source LIB",
-            Action::File(FileAction::CloneSource),
-            false,
+        d.styled(
+            bx,
+            baseline(foot, m::ROW_H, Style::Label),
+            &fit(
+                "Wheel scrolls the renames. No exported name replaces a scanned resource.",
+                bw,
+                Style::Label,
+            ),
+            c::INK_MUTED,
+            Style::Label,
         );
-        o.button(
-            [x + 172, y + h - 45, 84, 28],
-            "Back",
-            Action::CloneBack,
-            false,
-        );
-        o.button(
-            [x + w - 263, y + h - 45, 94, 28],
-            "Cancel",
-            Action::Cancel,
-            false,
-        );
-        o.button(
-            [x + w - 158, y + h - 45, 146, 28],
-            "Export new LIB",
+        for (i, note) in package.notes.iter().take(4).enumerate() {
+            let ny = foot + (i as i32 + 1) * m::ROW_H;
+            let warn = i >= 3;
+            d.icon(
+                bx,
+                ny + 2,
+                if warn { Icon::Warning } else { Icon::Info },
+                if warn { c::AMBER } else { c::INK_MUTED },
+                c::GM_800,
+            );
+            d.styled(
+                bx + m::ICON + space::SPACE_1,
+                baseline(ny, m::ROW_H, Style::Label),
+                &fit(note, bw - m::ICON - space::SPACE_1, Style::Label),
+                if warn { c::INK } else { c::INK_MUTED },
+                Style::Label,
+            );
+        }
+        self.dialog_actions(
+            o,
+            [x, y, w, h],
+            &[
+                ("Add source LIB", Action::File(FileAction::CloneSource)),
+                ("Back", Action::CloneBack),
+            ],
+            Some("Cancel"),
+            Some(
+                Btn::new("Export new LIB")
+                    .with_icon(Icon::Package)
+                    .primary(),
+            ),
             Action::Apply,
-            true,
         );
     }
 }
