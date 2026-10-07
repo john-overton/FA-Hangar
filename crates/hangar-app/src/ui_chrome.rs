@@ -13,6 +13,8 @@ const MENUS: [&str; 7] = ["File", "Edit", "Lib", "Entry", "View", "Tools", "Help
 pub(super) const MENU_MODE: usize = 7;
 pub(super) const MENU_VIEW: usize = 8;
 pub(super) const MENU_SHADING: usize = 9;
+/// The Model inspector's Shape Select.
+pub(super) const MENU_SHAPE: usize = 10;
 const TABS: [(&str, Mode); 6] = [
     ("Browse", Mode::Browse),
     ("Model", Mode::Model),
@@ -286,6 +288,23 @@ impl App {
             ],
         }
     }
+    /// Run `f` over dropdown `menu`'s items; the Shape Select lists entry
+    /// names owned here.
+    fn with_menu<R>(&self, menu: usize, f: &mut dyn FnMut(&[Item]) -> R) -> R {
+        if menu != MENU_SHAPE {
+            return f(&self.menu_items(menu));
+        }
+        let shapes = self.shape_items();
+        let items: Vec<Item> = shapes
+            .iter()
+            .map(|(name, action)| {
+                Item::new(name, *action)
+                    .icon(Icon::Shape)
+                    .on(matches!(action, Action::Entry(i) if Some(*i) == self.model_entry))
+            })
+            .collect();
+        f(&items)
+    }
     fn shading_items(&self) -> Vec<Item<'static>> {
         let shading = self.shading();
         let mut items: Vec<Item<'static>> = SHADING
@@ -308,7 +327,7 @@ impl App {
     pub(super) fn open_menu_rect(&self) -> Option<[i32; 4]> {
         let menu = self.menu?;
         let (x, y) = self.menu_anchor(menu);
-        let (w, h) = super::widgets::menu_size(&self.menu_items(menu));
+        let (w, h) = self.with_menu(menu, &mut |items| super::widgets::menu_size(items));
         let x = x.min(self.width - w).max(0);
         let y = y.min(self.height - h).max(0);
         Some([x, y, w, h])
@@ -317,6 +336,10 @@ impl App {
     pub(super) fn menu_anchor(&self, menu: usize) -> (i32, i32) {
         match menu {
             0..=6 => (self.bar().menus[menu][0], m::MENUBAR_H),
+            MENU_SHAPE => {
+                let rect = self.shape_select_rect();
+                (rect[0], rect[1] + rect[3] + 1)
+            }
             _ => {
                 let header = self.viewport_header_slots();
                 let rect = match menu {
@@ -330,7 +353,9 @@ impl App {
     }
     pub(super) fn menu_layout(&self, o: &mut Layout, menu: usize) {
         let (x, y) = self.menu_anchor(menu);
-        o.menu(x, y, &self.menu_items(menu), Action::MenuPad);
+        self.with_menu(menu, &mut |items| {
+            o.menu(x, y, items, Action::MenuPad);
+        });
     }
     /// Status bar: key hints (or the last message) left; active entry · LIB
     /// and the save state right.

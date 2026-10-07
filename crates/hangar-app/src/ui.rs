@@ -458,7 +458,11 @@ pub struct App {
     menu: Option<usize>,
     dock: u8,
     table_scroll: usize,
+    /// Right editor panel scroll in px, for `inspector_kind`.
     inspector_scroll: i32,
+    inspector_kind: u8,
+    /// Collapsed panels: bit `widgets::pane::*`.
+    panels: u64,
     original_brf: Option<Brf>,
     model_entry: Option<usize>,
     validation: Option<hangar_core::validation::Report>,
@@ -607,6 +611,8 @@ impl App {
             dock: 0,
             table_scroll: 0,
             inspector_scroll: 0,
+            inspector_kind: 0,
+            panels: 0,
             original_brf: None,
             model_entry: None,
             validation: None,
@@ -755,6 +761,7 @@ impl App {
         self.model_paint = false;
 
         self.root_collapsed = false;
+        self.inspector_scroll = 0;
         self.field_group = None;
         self.envelope_selected = 0;
         self.envelope_scroll = 0;
@@ -869,7 +876,6 @@ impl App {
         self.model_entry = None;
         self.external_model = None;
         self.original_brf = None;
-        self.inspector_scroll = 0;
         self.validation = None;
         self.validation_scroll = 0;
         self.changes_scroll = 0;
@@ -2417,8 +2423,14 @@ impl App {
             self.scroll = (self.scroll as i32 - delta * 3)
                 .clamp(0, count.saturating_sub(rows) as i32) as usize;
         } else if self.mouse[0] >= self.right() {
+            let kind = self.inspector_kind();
+            if kind != self.inspector_kind {
+                self.inspector_kind = kind;
+                self.inspector_scroll = 0;
+            }
+            let max = self.layout().inspector_max;
             self.inspector_scroll =
-                (self.inspector_scroll - delta * 3).clamp(0, self.inspector_max_scroll());
+                (self.inspector_scroll - delta * 3 * widgets::ROW_PITCH).clamp(0, max);
         } else if self.mouse[1] > self.dock_y()
             || matches!(self.mode, Mode::Properties | Mode::Graft)
         {

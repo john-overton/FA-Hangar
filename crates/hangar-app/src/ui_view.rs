@@ -1,6 +1,5 @@
 //! Shared layout and hit regions: the visible controls and clickable areas stay together.
 use super::*;
-use alloc::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
 pub(super) enum Action {
@@ -111,6 +110,8 @@ pub(super) enum Action {
     Number(widgets::NumberTarget),
     /// NumberField hover arrow: step down (-1) or up (+1).
     NumberStep(widgets::NumberTarget, i32),
+    /// Panel header: collapse or expand; Ctrl+click collapses every other.
+    Panel(u8),
 }
 pub(super) struct Hit {
     pub(super) rect: [i32; 4],
@@ -133,6 +134,8 @@ pub(super) struct Layout {
     pub(super) size: [i32; 2],
     /// The NumberField being scrubbed and its live value.
     pub(super) scrub: Option<(widgets::NumberTarget, i64)>,
+    /// Scroll range of the right-hand editor's panel stack, in px.
+    pub(super) inspector_max: i32,
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
 }
@@ -173,10 +176,6 @@ pub(super) fn category_of(name: &str) -> usize {
 pub(super) fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
     d.icon(x, y, i, color, c::GM_800);
 }
-/// Draw a generated icon whose edge pixels blend into `ground`.
-pub(super) fn icon_on(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb, ground: Rgb) {
-    d.icon(x, y, i, color, ground);
-}
 pub(super) fn border(d: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Rgb) {
     d.line(x, y, x + w - 1, y, color);
     d.line(x, y + h - 1, x + w - 1, y + h - 1, color);
@@ -192,11 +191,6 @@ pub(super) fn text_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: R
 }
 pub(super) fn label_fit(d: &mut Canvas, x: i32, y: i32, w: i32, s: &str, color: Rgb) {
     d.label(x, y, &fit(s, w, Style::Label), color);
-}
-pub(super) fn badge(d: &mut Canvas, x: i32, y: i32, s: &str) {
-    let w = s.len() as i32 * 7 + 8;
-    d.rect(x, y, w, 16, c::GM_600);
-    d.text(x + 4, y + 12, s, c::INK_MUTED);
 }
 impl Layout {
     pub(super) fn hit(&mut self, rect: [i32; 4], action: Action) {
@@ -233,46 +227,6 @@ impl Layout {
             if active { c::AMBER } else { c::INK },
         );
         self.hit(rect, action);
-    }
-    pub(super) fn tool(
-        &mut self,
-        rect: [i32; 4],
-        i: Icon,
-        action: Action,
-        enabled: bool,
-        active: bool,
-    ) {
-        let [x, y, w, h] = rect;
-        let fill = if active {
-            c::AMBER_DEEP
-        } else if self.mouse[0] >= x
-            && self.mouse[0] < x + w
-            && self.mouse[1] >= y
-            && self.mouse[1] < y + h
-        {
-            c::GM_600
-        } else {
-            c::GM_700
-        };
-        self.canvas.rect(x, y, w, h, fill);
-        border(&mut self.canvas, x, y, w, h, c::GM_1000);
-        icon_on(
-            &mut self.canvas,
-            x + (w - 16) / 2,
-            y + (h - 16) / 2,
-            i,
-            if !enabled {
-                c::INK_FAINT
-            } else if active {
-                c::AMBER
-            } else {
-                c::INK_MUTED
-            },
-            fill,
-        );
-        if enabled {
-            self.hit(rect, action);
-        }
     }
 }
 impl App {
@@ -921,6 +875,10 @@ impl App {
                 self.perspective &= n == 0;
             }
             Action::Number(t) => self.number_press(t, self.mouse[0]),
+            Action::Panel(id) => {
+                let bit = 1u64 << id;
+                self.panels = if self.ctrl { !bit } else { self.panels ^ bit };
+            }
             Action::NumberStep(t, direction) => self.number_step(t, direction),
             Action::Apply => self.key(Key::Enter, false, false),
             Action::Cancel => self.key(Key::Escape, false, false),
@@ -1174,15 +1132,6 @@ impl App {
                     .is_none_or(|old| old.value != f.value)
             })
     }
-    pub(super) fn inspector_max_scroll(&self) -> i32 {
-        let rows = self.property_rows();
-        let mut groups = BTreeSet::new();
-        for row in &rows {
-            groups.insert(row.0);
-        }
-        ((116 + rows.len() as i32 * 25 + groups.len() as i32 * 37 - (self.height - 50)).max(0) + 23)
-            / 24
-    }
     fn property_rows(&self) -> Vec<(&'static str, &'static str, usize)> {
         let mut result = Vec::new();
         let Some(b) = &self.brf else {
@@ -1227,6 +1176,7 @@ impl App {
             pressed: self.pressed,
             size: [self.width, self.height],
             scrub: self.scrub.map(|s| (s.target, s.value)),
+            inspector_max: 0,
             canvas: Canvas {
                 commands: Vec::new(),
             },
@@ -1815,270 +1765,411 @@ impl App {
             o.hit(rect, Action::Entry(*i));
         }
     }
-    fn inspector(&self, o: &mut Layout) {
+    /// Right editor header (28px): entry type icon, name and type badge, or
+    /// `title` for editors that are not about one entry.
+    pub(super) fn inspector_header(&self, o: &mut Layout, title: Option<&str>) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, type_badge, Tone};
         let r = self.right();
         let w = self.width - r;
-        let h = self.height;
+        let top = m::MENUBAR_H;
         let d = &mut o.canvas;
-        d.rect(r + 1, 26, w - 1, 28, c::GM_800);
-        icon(
-            d,
-            r + 10,
-            32,
+        d.rect(r + 1, top, w - 1, m::EDITOR_HEADER_H, c::GM_800);
+        d.rect(r + 1, top + m::EDITOR_HEADER_H - 1, w - 1, 1, c::GM_1000);
+        let x = r + 1 + space::SPACE_2;
+        if let Some(title) = title {
+            d.styled(
+                x,
+                baseline(top, m::EDITOR_HEADER_H, Style::Strong),
+                &fit(title, w - 2 * space::SPACE_2, Style::Strong),
+                c::INK,
+                Style::Strong,
+            );
+            return;
+        }
+        d.icon(
+            x,
+            top + (m::EDITOR_HEADER_H - m::ICON) / 2,
             GROUPS[category_of(self.name())].2,
             c::INK_MUTED,
+            c::GM_800,
         );
-        text_fit(d, r + 34, 44, w - 84, self.name(), c::INK);
-        badge(
-            d,
-            self.width - 38,
-            32,
-            if self.doc.archive.entries.is_empty() {
-                "--"
-            } else {
-                extension(self.name())
-            },
+        let ext = if self.doc.archive.entries.is_empty() {
+            ""
+        } else {
+            extension(self.name())
+        };
+        let bx = self.width - space::SPACE_2 - widgets::badge_width(ext);
+        if !ext.is_empty() {
+            type_badge(
+                d,
+                bx,
+                top + (m::EDITOR_HEADER_H - m::BADGE_H) / 2,
+                ext,
+                Tone::Neutral,
+            );
+        }
+        let tx = x + m::ICON + space::SPACE_2;
+        d.styled(
+            tx,
+            baseline(top, m::EDITOR_HEADER_H, Style::Value),
+            &fit(self.name(), bx - space::SPACE_2 - tx, Style::Value),
+            c::INK,
+            Style::Value,
         );
+    }
+    /// The scrolling panel area of the right editor below `top`, above `foot`
+    /// px of fixed footer.
+    pub(super) fn inspector_stack(&self, top: i32, foot: i32) -> widgets::Stack {
+        let r = self.right();
+        let scroll = if self.inspector_kind == self.inspector_kind() {
+            self.inspector_scroll
+        } else {
+            0
+        };
+        widgets::Stack::new(
+            [
+                r + 1,
+                top,
+                self.width - r - 1,
+                self.height - theme::metric::STATUSBAR_H - foot - top,
+            ],
+            scroll,
+        )
+    }
+    /// Which right editor is showing; its scroll position is kept per kind.
+    pub(super) fn inspector_kind(&self) -> u8 {
+        match self.mode {
+            Mode::Package => 1,
+            Mode::Graft => 2,
+            Mode::Properties => 3,
+            Mode::Model if self.animation_tool => 4,
+            Mode::Model if self.mesh_edit => 5,
+            Mode::Model if self.hp_tool => 6,
+            Mode::Browse => 7,
+            _ if self.mode == Mode::Media
+                || self.selected_face.is_some()
+                || self.model_paint
+                || self.media_tab > 0 =>
+            {
+                10 + self.media_tab
+            }
+            _ => 0,
+        }
+    }
+    pub(super) fn panel_closed(&self, id: u8) -> bool {
+        self.panels & (1 << id) != 0
+    }
+    /// Begin panel `id` of the right editor.
+    pub(super) fn pane(
+        &self,
+        o: &mut Layout,
+        s: &mut widgets::Stack,
+        id: u8,
+        title: &str,
+        icon: Icon,
+    ) -> bool {
+        let closed = self.panel_closed(id);
+        o.panel_begin(s, title, Some(icon), closed, Action::Panel(id), 0);
+        !closed
+    }
+    /// Value control for BRF field `i`: a NumberField for decimal integers,
+    /// otherwise a sunken text field that opens the type prompt.
+    pub(super) fn field_control(&self, o: &mut Layout, rect: [i32; 4], i: usize) {
+        let Some(f) = self.brf.as_ref().and_then(|b| b.fields.get(i)) else {
+            return;
+        };
+        let target = widgets::NumberTarget::Field(i);
+        match self.number_spec(target) {
+            Some(spec) => o.number(
+                rect,
+                &widgets::Number {
+                    target,
+                    spec,
+                    label: "",
+                    unit: if f.scaled { "scaled" } else { "" },
+                    locked: false,
+                    axis: None,
+                },
+            ),
+            None => o.text_field(
+                rect,
+                &format!("{}{}", f.value, if f.scaled { " scaled" } else { "" }),
+                self.field_changed(i),
+                Action::Field(i),
+            ),
+        }
+    }
+    /// The Shape row's Select rect (fixed above the panels).
+    pub(super) fn shape_select_rect(&self) -> [i32; 4] {
+        use theme::{metric as m, space};
+        let r = self.right();
+        let x = r + 1 + space::SPACE_1 + space::SPACE_2;
+        let w = self.width - space::SPACE_1 - 4 - space::SPACE_2 - x;
+        let col = w * m::PROP_LABEL_PCT / 100;
+        let cx = x + col + space::SPACE_2;
+        [
+            cx,
+            m::MENUBAR_H + m::EDITOR_HEADER_H + space::SPACE_1,
+            x + w - cx - m::ICON_BUTTON - space::SPACE_1,
+            m::FIELD_H,
+        ]
+    }
+    /// Shapes this entry links to (its own model first), for the Shape Select.
+    pub(super) fn shape_items(&self) -> Vec<(String, Action)> {
+        let mut items = Vec::new();
+        if let Some(i) = self.model_entry {
+            items.push((self.doc.archive.entries[i].name.clone(), Action::Entry(i)));
+        } else if let Some((id, i)) = self.external_model {
+            if let Some(e) = self
+                .libraries
+                .iter()
+                .find(|l| l.id == id)
+                .and_then(|l| l.doc.archive.entries.get(i))
+            {
+                items.push((e.name.clone(), Action::LibraryEntry(id, i)));
+            }
+        }
+        if let Some(scan) = self.dependencies.get(self.name()) {
+            for link in &scan.links {
+                if extension(&link.target) == "SH" && !items.iter().any(|(n, _)| *n == link.target)
+                {
+                    if let Some(i) = self.doc.archive.find(&link.target) {
+                        items.push((link.target.clone(), Action::Entry(i)));
+                    }
+                }
+            }
+        }
+        items
+    }
+    fn inspector(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{pane, Btn};
+        let r = self.right();
+        self.inspector_header(o, None);
         if self.mode == Mode::Browse {
             self.entry_inspector(o);
             return;
         }
-        let shape = self
-            .model_entry
-            .map(|i| self.doc.archive.entries[i].name.as_str())
-            .or_else(|| {
-                self.external_model.and_then(|(id, i)| {
-                    self.libraries
-                        .iter()
-                        .find(|l| l.id == id)
-                        .and_then(|l| l.doc.archive.entries.get(i))
-                        .map(|e| e.name.as_str())
-                })
-            })
-            .unwrap_or("No linked shape");
-        o.canvas.label(r + 12, 78, "Shape", c::INK_MUTED);
-        o.canvas.rect(r + 60, 62, w - 96, 22, c::GM_700);
-        text_fit(&mut o.canvas, r + 82, 77, w - 118, shape, c::INK);
-        icon(&mut o.canvas, r + 63, 65, Icon::Shape, c::INK_MUTED);
-        if let Some(i) = self.model_entry {
-            o.hit([r + 60, 62, w - 96, 22], Action::Entry(i));
-        } else if let Some((id, i)) = self.external_model {
-            o.hit([r + 60, 62, w - 96, 22], Action::LibraryEntry(id, i));
+        // Shape: a Select of the shapes this entry uses; the link button
+        // shows its references in the dock.
+        let select = self.shape_select_rect();
+        let y = select[1];
+        o.prop_row(
+            [
+                r + 1 + space::SPACE_1 + space::SPACE_2,
+                y,
+                self.width
+                    - space::SPACE_1
+                    - 4
+                    - space::SPACE_2
+                    - (r + 1 + space::SPACE_1 + space::SPACE_2),
+                m::ROW_H,
+            ],
+            "Shape",
+        );
+        let shapes = self.shape_items();
+        match shapes.first() {
+            Some((name, _)) => o.select(
+                select,
+                Some(Icon::Shape),
+                name,
+                Action::Menu(chrome::MENU_SHAPE),
+                self.menu == Some(chrome::MENU_SHAPE),
+            ),
+            None => o.text_field(select, "No linked shape", false, Action::Dock(4)),
         }
-        o.tool(
-            [self.width - 30, 62, 24, 22],
-            Icon::Link,
-            Action::Mode(Mode::Model),
-            self.model.is_some(),
-            false,
+        o.icon_button(
+            select[0] + select[2] + space::SPACE_1,
+            y - 1,
+            Btn::icon(Icon::Link)
+                .ghost()
+                .on(self.dock == 4)
+                .enabled(!self.doc.archive.entries.is_empty()),
+            Action::Dock(4),
         );
-        let base = self
-            .dominant_color()
-            .map_or("Base color: textured / Materials".into(), |c| {
-                format!("Base color / palette {c}")
-            });
-        o.button(
-            [r + 12, 89, w - 24, 22],
-            &base,
-            Action::BaseColor(false),
-            false,
-        );
+        let mut s = self.inspector_stack(y + m::FIELD_H + space::SPACE_2, 0);
         let rows = self.property_rows();
-        if !rows.is_empty() {
-            let mut y = 116 - self.inspector_scroll * 24;
-            let mut group = "";
-            for (section, label, i) in rows {
-                if group != section {
-                    group = section;
-                    y += 8;
-                    if y >= 110 && y + 25 < h - 50 {
-                        o.canvas.rect(r + 8, y, w - 16, 25, c::GM_900);
-                        border(&mut o.canvas, r + 8, y, w - 16, 25, c::GM_1000);
-                        icon(&mut o.canvas, r + 14, y + 5, Icon::Flight, c::INK_MUTED);
-                        o.canvas.label(r + 33, y + 17, section, c::INK);
-                    }
-                    y += 29;
+        let mut group = "";
+        for (section, label, i) in &rows {
+            if group != *section {
+                if !group.is_empty() {
+                    o.panel_end(&mut s);
                 }
-                if y >= 110 && y + 22 < h - 50 {
-                    let f = &self.brf.as_ref().unwrap().fields[i];
-                    let d = &mut o.canvas;
-                    label_fit(d, r + 12, y + 15, 118, label, c::INK_MUTED);
-                    let fx = r + 132;
-                    d.rect(fx, y, w - 146, 21, c::GM_950);
-                    border(d, fx, y, w - 146, 21, c::LINE_STRONG);
-                    text_fit(
-                        d,
-                        fx + 7,
-                        y + 15,
-                        w - 176,
-                        &format!("{}{}", if f.scaled { "^" } else { "" }, f.value),
-                        if self.field_changed(i) {
-                            c::AMBER
-                        } else {
-                            c::INK
-                        },
-                    );
-                    o.hit([fx, y, w - 146, 21], Action::Field(i));
-                }
-                y += 25;
+                group = section;
+                let (id, icon) = match *section {
+                    "Envelope" => (pane::ENVELOPE, Icon::Flight),
+                    "Propulsion" => (pane::PROPULSION, Icon::Engine),
+                    "Weights" => (pane::WEIGHTS, Icon::Measure),
+                    "Handling" => (pane::HANDLING, Icon::Sliders),
+                    _ => (pane::STRUCTURE, Icon::Damage),
+                };
+                self.pane(o, &mut s, id, section, icon);
             }
-            o.button(
-                [r + 10, h - 46, w - 20, 21],
-                "All fields / Flight",
-                Action::Mode(Mode::Properties),
-                false,
-            );
-        } else {
-            let d = &mut o.canvas;
-            d.rect(r + 8, 118, w - 16, 140, c::GM_900);
-            border(d, r + 8, 118, w - 16, 140, c::GM_1000);
-            d.label(r + 20, 140, "Geometry", c::INK);
-            if let Some(m) = &self.model {
-                d.label(r + 20, 169, "Vertices", c::INK_MUTED);
-                d.text(r + 132, 169, &format!("{}", m.vertices.len()), c::INK);
-                d.label(r + 20, 195, "Faces", c::INK_MUTED);
-                d.text(r + 132, 195, &format!("{}", m.faces.len()), c::INK);
-                label_fit(
-                    d,
-                    r + 20,
-                    229,
-                    w - 40,
-                    if m.writable {
-                        "Static records editable"
-                    } else {
-                        "Animated records: preview only"
-                    },
-                    c::STEEL,
-                );
-            } else {
-                label_fit(d, r + 20, 174, w - 40, "No decoded geometry", c::INK_MUTED);
-            }
-            o.button(
-                [r + 10, 276, w - 20, 23],
-                "Export entry",
-                Action::File(FileAction::Export),
-                false,
-            );
-            o.button(
-                [r + 10, 309, w - 20, 23],
-                "Replace entry",
-                Action::File(FileAction::Replace),
-                false,
-            );
-            if self.model.is_some() {
-                o.button(
-                    [r + 10, 342, w - 20, 23],
-                    "Export geometry as OBJ",
-                    Action::File(FileAction::Obj),
-                    false,
-                );
-            }
-            if let Some(m) = &self.model {
-                let mut y = 390;
-                for name in m.textures.iter().take(6) {
-                    let n = if name.contains('.') {
-                        name.clone()
-                    } else {
-                        format!("{name}.PIC")
-                    };
-                    if let Some(i) = self.doc.archive.find(&n) {
-                        o.button(
-                            [r + 10, y, w - 20, 23],
-                            &format!("Paint {n}"),
-                            Action::OpenTexture(i),
-                            false,
-                        );
-                    } else {
-                        label_fit(
-                            &mut o.canvas,
-                            r + 16,
-                            y + 15,
-                            w - 32,
-                            &format!("Missing: {n}"),
-                            c::AMBER,
-                        );
-                    }
-                    y += 28;
-                }
-            }
-            if h > 680 {
-                o.canvas.label(r + 16, 580, "VIEWPORT", c::INK_FAINT);
-                o.canvas
-                    .label(r + 16, 606, "MMB orbit / Shift+MMB pan", c::INK_MUTED);
-                o.canvas
-                    .label(r + 16, 630, "Wheel zoom / Home frame", c::INK_MUTED);
+            if let Some(rect) = o.prop(&mut s, label) {
+                self.field_control(o, rect, *i);
             }
         }
+        if !group.is_empty() {
+            o.panel_end(&mut s);
+        }
+        if let Some(model) = &self.model {
+            if self.pane(o, &mut s, pane::GEOMETRY, "Geometry", Icon::Shape) {
+                o.info(
+                    &mut s,
+                    "Vertices",
+                    &widgets::format_number(model.vertices.len() as i64, 0),
+                    "",
+                );
+                o.info(
+                    &mut s,
+                    "Faces",
+                    &widgets::format_number(model.faces.len() as i64, 0),
+                    "",
+                );
+                o.info(
+                    &mut s,
+                    "Records",
+                    if model.writable {
+                        "Static, editable"
+                    } else {
+                        "Animated, preview only"
+                    },
+                    "",
+                );
+                if let Some(rect) = o.prop(&mut s, "Base color") {
+                    let label = self
+                        .dominant_color()
+                        .map_or("Textured".into(), |c| format!("Palette {c}"));
+                    o.button_ex(
+                        rect,
+                        Btn::new(&label).with_icon(Icon::Palette),
+                        Action::BaseColor(false),
+                    );
+                }
+            }
+            o.panel_end(&mut s);
+            if !model.textures.is_empty() {
+                if self.pane(o, &mut s, pane::TEXTURES, "Textures", Icon::Image) {
+                    for name in model.textures.iter().take(6) {
+                        let n = if name.contains('.') {
+                            name.clone()
+                        } else {
+                            format!("{name}.PIC")
+                        };
+                        match self.doc.archive.find(&n) {
+                            Some(i) => {
+                                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                                    o.button_ex(
+                                        rect,
+                                        Btn::new(&format!("Paint {n}")).with_icon(Icon::Brush),
+                                        Action::OpenTexture(i),
+                                    );
+                                }
+                            }
+                            None => o.stack_notice(
+                                &mut s,
+                                widgets::Tone::Warn,
+                                &format!(
+                                    "{n} is not in this LIB. Open the LIB that holds it to paint."
+                                ),
+                            ),
+                        }
+                    }
+                }
+                o.panel_end(&mut s);
+            }
+        }
+        if !self.doc.archive.entries.is_empty() {
+            if self.pane(o, &mut s, pane::ENTRY_ACTIONS, "Entry", Icon::Lib) {
+                let mut buttons = vec![
+                    ("Export entry", Action::File(FileAction::Export)),
+                    ("Replace entry", Action::File(FileAction::Replace)),
+                ];
+                if self.model.is_some() {
+                    buttons.push(("Export geometry as OBJ", Action::File(FileAction::Obj)));
+                }
+                if !rows.is_empty() {
+                    buttons.push(("Edit all fields", Action::Mode(Mode::Properties)));
+                }
+                for (title, action) in buttons {
+                    if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                        o.button_ex(rect, Btn::new(title), action);
+                    }
+                }
+            }
+            o.panel_end(&mut s);
+        }
+        o.stack_end(s);
     }
     fn entry_inspector(&self, o: &mut Layout) {
-        let r = self.right();
-        let w = self.width - r;
+        use theme::metric as m;
+        use widgets::{pane, Btn};
         let Some(e) = self.doc.archive.entries.get(self.selected) else {
             return;
         };
-        let d = &mut o.canvas;
-        d.rect(r + 8, 62, w - 16, 151, c::GM_900);
-        border(d, r + 8, 62, w - 16, 151, c::GM_1000);
-        d.label(r + 20, 84, "Lib entry", c::INK);
-        for (row, (label, value)) in [
-            ("Type", GROUPS[category_of(&e.name)].0.to_string()),
-            ("Stored size", format!("{} B", e.stored_len())),
-            (
-                "Source offset",
-                if self.doc.entry_changed(e) {
-                    "Repacked".into()
-                } else {
-                    format!("0x{:08X}", e.source_offset())
-                },
-            ),
-            ("Compression", format!("flag {}", e.flag())),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let y = 110 + row as i32 * 24;
-            d.label(r + 20, y, label, c::INK_MUTED);
-            text_fit(d, r + 134, y, w - 152, &value, c::INK);
+        let mut s = self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, 0);
+        if self.pane(o, &mut s, pane::LIB_ENTRY, "Lib entry", Icon::Lib) {
+            o.info(&mut s, "Type", GROUPS[category_of(&e.name)].0, "");
+            o.info(
+                &mut s,
+                "Stored size",
+                &widgets::format_number(e.stored_len() as i64, 0),
+                "B",
+            );
+            let offset = if self.doc.entry_changed(e) {
+                "Repacked".into()
+            } else {
+                format!("0x{:08X}", e.source_offset())
+            };
+            o.info(&mut s, "Source offset", &offset, "");
+            o.info(&mut s, "Compression", &format!("flag {}", e.flag()), "");
         }
+        o.panel_end(&mut s);
         let links = self.dependencies.get(&e.name).map_or(0, |s| s.links.len());
         let users = self.dependencies.incoming(&e.name).count();
-        d.label(r + 20, 244, "Resource relationships", c::INK);
-        d.label(
-            r + 20,
-            272,
-            &format!(
-                "{} / {}",
-                count(links, "reference", "references"),
-                count(users, "direct user", "direct users")
-            ),
-            c::INK_MUTED,
-        );
-        d.label(
-            r + 20,
-            298,
-            &format!(
-                "{} in this LIB",
-                count(self.aircraft_users.len(), "aircraft user", "aircraft users")
-            ),
-            c::STEEL,
-        );
-        label_fit(
-            d,
-            r + 20,
-            324,
-            w - 40,
-            "Stored references / current LIB only",
-            c::INK_FAINT,
-        );
-        for (y, title, action) in [
-            (344, "References / users", Action::Dock(4)),
-            (380, "Open in Model", Action::Mode(Mode::Model)),
-            (416, "Export entry", Action::File(FileAction::Export)),
-            (452, "Replace entry", Action::File(FileAction::Replace)),
-        ] {
-            o.button([r + 10, y, w - 20, 24], title, action, false);
+        if self.pane(o, &mut s, pane::RELATIONS, "References", Icon::Link) {
+            o.info(&mut s, "References", &format!("{links}"), "");
+            o.info(&mut s, "Direct users", &format!("{users}"), "");
+            o.info(
+                &mut s,
+                "Aircraft users",
+                &format!("{}", self.aircraft_users.len()),
+                "",
+            );
+            if let Some([x, y, w, h]) = o.wide(&mut s, m::ROW_H) {
+                o.canvas.styled(
+                    x,
+                    widgets::baseline(y, h, Style::Label),
+                    &fit("Stored names in this LIB only.", w, Style::Label),
+                    c::INK_MUTED,
+                    Style::Label,
+                );
+            }
+            if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                o.button_ex(
+                    rect,
+                    Btn::new("Show references").with_icon(Icon::Link),
+                    Action::Dock(4),
+                );
+            }
         }
+        o.panel_end(&mut s);
+        if self.pane(o, &mut s, pane::ENTRY_ACTIONS, "Entry", Icon::Lib) {
+            for (title, action) in [
+                ("Open in Model", Action::Mode(Mode::Model)),
+                ("Export entry", Action::File(FileAction::Export)),
+                ("Replace entry", Action::File(FileAction::Replace)),
+            ] {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.button_ex(rect, Btn::new(title), action);
+                }
+            }
+        }
+        o.panel_end(&mut s);
+        o.stack_end(s);
     }
+
     fn fields_layout(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32, full: bool) {
         if full
             && self.field_group == Some(hangar_core::definition::Aspect::Envelope)
@@ -2398,6 +2489,7 @@ impl App {
         self.smoke_widgets();
         self.smoke_chrome();
         self.smoke_outliner();
+        self.smoke_inspector();
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();
@@ -2424,7 +2516,11 @@ impl App {
             .iter()
             .position(|f| f.label == "object.weight")
             .unwrap();
-        click(self, |a| matches!(a,Action::Field(i) if i==weight));
+        // A click without a drag on the property NumberField types a value.
+        let t = widgets::NumberTarget::Field(weight);
+        click(self, |a| matches!(a, Action::Number(n) if n == t));
+        self.click(self.mouse[0], self.mouse[1], 1, false);
+        assert!(self.prompt.is_some(), "Click types a value");
         self.key(Key::Char('a'), true, false);
         for c in "12000".chars() {
             self.key(Key::Char(c), false, false);
@@ -2436,7 +2532,7 @@ impl App {
             .draw()
             .commands
             .iter()
-            .any(|d| matches!(d,Draw::Text(_,_,s,color,_) if s=="12000"&&*color==c::AMBER.0)));
+            .any(|d| matches!(d,Draw::Text(_,_,s,color,_) if s=="12,000"&&*color==c::AMBER.0)));
         click(self, |a| matches!(a, Action::Menu(1)));
         click(self, |a| matches!(a, Action::Undo));
         assert!(!self.doc.dirty());
@@ -2472,6 +2568,126 @@ impl App {
     }
 }
 impl App {
+    /// Property panels through their hit regions: collapse (and Ctrl+click),
+    /// wheel scrolling with the scroll cue, a BRF NumberField scrub,
+    /// Backspace reset to the file on disk, and undo.
+    fn smoke_inspector(&mut self) {
+        use widgets::{pane, NumberTarget};
+        let find = |app: &App, predicate: &dyn Fn(Action) -> bool| {
+            app.layout()
+                .hits
+                .into_iter()
+                .rev()
+                .find(|h| predicate(h.action))
+                .map(|h| h.rect)
+        };
+        let press = |app: &mut App, r: [i32; 4]| {
+            let (x, y) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
+            app.motion(x, y, false);
+            app.click(x, y, 1, true);
+            app.click(x, y, 1, false);
+        };
+        for (w, h) in [(1280, 800), (800, 600)] {
+            self.demo();
+            self.width = w;
+            self.height = h;
+            self.mode = Mode::Model;
+            self.panels = 0;
+            self.select_entry(1);
+            let original = self.doc.archive.bytes().unwrap();
+            let fields = &self.brf.as_ref().unwrap().fields;
+            let speed = fields
+                .iter()
+                .position(|f| f.label == "object._maxSpeed")
+                .unwrap();
+            let weight = fields
+                .iter()
+                .position(|f| f.label == "object.weight")
+                .unwrap();
+            let speed_field =
+                |a: Action| matches!(a, Action::Number(NumberTarget::Field(i)) if i == speed);
+            // Collapse and expand Envelope from its header.
+            let header = find(self, &|a| matches!(a, Action::Panel(pane::ENVELOPE))).unwrap();
+            assert_eq!(header[3], theme::metric::PANEL_HEADER_H);
+            assert!(find(self, &speed_field).is_some());
+            press(self, header);
+            assert!(self.panel_closed(pane::ENVELOPE));
+            assert!(
+                find(self, &speed_field).is_none(),
+                "Collapsed rows are hidden"
+            );
+            press(self, header);
+            assert!(!self.panel_closed(pane::ENVELOPE));
+            // Ctrl+click keeps only that panel open.
+            let weights = find(self, &|a| matches!(a, Action::Panel(pane::WEIGHTS))).unwrap();
+            self.modifiers(true);
+            press(self, weights);
+            self.modifiers(false);
+            assert!(!self.panel_closed(pane::WEIGHTS) && self.panel_closed(pane::ENVELOPE));
+            self.panels = 0;
+            // Wheel over the panels scrolls them; the thumb shows the position.
+            let max = self.layout().inspector_max;
+            assert!(max > 0, "Panels overflow at {w}x{h}");
+            self.mouse = [self.right() + 40, self.height / 2];
+            self.wheel(-1);
+            assert!(self.inspector_scroll > 0);
+            let moved = find(self, &|a| matches!(a, Action::Panel(pane::ENVELOPE)));
+            assert!(moved.is_none_or(|r| r[1] < header[1]), "Panels scroll up");
+            assert!(self.draw().commands.iter().any(
+                |d| matches!(d, Draw::Rect(x, _, 3, _, color) if *x > self.right() && *color == c::GM_600.0)
+            ));
+            self.wheel(-1000);
+            assert_eq!(self.inspector_scroll, max);
+            self.wheel(1000);
+            assert_eq!(self.inspector_scroll, 0);
+            // Scrub the weight NumberField 20px right: +10, one undo step.
+            let t = NumberTarget::Field(weight);
+            let disk = self.number_spec(t).unwrap().value;
+            let field = find(self, &|a| matches!(a, Action::Number(n) if n == t))
+                .expect("Weight NumberField");
+            let (x, y) = (field[0] + field[2] / 2, field[1] + field[3] / 2);
+            self.motion(x, y, false);
+            self.click(x, y, 1, true);
+            self.motion(x + 20, y, false);
+            self.click(x + 20, y, 1, false);
+            assert_eq!(self.number_spec(t).unwrap().value, disk + 10);
+            assert_eq!(self.doc.changed_count(), 1);
+            let shown = widgets::format_number(disk + 10, 0);
+            assert!(self.draw().commands.iter().any(
+                |d| matches!(d, Draw::Text(_, _, s, color, _) if *s == shown && *color == c::AMBER.0)
+            ));
+            // Backspace over the field restores the operand on disk.
+            self.motion(x, y, false);
+            self.key(Key::Backspace, false, false);
+            assert_eq!(self.number_spec(t).unwrap().value, disk);
+            assert_eq!(self.doc.archive.bytes().unwrap(), original);
+            self.doc.undo();
+            self.refresh();
+            assert_eq!(self.number_spec(t).unwrap().value, disk + 10);
+            self.doc.undo();
+            self.refresh();
+            assert_eq!(self.doc.archive.bytes().unwrap(), original);
+            assert!(!self.doc.dirty());
+            // The link button shows references; the Shape Select opens a shape.
+            let link = find(self, &|a| matches!(a, Action::Dock(4))).unwrap();
+            press(self, link);
+            assert_eq!(self.dock, 4);
+            let select = find(self, &|a| matches!(a, Action::Menu(chrome::MENU_SHAPE))).unwrap();
+            assert_eq!(select, self.shape_select_rect());
+            press(self, select);
+            assert_eq!(self.menu, Some(chrome::MENU_SHAPE));
+            let menu = self.open_menu_rect().unwrap();
+            assert!(menu[0] + menu[2] <= w && menu[1] + menu[3] <= h);
+            let item = find(self, &|a| matches!(a, Action::Entry(0))).unwrap();
+            assert!(item[1] >= menu[1], "Shape item in the dropdown");
+            press(self, item);
+            assert_eq!(self.selected, 0, "Shape Select opens the SH");
+            assert!(self.menu.is_none());
+        }
+        self.width = 1280;
+        self.height = 800;
+        self.demo();
+    }
     /// Outliner header and rows through their hit regions: type filter,
     /// group collapse, the filter field, hover, active vs selected rows and
     /// the stored-originals group below Images.

@@ -520,8 +520,15 @@ pub(super) enum Check {
 /// and a commit path in `App::number_spec` / `App::number_commit`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum NumberTarget {
-    /// An integer BRF field of the selected entry, by field index.
+    /// An integer BRF field of the selected entry, by field index. Envelope
+    /// table cells are BRF fields too.
     Field(usize),
+    /// A numeric field of the selected hardpoint station: column 0..=11 of
+    /// `hardpoints::Station::fields`; 1..=3 are the X, Y, Z position.
+    Station(usize),
+    /// Decal placement setting (`App::decal_setting` key 0..=4): centre X,
+    /// centre Y, width, rotation, opacity. Draft-only, no on-disk value.
+    Decal(u8),
 }
 /// A number in stored units, fixed-point with `decimals` fractional digits.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -986,6 +993,343 @@ impl Layout {
         }
     }
 }
+// ---------------------------------------------------------------- scrolling panel stacks
+
+/// Collapsible panel ids of the right editor: bits of `App::panels`.
+/// Collapsed state is kept per panel, so each tab remembers its own.
+pub(super) mod pane {
+    pub const LIB_ENTRY: u8 = 0;
+    pub const RELATIONS: u8 = 1;
+    pub const ENTRY_ACTIONS: u8 = 2;
+    pub const GEOMETRY: u8 = 3;
+    pub const TEXTURES: u8 = 4;
+    pub const ENVELOPE: u8 = 5;
+    pub const PROPULSION: u8 = 6;
+    pub const WEIGHTS: u8 = 7;
+    pub const HANDLING: u8 = 8;
+    pub const STRUCTURE: u8 = 9;
+    pub const GROUPS: u8 = 10;
+    pub const ISSUES: u8 = 11;
+    pub const GRAFT: u8 = 12;
+    pub const STATION: u8 = 13;
+    pub const STATION_DATA: u8 = 14;
+    pub const STATIONS: u8 = 15;
+    pub const PAINT: u8 = 16;
+    pub const PALETTE: u8 = 17;
+    pub const ORIGINAL: u8 = 18;
+    pub const MEDIA_EXPORT: u8 = 19;
+    pub const PANEL: u8 = 20;
+    pub const MATERIAL: u8 = 21;
+    pub const MATERIAL_NOTES: u8 = 22;
+    pub const ARTWORK: u8 = 23;
+    pub const PLACEMENT: u8 = 24;
+    pub const AUDIO: u8 = 25;
+    pub const PREVIEW: u8 = 26;
+    pub const DONOR: u8 = 27;
+}
+
+/// A panel between `panel_begin` and `panel_end`.
+struct OpenPanel {
+    /// Draw-list position the frame is inserted at.
+    mark: usize,
+    y: i32,
+    title: String,
+    icon: Option<Icon>,
+    collapsed: bool,
+    tools: i32,
+}
+/// Strip below a panel stack for its more-below chevron.
+const CUE_H: i32 = 16;
+/// Pitch of one property row: a 20px row and the 4px gap below it.
+pub(super) const ROW_PITCH: i32 = m::ROW_H + space::SPACE_1;
+/// A vertical flow of panels and rows inside a scrolling editor region.
+/// Only rows that fit entirely inside `top..bottom` are drawn or hit-tested,
+/// so nothing is clipped mid-control; panel frames are cut at the edges.
+pub(super) struct Stack {
+    pub x: i32,
+    pub w: i32,
+    pub top: i32,
+    pub bottom: i32,
+    /// Next row top in window coordinates (scroll already applied).
+    pub y: i32,
+    scroll: i32,
+    /// Row column inside the open panel (x, w).
+    inner: (i32, i32),
+    open: Option<OpenPanel>,
+}
+impl Stack {
+    /// `rect` is the editor area; content scrolls up by `scroll` px. The
+    /// bottom `CUE_H` px are kept for the more-below cue.
+    pub fn new(rect: [i32; 4], scroll: i32) -> Self {
+        let [x, y, w, h] = rect;
+        let (cx, cw) = (x + space::SPACE_1, w - 2 * space::SPACE_1 - 4);
+        Stack {
+            x: cx,
+            w: cw,
+            top: y,
+            bottom: y + h - CUE_H,
+            y: y + space::SPACE_1 - scroll.max(0),
+            scroll: scroll.max(0),
+            inner: (cx, cw),
+            open: None,
+        }
+    }
+    pub fn visible(&self, y: i32, h: i32) -> bool {
+        y >= self.top && y + h <= self.bottom
+    }
+    /// Reserve a row `h` px tall in the current column; returns its rect when
+    /// it is entirely visible.
+    pub fn row(&mut self, h: i32) -> Option<[i32; 4]> {
+        let rect = [self.inner.0, self.y, self.inner.1, h];
+        self.y += h + space::SPACE_1;
+        self.visible(rect[1], h).then_some(rect)
+    }
+    /// Extra vertical space.
+    pub fn gap(&mut self, h: i32) {
+        self.y += h;
+    }
+    /// True while the open panel is collapsed (its rows are skipped).
+    pub fn collapsed(&self) -> bool {
+        self.open.as_ref().is_some_and(|p| p.collapsed)
+    }
+}
+impl Layout {
+    /// Start a collapsible panel in `s`. Its header toggles with `toggle`;
+    /// `tools` header tool slots (rightmost first) are left out of the toggle
+    /// region. Rows follow until `panel_end`.
+    pub(super) fn panel_begin(
+        &mut self,
+        s: &mut Stack,
+        title: &str,
+        icon: Option<Icon>,
+        collapsed: bool,
+        toggle: Action,
+        tools: i32,
+    ) {
+        let header = [
+            s.x,
+            s.y,
+            s.w - tools * (m::PANEL_HEADER_H - 2),
+            m::PANEL_HEADER_H,
+        ];
+        if s.visible(s.y, m::PANEL_HEADER_H) {
+            self.hit(header, toggle);
+        }
+        s.open = Some(OpenPanel {
+            mark: self.canvas.commands.len(),
+            y: s.y,
+            title: title.into(),
+            icon,
+            collapsed,
+            tools,
+        });
+        s.y += m::PANEL_HEADER_H;
+        if !collapsed {
+            s.y += 2;
+        }
+        s.inner = (s.x + space::SPACE_2, s.w - 2 * space::SPACE_2);
+    }
+    /// Header tool of the open panel; `slot` 0 is the rightmost.
+    pub(super) fn panel_header_tool(&mut self, s: &Stack, slot: i32, b: Btn, action: Action) {
+        let Some(p) = &s.open else {
+            return;
+        };
+        let size = m::PANEL_HEADER_H - 4;
+        let x = s.x + s.w - 4 - size - slot * (size + 2);
+        if s.visible(p.y + 2, size) {
+            self.button_ex([x, p.y + 2, size, size], b, action);
+        }
+    }
+    /// Close the open panel: its frame and header are drawn beneath the rows
+    /// already emitted, cut to the visible region.
+    pub(super) fn panel_end(&mut self, s: &mut Stack) {
+        let Some(p) = s.open.take() else {
+            return;
+        };
+        let (mark, y) = (p.mark, p.y);
+        if !p.collapsed {
+            s.y += space::SPACE_2 - space::SPACE_1;
+        }
+        let rect = [s.x, y, s.w, s.y - y];
+        let hover = self.over([s.x, y, s.w, m::PANEL_HEADER_H]) && s.visible(y, m::PANEL_HEADER_H);
+        let tail = self.canvas.commands.split_off(mark);
+        panel_frame(&mut self.canvas, rect, (s.top, s.bottom), &p, hover);
+        self.canvas.commands.extend(tail);
+        s.y += space::SPACE_1;
+        s.inner = (s.x, s.w);
+    }
+    /// Finish the stack: record the scroll range and draw the scroll cue (a
+    /// thumb at the right edge, a chevron when more content is below).
+    pub(super) fn stack_end(&mut self, s: Stack) {
+        let content = s.y + s.scroll - s.top;
+        let view = s.bottom - s.top;
+        let max = (content - view).max(0);
+        self.inspector_max = max;
+        if max == 0 || view < 24 {
+            return;
+        }
+        let scroll = s.scroll.min(max);
+        let track = view - 4;
+        let thumb = (track * view / content).max(16).min(track);
+        let ty = s.top + 2 + (track - thumb) * scroll / max;
+        let tx = s.x + s.w + 1;
+        self.canvas.rect(tx, ty, 3, thumb, c::GM_600);
+        if scroll < max {
+            self.canvas.rect(s.x, s.bottom, s.w, 1, c::GM_1000);
+            self.canvas.icon_sm(
+                s.x + (s.w - m::ICON_SM) / 2,
+                s.bottom + 2,
+                Icon::ChevronDown,
+                c::INK_MUTED,
+                c::GM_800,
+            );
+        }
+    }
+    /// Property row in the stack: label right-aligned in the label column;
+    /// returns the visible control rect.
+    pub(super) fn prop(&mut self, s: &mut Stack, label: &str) -> Option<[i32; 4]> {
+        if s.collapsed() {
+            return None;
+        }
+        s.row(m::ROW_H).map(|r| self.prop_row(r, label))
+    }
+    /// Read-only value row: label and a mono value in `ink` (`unit` muted).
+    pub(super) fn info(&mut self, s: &mut Stack, label: &str, value: &str, unit: &str) {
+        if let Some([x, y, w, h]) = self.prop(s, label) {
+            let unit_w = if unit.is_empty() {
+                0
+            } else {
+                text_width(unit, Style::Value) + 4
+            };
+            let text = fit(value, w - unit_w - 6, Style::Value);
+            let base = baseline(y, h, Style::Value);
+            self.canvas.styled(x + 6, base, &text, c::INK, Style::Value);
+            if !unit.is_empty() {
+                self.canvas.styled(
+                    x + 6 + text_width(&text, Style::Value) + 4,
+                    base,
+                    unit,
+                    c::INK_MUTED,
+                    Style::Value,
+                );
+            }
+        }
+    }
+    /// Full-width row of the stack (buttons, notices, lists); `None` when
+    /// collapsed or not entirely visible.
+    pub(super) fn wide(&mut self, s: &mut Stack, h: i32) -> Option<[i32; 4]> {
+        if s.collapsed() {
+            return None;
+        }
+        s.row(h)
+    }
+    /// Sub-head inside the open panel.
+    pub(super) fn stack_subhead(&mut self, s: &mut Stack, text: &str) {
+        if let Some([x, y, w, _]) = self.wide(s, m::ROW_H) {
+            subhead(&mut self.canvas, x, y, w, text);
+        }
+    }
+    /// Notice inside the stack, wrapped to the column.
+    pub(super) fn stack_notice(&mut self, s: &mut Stack, tone: Tone, text: &str) {
+        if s.collapsed() {
+            return;
+        }
+        let h = notice_height(s.inner.1, text);
+        if let Some([x, y, w, _]) = s.row(h) {
+            notice(&mut self.canvas, x, y, w, tone, text);
+        }
+    }
+    /// Sunken text field for values a NumberField cannot scrub (strings,
+    /// pointers, `$hex` operands): click opens the type prompt.
+    pub(super) fn text_field(&mut self, rect: [i32; 4], text: &str, changed: bool, action: Action) {
+        let [x, y, w, h] = rect;
+        let hover = self.over(rect);
+        let fill = if hover { c::GM_1000 } else { c::GM_950 };
+        notched(&mut self.canvas, rect, Some(fill), Some(c::LINE_STRONG));
+        self.canvas.styled(
+            x + 6,
+            baseline(y, h, Style::Value),
+            &fit(text, w - 12, Style::Value),
+            if changed { c::AMBER } else { c::INK },
+            Style::Value,
+        );
+        self.hit(rect, action);
+    }
+    /// Vector field (`th-vec`): X, Y, Z NumberFields stacked, axis-coloured
+    /// labels. `rect` is the first component; returns the total height.
+    pub(super) fn vector(&mut self, rect: [i32; 4], parts: &[Number; 3]) -> i32 {
+        for (k, n) in parts.iter().enumerate() {
+            self.number(
+                [
+                    rect[0],
+                    rect[1] + k as i32 * m::FIELD_H,
+                    rect[2],
+                    m::FIELD_H,
+                ],
+                n,
+            );
+        }
+        3 * m::FIELD_H
+    }
+}
+/// Panel surface, keyline, chevron, icon and title over `rect`, cut to the
+/// visible `clip` rows. The header shows `gm-700` when hovered.
+fn panel_frame(d: &mut Canvas, rect: [i32; 4], clip: (i32, i32), p: &OpenPanel, hover: bool) {
+    let (title, icon, collapsed, tools) = (p.title.as_str(), p.icon, p.collapsed, p.tools);
+    let [x, y, w, h] = rect;
+    let (top, bottom) = clip;
+    let y0 = y.max(top);
+    let y1 = (y + h).min(bottom);
+    if y1 <= y0 || w < 3 {
+        return;
+    }
+    // Body and side keylines, with notched corners where the edge shows.
+    let inner0 = y0.max(y + 1);
+    let inner1 = y1.min(y + h - 1);
+    d.rect(x + 1, y0, w - 2, y1 - y0, c::GM_800);
+    if inner1 > inner0 {
+        d.rect(x, inner0, 1, inner1 - inner0, c::GM_1000);
+        d.rect(x + w - 1, inner0, 1, inner1 - inner0, c::GM_1000);
+    }
+    if y >= top {
+        d.rect(x + 1, y, w - 2, 1, c::GM_1000);
+    }
+    if y + h <= bottom {
+        d.rect(x + 1, y + h - 1, w - 2, 1, c::GM_1000);
+    }
+    let hh = m::PANEL_HEADER_H;
+    if y < top || y + hh > bottom {
+        return;
+    }
+    let ground = if hover { c::GM_700 } else { c::GM_800 };
+    if hover {
+        d.rect(x + 1, y + 1, w - 2, hh - 2, c::GM_700);
+    }
+    let mut tx = x + 6;
+    d.icon_sm(
+        tx,
+        y + (hh - m::ICON_SM) / 2,
+        if collapsed {
+            Icon::ChevronRight
+        } else {
+            Icon::ChevronDown
+        },
+        c::INK_MUTED,
+        ground,
+    );
+    tx += m::ICON_SM + space::SPACE_1;
+    if let Some(g) = icon {
+        d.icon(tx, y + (hh - m::ICON) / 2, g, c::INK_MUTED, ground);
+        tx += m::ICON + space::SPACE_1;
+    }
+    d.styled(
+        tx,
+        baseline(y, hh, Style::Strong),
+        &fit(title, x + w - 8 - tools * (hh - 2) - tx, Style::Strong),
+        c::INK,
+        Style::Strong,
+    );
+}
 /// Like `face` but for members of a segmented control (square corners).
 fn face_plain(d: &mut Canvas, rect: [i32; 4], b: &Btn, l: &Look) {
     let plain = Look {
@@ -1003,29 +1347,83 @@ fn face_plain(d: &mut Canvas, rect: [i32; 4], b: &Btn, l: &Look) {
 impl App {
     /// Current value, on-disk value and limits for a NumberField target.
     pub(super) fn number_spec(&self, t: NumberTarget) -> Option<NumberSpec> {
+        let integer = |f: &hangar_core::brf::Field, disk: Option<&hangar_core::brf::Field>| {
+            let (min, max) = match f.kind.as_str() {
+                "byte" => (-128, 255),
+                "word" => (-32768, 65535),
+                "dword" => (i32::MIN as i64, u32::MAX as i64),
+                _ => return None,
+            };
+            // `$hex` operands keep their notation: they open the type prompt instead.
+            let value = f.value.parse::<i64>().ok()?;
+            Some(NumberSpec {
+                value,
+                disk: disk.and_then(|o| o.value.parse::<i64>().ok()),
+                step: 1,
+                min,
+                max,
+                decimals: 0,
+                bounded: false,
+            })
+        };
         match t {
             NumberTarget::Field(i) => {
                 let f = self.brf.as_ref()?.fields.get(i)?;
-                let (min, max) = match f.kind.as_str() {
-                    "byte" => (-128, 255),
-                    "word" => (-32768, 65535),
-                    "dword" => (i32::MIN as i64, u32::MAX as i64),
-                    _ => return None,
-                };
-                let value = f.value.parse::<i64>().ok()?;
-                let disk = self
-                    .original_brf
+                integer(f, self.original_brf.as_ref().and_then(|b| b.fields.get(i)))
+            }
+            NumberTarget::Station(column) => {
+                let c = self.hp_context.as_ref()?;
+                let s = c.stations.get(self.hp_selected)?;
+                let f = c.brf.fields.get(*s.fields.get(column)?)?;
+                let saved = c
+                    .saved
                     .as_ref()
-                    .and_then(|b| b.fields.get(i))
-                    .and_then(|o| o.value.parse::<i64>().ok());
+                    .and_then(|b| b.fields.iter().find(|old| old.label == f.label));
+                if !(1..=3).contains(&column) {
+                    return integer(f, saved);
+                }
+                // Positions are signed source coordinates, `$hex` words sign-extended.
+                let signed = |f: &hangar_core::brf::Field| match f.value.strip_prefix('$') {
+                    Some(h) => u32::from_str_radix(h, 16).ok().map(|n| {
+                        if f.kind == "word" {
+                            n as u16 as i16 as i64
+                        } else {
+                            n as i32 as i64
+                        }
+                    }),
+                    None => f.value.parse::<i64>().ok(),
+                };
                 Some(NumberSpec {
-                    value,
-                    disk,
+                    value: self
+                        .hp_drag
+                        .as_ref()
+                        .map_or(s.position[column - 1], |d| d.position[column - 1])
+                        as i64,
+                    disk: saved.and_then(signed),
                     step: 1,
-                    min,
-                    max,
+                    min: -32768,
+                    max: 32767,
                     decimals: 0,
                     bounded: false,
+                })
+            }
+            NumberTarget::Decal(key) => {
+                let p = self.decal_placement;
+                let (value, min, max) = match key {
+                    0 => (p.center[0], -8192, 8192),
+                    1 => (p.center[1], -8192, 8192),
+                    2 => (p.width as i32, 1, 2048),
+                    3 => (p.degrees, 0, 359),
+                    _ => (p.opacity as i32, 0, 100),
+                };
+                Some(NumberSpec {
+                    value: value as i64,
+                    disk: None,
+                    step: 1,
+                    min: min as i64,
+                    max: max as i64,
+                    decimals: 0,
+                    bounded: key == 4,
                 })
             }
         }
@@ -1058,6 +1456,72 @@ impl App {
                 self.field_selected = i;
                 self.status = "Field changed | Ctrl+Z undo".into();
             }
+            NumberTarget::Station(column) => self.station_value(column, &format!("{value}"))?,
+            NumberTarget::Decal(key) => self.decal_setting(key, &format!("{value}"))?,
+        }
+        Ok(())
+    }
+    /// The exact saved operand text of a BRF-backed target, so a reset
+    /// restores the file's bytes (including `$hex` notation), not a reformat.
+    fn saved_text(&self, t: NumberTarget) -> Option<String> {
+        match t {
+            NumberTarget::Field(i) => self
+                .original_brf
+                .as_ref()
+                .and_then(|b| b.fields.get(i))
+                .map(|f| f.value.clone()),
+            NumberTarget::Station(column) => {
+                let c = self.hp_context.as_ref()?;
+                let f = &c.brf.fields[*c.stations.get(self.hp_selected)?.fields.get(column)?];
+                c.saved
+                    .as_ref()?
+                    .fields
+                    .iter()
+                    .find(|old| old.label == f.label)
+                    .map(|old| old.value.clone())
+            }
+            NumberTarget::Decal(_) => None,
+        }
+    }
+    /// Write the saved operand text back to a BRF-backed target, one undo step.
+    fn restore_saved(&mut self, t: NumberTarget, text: &str) -> Result<()> {
+        match t {
+            NumberTarget::Field(i) => {
+                let bytes = self.brf.as_ref().ok_or("No fields")?.edit(
+                    &self.data,
+                    i,
+                    text,
+                    extension(self.name()),
+                )?;
+                if bytes != self.data {
+                    self.doc.replace(self.selected, bytes)?;
+                }
+                let scroll = self.field_scroll;
+                self.refresh();
+                self.field_scroll = scroll;
+                self.field_selected = i;
+            }
+            NumberTarget::Station(column) => {
+                let c = self.hp_context.as_ref().ok_or("No station owner")?;
+                let entry = c.entry;
+                let field = *c
+                    .stations
+                    .get(self.hp_selected)
+                    .and_then(|s| s.fields.get(column))
+                    .ok_or("No station")?;
+                let old = self.doc.archive.entries[entry].read()?;
+                let bytes = c.brf.edit(
+                    &old,
+                    field,
+                    text,
+                    extension(&self.doc.archive.entries[entry].name),
+                )?;
+                if bytes != old {
+                    self.doc.replace(entry, bytes)?;
+                }
+                self.refresh();
+            }
+            NumberTarget::Decal(_) => return Err("No saved value to reset to".into()),
         }
         Ok(())
     }
@@ -1094,12 +1558,15 @@ impl App {
         }
         s.value = v.clamp(s.spec.min, s.spec.max);
     }
-    /// Release commits a moved scrub as one undo step.
+    /// Release commits a moved scrub as one undo step; a click without a drag
+    /// types an exact value, as in Blender.
     pub(super) fn number_release(&mut self) {
         if let Some(s) = self.scrub.take() {
             if s.moved {
                 let result = self.number_commit(s.target, s.value);
                 self.result(result);
+            } else {
+                self.number_prompt(s.target);
             }
         }
     }
@@ -1117,9 +1584,10 @@ impl App {
     }
     /// Backspace: back to the value in the file on disk.
     pub(super) fn number_reset(&mut self, t: NumberTarget) {
-        match self.number_spec(t).and_then(|s| s.disk) {
-            Some(disk) => {
-                let result = self.number_commit(t, disk);
+        match self.saved_text(t) {
+            Some(text) => {
+                self.status.clear();
+                let result = self.restore_saved(t, &text);
                 self.result(result);
                 if result_ok(&self.status) {
                     self.status = "Value reset to the file on disk | Ctrl+Z undo".into();
