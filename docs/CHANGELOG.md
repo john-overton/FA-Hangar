@@ -7,6 +7,21 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Make paintable fills the sheet with the colour the marking sits on.**
+  The new sheet was filled with the marking face's stored colour, which on
+  the F-5 is index 0, so a painted roundel sat in a black square. A new
+  **Fill** row (Runtime markings panel) now defaults to **From the surface
+  below**: Hangar finds the drawn face under the marking (the wing panel),
+  reads its flat colour or the texel at the marking's centre through its
+  UVs, and fills the panel with that index, falling back to the shape's skin
+  index and then the stored colour. **Panel colour** keeps the old fill and
+  **Pick…** opens a palette grid. A swatch and an **Index** line show the
+  result before you click. The fill is solid because index 255 transparency
+  is not verified in the game
+  ([Runtime markings](MANUAL.md#runtime-markings) limits).
+  `--markings-check` counts where each slot's fill came from and, with a
+  shape, renders the old fill beside the new.
+
 - **Runtime markings** (Model inspector, Edit Mesh and Paint): a new panel
   lists the markings the game fills in at run time, such as national
   roundels and tail art, one row per slot (`E0` record). Clear **Shown**

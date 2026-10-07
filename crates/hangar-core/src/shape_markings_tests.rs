@@ -1,7 +1,24 @@
 //! Synthetic fixtures for runtime markings. Never retail data.
 use super::*;
 use crate::picture::{is_retail_texture, Pic};
-use crate::shape_testkit::{demo_markings_kit, Asm};
+use crate::shape_fill::{fill_preview, FillMode, FillSource};
+use crate::shape_testkit::{demo_marking_surface, demo_markings_kit, Asm};
+
+fn no_textures(_: &str) -> Option<Vec<u8>> {
+    None
+}
+/// KIT.PIC: index 30 everywhere but a block of 99 where the marking's
+/// centre lands (UV 20, 20 is row 43 of 64).
+fn wing_texture() -> Vec<u8> {
+    let mut pixels = vec![30u8; 256 * 64];
+    for row in 40..48 {
+        pixels[row * 256 + 16..row * 256 + 24].fill(99);
+    }
+    crate::picture::retail_texture(64, &pixels).unwrap()
+}
+fn kit_pic(name: &str) -> Option<Vec<u8>> {
+    (name == "KIT.PIC").then(wing_texture)
+}
 
 /// The synthetic module with its relocations padded as native PL files
 /// pad them (to the next 4 KiB), which is the layout Hangar writes: retail
@@ -206,7 +223,7 @@ fn reassign_stays_within_named_slots_and_reverses_exactly() {
 fn make_paintable_draws_a_retail_texture_and_restores_the_slot() {
     let src = kit();
     let face = row(&src, 4).faces[0];
-    let p = make_paintable(&src, 4, "KITM4.PIC", None, Some(7)).unwrap();
+    let p = make_paintable(&src, 4, "KITM4.PIC", None, FillMode::Index(7), &no_textures).unwrap();
     assert!(is_retail_texture(&p.picture));
     let pic = Pic::parse(&p.picture).unwrap();
     assert_eq!(pic.width, 256);
@@ -229,9 +246,11 @@ fn make_paintable_draws_a_retail_texture_and_restores_the_slot() {
         drawn(b).into_iter().filter(|f| f.0 != skip - cs).collect()
     };
     assert_eq!(others(&p.shape, p.faces[0]), others(&src, face));
-    assert!(make_paintable(&p.shape, 4, "X.PIC", None, None)
-        .unwrap_err()
-        .contains("already paintable"));
+    assert!(
+        make_paintable(&p.shape, 4, "X.PIC", None, FillMode::Panel, &no_textures)
+            .unwrap_err()
+            .contains("already paintable")
+    );
     let (back, names) = restore_slot(&p.shape, 4).unwrap();
     assert_eq!(names, ["KITM4.PIC"]);
     assert_eq!(row(&back, 4).faces, [face]);
@@ -243,13 +262,23 @@ fn make_paintable_draws_a_retail_texture_and_restores_the_slot() {
         .contains("no paintable faces"));
     // Hidden faces are shown first.
     let hidden = hide_slot(&src, 4).unwrap();
-    assert!(make_paintable(&hidden, 4, "X.PIC", None, None)
-        .unwrap_err()
-        .contains("show it first"));
+    assert!(
+        make_paintable(&hidden, 4, "X.PIC", None, FillMode::Panel, &no_textures)
+            .unwrap_err()
+            .contains("show it first")
+    );
     // The damage family shares one sheet size.
     let size = paint_size(&src, 3).unwrap();
     let d = native(demo_markings_kit(true));
-    let q = make_paintable(&d, 3, "KITM3.PIC", Some(size), None).unwrap();
+    let q = make_paintable(
+        &d,
+        3,
+        "KITM3.PIC",
+        Some(size),
+        FillMode::Panel,
+        &no_textures,
+    )
+    .unwrap();
     assert_eq!(q.size, size);
     assert_eq!(q.color, 150);
 }
@@ -297,9 +326,11 @@ fn loops_prove_markings_and_a_face_under_two_states_is_refused() {
     assert!(hide_slot(&src, 1)
         .unwrap_err()
         .contains("hiding it would hide both"));
-    assert!(make_paintable(&src, 1, "X.PIC", None, None)
-        .unwrap_err()
-        .contains("cannot be made paintable"));
+    assert!(
+        make_paintable(&src, 1, "X.PIC", None, FillMode::Panel, &no_textures)
+            .unwrap_err()
+            .contains("cannot be made paintable")
+    );
     // Faces proved through the loops hide and show exactly.
     let hidden = hide_faces(&src, &[y, z]).unwrap();
     assert_eq!(row(&hidden, 1).hidden, [y]);
@@ -321,9 +352,75 @@ fn truncated_shapes_fail_without_panicking() {
             let _ = hide_slot(cut, 3);
             let _ = show_slot(cut, 4);
             let _ = reassign_slot(cut, 3, 0);
-            let _ = make_paintable(cut, 3, "X.PIC", None, None);
+            let _ = make_paintable(cut, 3, "X.PIC", None, FillMode::Panel, &no_textures);
             let _ = restore_slot(cut, 3);
         }
     }
     assert!(markings(&src[..src.len() / 2]).is_err());
+}
+
+#[test]
+fn the_default_fill_is_the_colour_the_marking_sits_on() {
+    // A flat wing: the kit's wing plates are colour 151, the marking's own
+    // colour is 150.
+    let src = kit();
+    for slot in [3, 4] {
+        let f = fill_preview(&src, slot, FillMode::Surface, &no_textures).unwrap();
+        assert_eq!(f.color, 151, "slot {slot}");
+        assert!(matches!(f.source, FillSource::Surface(_)));
+        let panel = fill_preview(&src, slot, FillMode::Panel, &no_textures).unwrap();
+        assert_eq!(panel.color, 150);
+    }
+    let p = make_paintable(&src, 4, "KITM4.PIC", None, FillMode::Surface, &no_textures).unwrap();
+    assert_eq!(p.color, 151);
+    let pic = Pic::parse(&p.picture).unwrap();
+    assert!(pic.pixels.iter().all(|v| *v == 151));
+    let q = make_paintable(&src, 3, "KITM3.PIC", None, FillMode::Index(9), &no_textures).unwrap();
+    assert_eq!((q.color, q.fill), (9, FillSource::Picked));
+}
+
+#[test]
+fn a_textured_wing_gives_its_texel_under_the_marking_centre() {
+    let src = native(demo_marking_surface(1, true, false));
+    let f = fill_preview(&src, 4, FillMode::Surface, &kit_pic).unwrap();
+    assert_eq!(f.color, 99);
+    assert!(matches!(f.source, FillSource::Surface(_)));
+    // Without the texture the wing cannot be read; the fill falls back to
+    // the skin, and with nothing else drawn to the stored colour.
+    let f = fill_preview(&src, 4, FillMode::Surface, &no_textures).unwrap();
+    assert_eq!((f.color, f.source), (150, FillSource::Stored));
+    // The panel option keeps the stored colour.
+    let f = fill_preview(&src, 4, FillMode::Panel, &kit_pic).unwrap();
+    assert_eq!((f.color, f.source), (150, FillSource::Stored));
+    let p = make_paintable(&src, 4, "KITM4.PIC", None, FillMode::Surface, &kit_pic).unwrap();
+    assert_eq!(p.color, 99);
+    let pic = Pic::parse(&p.picture).unwrap();
+    assert!(pic.pixels.iter().all(|v| *v == 99));
+    let (back, _) = restore_slot(&p.shape, 4).unwrap();
+    exact(&back, &src);
+}
+
+#[test]
+fn without_a_surface_the_fill_falls_back_to_the_skin_then_the_stored_colour() {
+    // The marking floats far above the wing: a flat plate elsewhere sets
+    // the skin index.
+    let src = demo_marking_surface(40, true, true);
+    let f = fill_preview(&src, 4, FillMode::Surface, &kit_pic).unwrap();
+    assert_eq!((f.color, f.source), (77, FillSource::Skin));
+    // Only textured faces: the commonest index of the commonest texture.
+    let src = demo_marking_surface(40, true, false);
+    let f = fill_preview(&src, 4, FillMode::Surface, &kit_pic).unwrap();
+    assert_eq!((f.color, f.source), (30, FillSource::Skin));
+    // Nothing else drawn: the colour the marking stores.
+    let src = demo_marking_surface(1, false, false);
+    let f = fill_preview(&src, 4, FillMode::Surface, &kit_pic).unwrap();
+    assert_eq!((f.color, f.source), (150, FillSource::Stored));
+    // The tolerance is the line between a surface and no surface.
+    let edge = crate::shape_fill::TOLERANCE as i16;
+    let near = demo_marking_surface(edge, true, true);
+    let f = fill_preview(&near, 4, FillMode::Surface, &kit_pic).unwrap();
+    assert!(matches!(f.source, FillSource::Surface(_)));
+    let far = demo_marking_surface(edge + 1, true, true);
+    let f = fill_preview(&far, 4, FillMode::Surface, &kit_pic).unwrap();
+    assert_eq!(f.source, FillSource::Skin);
 }

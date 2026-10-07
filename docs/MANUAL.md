@@ -1207,6 +1207,9 @@ hidden one with a dim dashed line. One row per slot shows:
 - **Slot**: choose another slot (0 to 4) for the same faces;
 - **Select faces**: selects them as panels, or in Edit Mesh (Tab) as faces,
   so G, R and S move, rotate and scale them;
+- **Fill**, on rows that can be made paintable: the colour **Make paintable**
+  fills the new sheet with, shown as a swatch with its palette index (see
+  below);
 - **Make paintable** / **Restore runtime marking**.
 
 To replace a marking with your own artwork:
@@ -1214,12 +1217,35 @@ To replace a marking with your own artwork:
 1. Click **Make paintable** on its row. Hangar creates `<SHAPE>M<slot>.PIC`
    (for example `F5EVM4.PIC`) in the FA texture layout, maps the faces onto
    it flat from their own plane at the aircraft's texel density, and fills
-   the panel with the faces' stored colour index.
+   the panel with the **Fill** colour.
 2. Open the PIC in the Paint workspace, or paint on the model, as for any
-   texture ([Paint a livery](#paint-a-livery)).
+   texture ([Paint a livery](#paint-a-livery)). Only the sheet's panel area
+   draws on the aircraft.
 3. To go back, click **Restore runtime marking**. The faces draw from the
    slot again, and the PIC (with its stored original) is removed when no
    other shape uses it.
+
+**Fill** decides what colour surrounds your art. Choose it before you click
+**Make paintable**; the swatch and **Index** line show the colour you will
+get and where it came from:
+
+- **From the surface below** (default): Hangar finds the drawn face the
+  marking sits on (on the F-5, the wing panel: a face within a few units of
+  the marking's plane that lies under its centre when both are looked at
+  along the marking's normal), reads its flat colour or the texel its
+  texture gives at the marking's centre, and fills the panel with that
+  index, so a painted roundel has no square around it. If several faces
+  qualify the nearest plane wins. If none does, it uses the shape's own skin
+  index (its commonest flat colour, else its commonest texture's commonest
+  index), then the colour the marking stores; the **Index** line says "shape
+  skin, no surface found".
+- **Panel colour**: the colour the marking's own faces store (on the F-5,
+  index 0, black), as earlier versions did.
+- **Pick…**: choose any index from the palette grid that opens under the
+  row.
+
+Each slot remembers its own choice while the window is open. With **Apply to
+damage family**, the family shares the sheet and so the first shape's fill.
 
 Check **Apply to damage family** to repeat each action on the `_A` to `_D`
 shapes that select the same slot, in the same undo step. The status line
@@ -1237,7 +1263,8 @@ changed shapes.
 `--decal-census FA_2.LIB` prints which shapes use which slots, with face
 counts and the aircraft that use them. `--markings-check FA_2.LIB [F5EV.SH
 NEW_DIR]` runs every marking action on every shape that has one and
-compares the reversed result byte for byte; with a shape and a new
+compares the reversed result byte for byte and counts where each slot's
+default fill came from; with a shape and a new
 directory it also hides, shows, paints and restores that shape's markings
 through the panel, saving, reopening and rendering PNGs along the way.
 
@@ -1925,7 +1952,7 @@ none of it has been watched in the game yet.
 | A face drawn under a slot on one path and another texture on another is refused | Hiding or repainting it would also change the other texture's face. No retail FA_2.LIB shape has one. | |
 | Hide and Make paintable need CODE virtual-address room | The hidden faces' original records, and the paintable faces' copies, go into records added before the shape's end marker. In FA_2.LIB, `APA.SH` and `IL76.SH` have no room; `A4.SH` has room to hide one slot at a time but not to make one paintable. | Reassign the slot, or move the faces out of view. |
 | Show and Restore give back the exact original bytes only when the hidden or paintable records are the last ones added | Hangar then moves the end marker back. Otherwise the freed bytes stay as padding that is never drawn; every face record is still exact. Over FA_2.LIB, hide, show, reassign, make paintable and restore return the exact retail bytes for 146 of the 150 shapes with markings; `SU27V.SH`'s CODE section carries 512 spare bytes that the layout writer does not keep, and the other three lack room (above). | Undo before saving is always exact. |
-| A paintable sheet starts filled with the faces' stored colour index | The runtime image is not available to Hangar, so it cannot be baked. On the F-5 that colour is index 0, black. Whether index 255 is see-through on these faces, as the game's `BLANK.PIC` suggests, is **unverified**. | Paint the whole sheet. |
+| A paintable sheet is a solid fill, by default the colour of the surface under the marking | The runtime image is not available to Hangar, so it cannot be baked, and whether index 255 is see-through on these faces, as the game's `BLANK.PIC` suggests, is **unverified**, so Hangar does not rely on it. A solid fill that matches the surface is the safe choice; a stored colour such as the F-5's index 0 (black) would show as a black patch. The match is the surface's flat colour or texel at the marking's centre, so a surface that shades or changes colour under the marking can still show a visible edge, and a surface found through a texture with its own palette is read as a game palette index. | Choose **Panel colour** or **Pick…** in **Fill**, or paint the whole panel area. |
 | The panel outlines markings instead of drawing them | Hangar has no slot image to draw. | |
 | Not yet tested in the game | Hidden markings, reassigned slots and paintable markings pass Hangar's checks; none has been loaded in FA. | See [WINDOWS-TEST.md](WINDOWS-TEST.md). |
 

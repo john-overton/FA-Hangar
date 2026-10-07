@@ -1228,12 +1228,16 @@ pub fn decal_census(lib: &str) -> Result<String> {
 /// `--markings-check` core pass: every runtime-marking operation on every
 /// shape that selects a slot, each reversed and compared byte for byte.
 pub fn markings_round_trip(lib: &str) -> Result<String> {
+    use hangar_core::shape_fill::{FillMode, FillSource};
     use hangar_core::shape_markings::{
         hide_slot, make_paintable, markings, reassign_slot, restore_slot, show_slot,
     };
     let archive = Archive::parse(crate::platform::read(lib)?)?;
+    let textures = |n: &str| archive.find(n).and_then(|i| archive.entries[i].read().ok());
     let (mut shapes, mut passed, mut ops) = (0, 0, 0);
     let mut failures = Vec::new();
+    let mut fills = [0usize; 3];
+    let mut unfound = Vec::new();
     for e in archive.entries.iter().filter(|e| e.name.ends_with(".SH")) {
         let src = e.read()?;
         let Ok(rows) = markings(&src) else { continue };
@@ -1257,7 +1261,18 @@ pub fn markings_round_trip(lib: &str) -> Result<String> {
             }
             trials.push((
                 format!("make paintable/restore slot {s}"),
-                make_paintable(&src, s, "ZZPAINT.PIC", None, None)
+                make_paintable(&src, s, "ZZPAINT.PIC", None, FillMode::Surface, &textures)
+                    .inspect(|p| {
+                        let k = match p.fill {
+                            FillSource::Surface(_) => 0,
+                            FillSource::Skin => 1,
+                            _ => 2,
+                        };
+                        fills[k] += 1;
+                        if k > 0 {
+                            unfound.push(format!("{} slot {s}", e.name));
+                        }
+                    })
                     .and_then(|p| restore_slot(&p.shape, s).map(|r| r.0)),
             ));
         }
@@ -1285,6 +1300,14 @@ pub fn markings_round_trip(lib: &str) -> Result<String> {
     let mut out = format!(
         "{lib}: {shapes} shapes select runtime slots; {passed} pass all of their operations byte for byte ({ops} operations)\n"
     );
+    let _ = writeln!(
+        out,
+        "  fill from the surface under the marking: {} slots; shape skin index: {}; stored colour: {}",
+        fills[0], fills[1], fills[2]
+    );
+    for u in unfound.iter().take(24) {
+        let _ = writeln!(out, "    no surface found under {u}");
+    }
     for f in &failures {
         let _ = writeln!(out, "  FAIL {f}");
     }

@@ -677,6 +677,42 @@ pub fn demo_markings_kit(damaged: bool) -> Vec<u8> {
         .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
     a.finish()
 }
+/// A runtime marking (slot 4, 10 x 10 units centred on the origin) `lift`
+/// units above a 40 x 40 wing plate drawn from KIT.PIC with UVs 0..40 (a
+/// square of texels per unit; `wing`), with a distant flat plate of colour
+/// 77 (`far`). Not a game asset.
+pub fn demo_marking_surface(lift: i16, wing: bool, far: bool) -> Vec<u8> {
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x10, 0]);
+    a.b(&[0xe2, 0]).b(b"KIT.PIC\0\0\0\0\0\0\0");
+    if wing {
+        let quad = [[-20, -20, 0], [20, -20, 0], [20, 20, 0], [-20, 20, 0]];
+        a.solid_uv(
+            0,
+            &quad,
+            &[(&[0, 1, 2, 3], [0, 0, -1])],
+            151,
+            &[alloc::vec![[0, 0], [40, 0], [40, 40], [0, 40]]],
+        );
+    }
+    if far {
+        plate(
+            &mut a,
+            8,
+            [[90, -5, 0], [100, -5, 0], [100, 5, 0], [90, 5, 0]],
+            77,
+        );
+    }
+    marking(
+        &mut a,
+        4,
+        16,
+        [[-5, 5, lift], [5, 5, lift], [5, -5, lift], [-5, -5, lift]],
+    );
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    a.finish()
+}
 /// A flat quad drawn from both sides.
 fn plate(a: &mut Asm, slot: u16, p: [[i16; 3]; 4], color: u8) {
     let c: [i32; 3] = core::array::from_fn(|k| p.iter().map(|q| q[k] as i32).sum::<i32>() / 4);

@@ -1160,7 +1160,12 @@ contested faces whose reaching set holds that E0 among other selectors
 - **Make paintable** keeps the E0. The slot's faces go through
   `assign_texture_uvs` onto a new PIC (`picture::retail_texture`, the panel
   in a sub-rectangle at the left, planar UVs from the faces' plane at the
-  shape's texel density, filled with the faces' commonest colour index);
+  shape's texel density, filled with the colour of the surface under the
+  marking, `shape_fill`: the drawn face within 12 units of the marking's
+  plane whose projection along the marking's normal holds the marking's
+  centre, sampled by integer barycentrics over its UV fan, else the skin
+  index, else the stored colour, or the stored colour or a picked index on
+  request);
   that continuation's restore selector is the E0 itself, so the slot stays
   recorded in the bytes and **Restore** is Use shape texture. Replacing the
   E0 with a no-op `48 00 00 00` was considered and rejected: after save and

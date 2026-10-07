@@ -1111,6 +1111,17 @@ repository.
   steel outlines on the drawn markings, dim dashed outlines once hidden,
   the painted roundel in place.
 
+- **Fill** (`--markings-check FA_2.LIB`, then `F5EV.SH NEW_DIR`, on a copy):
+  Make paintable's default fill takes the colour of the surface under the
+  marking. Over FA_2.LIB it finds a surface for 385 slots, falls back to the
+  shape's skin index for 3 and to the stored colour for 8 (`B2.SH`, `F8.SH`
+  and `Y141.SH`, which have no face under the marking); the 146 of 150
+  byte-exact result above is unchanged. On `F5EV.SH` slot 4 the fill is
+  index 255 (the wing's light grey);
+  the old fill was index 0. The bottom view with a roundel painted on the
+  sheet shows no black square after the change (and the black square
+  before). Checked by eye in the renders only; not loaded in FA.
+
 Core tests use a synthetic kit with wing and nose markings and a looped
 shape: detection, hide and show (byte-identical, also out of order and
 from the bytes alone), refusals for skin, untextured and missing faces,

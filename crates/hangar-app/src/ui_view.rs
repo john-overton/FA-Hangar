@@ -154,6 +154,12 @@ pub(super) enum Action {
     MarkingMenu(u16),
     /// Slot Select item: reassign the row's slot (from, to).
     MarkingSlot(u16, u16),
+    /// Open a Runtime markings row's Fill Select.
+    MarkingFillMenu(u16),
+    /// Fill Select item (slot, `markings_ui::FILL_*`).
+    MarkingFill(u16, u8),
+    /// Fill palette grid: pick index (slot, index).
+    MarkingFillColor(u16, u8),
     /// Assign texture dialog: pick PIC `i` (index into the dialog's list).
     AssignPick(usize),
     /// Assign texture dialog: UV mode Keep (0), Scale (1), Project (2).
@@ -420,6 +426,9 @@ impl App {
             Action::Marking(slot, op) => self.marking_action(slot, op),
             Action::MarkingMenu(slot) => self.open_slot_menu(slot),
             Action::MarkingSlot(from, to) => self.marking_slot(from, to),
+            Action::MarkingFillMenu(slot) => self.open_fill_menu(slot),
+            Action::MarkingFill(slot, kind) => self.marking_fill(slot, kind),
+            Action::MarkingFillColor(slot, i) => self.marking_fill_color(slot, i),
             Action::AssignPick(i) => self.assign_pick(i),
             Action::AssignMode(mode) => self.assign_mode(mode),
             Action::AssignPlane(plane) => self.ed.assign.plane = plane.min(3),

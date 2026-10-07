@@ -8,6 +8,7 @@ use super::view::{Action, Icon, Layout};
 use super::widgets::{pane, Btn, Check, Tone};
 use super::*;
 use core::cell::RefCell;
+use hangar_core::shape_fill::{fill_preview, Fill, FillMode, FillSource};
 use hangar_core::shape_markings::{self as mk, Marking};
 use theme::{metric as m, space};
 
@@ -16,6 +17,10 @@ pub(super) const MK_SELECT: u8 = 1;
 pub(super) const MK_PAINT: u8 = 2;
 pub(super) const MK_RESTORE: u8 = 3;
 pub(super) const MK_FAMILY: u8 = 4;
+/// Fill Select items.
+pub(super) const FILL_SURFACE: u8 = 0;
+pub(super) const FILL_PANEL: u8 = 1;
+pub(super) const FILL_PICK: u8 = 2;
 /// The panel's closing note: who decides what.
 const NOTE: &str = "The shape decides whether, where and which slot. The game picks the image at run time; Hide and Make paintable apply to every nation.";
 /// Damage family suffixes, in order.
@@ -30,10 +35,50 @@ struct Cached {
     rows: Vec<Marking>,
     hidden: Vec<Outline>,
 }
+/// What a slot's Make paintable fills the panel area with.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum FillChoice {
+    /// The surface under the marking.
+    #[default]
+    Surface,
+    /// The colour the marking faces store.
+    Panel,
+    /// A palette index.
+    Pick(u8),
+}
+impl FillChoice {
+    fn mode(self) -> FillMode {
+        match self {
+            FillChoice::Surface => FillMode::Surface,
+            FillChoice::Panel => FillMode::Panel,
+            FillChoice::Pick(i) => FillMode::Index(i),
+        }
+    }
+    fn label(self) -> String {
+        match self {
+            FillChoice::Surface => "From the surface below".into(),
+            FillChoice::Panel => "Panel colour".into(),
+            FillChoice::Pick(i) => format!("Pick\u{2026} {i}"),
+        }
+    }
+}
+/// The fills each slot would get, cached by the shape and the textures
+/// they were read from.
+struct FillCache {
+    shape: Entry,
+    used: Vec<Entry>,
+    /// Slot, its surface fill and its panel fill.
+    slots: Vec<(u16, Fill, Fill)>,
+}
 /// Runtime markings panel state (inside the boxed `EditState`).
 #[derive(Default)]
 pub(super) struct State {
     cache: RefCell<Option<Cached>>,
+    fills: RefCell<Option<FillCache>>,
+    /// Fill choice per slot (default From the surface below).
+    pub fill: Vec<(u16, FillChoice)>,
+    /// The open Select is a Fill Select, not a slot Select.
+    pub fill_menu: bool,
     /// Apply each action to the damage family too.
     pub family: bool,
     /// Open slot Select: the row's slot and the Select's rect.
@@ -287,8 +332,12 @@ impl App {
                         &format!("{slot} \u{b7} {}", mk::slot_name(slot)),
                         Action::MarkingMenu(slot),
                         self.menu == Some(chrome::MENU_SLOT)
+                            && !self.ed.markings.fill_menu
                             && self.ed.markings.slot_menu.is_some_and(|(n, _)| n == slot),
                     );
+                }
+                if r.painted.is_empty() && !r.faces.is_empty() && r.contested.is_empty() {
+                    self.fill_rows(o, s, slot);
                 }
                 if let Some(rect) = o.wide(s, m::BUTTON_H) {
                     let half = (rect[2] - space::SPACE_1) / 2;
@@ -319,8 +368,188 @@ impl App {
         }
         o.panel_end(s);
     }
+    /// The Fill row of a slot that can be made paintable: the chosen fill's
+    /// swatch and Select, its index and where it came from, and the palette
+    /// grid while Pick is chosen.
+    fn fill_rows(&self, o: &mut Layout, s: &mut widgets::Stack, slot: u16) {
+        let choice = self.fill_choice(slot);
+        let fill = self.fill_of(slot, choice);
+        if let Some(rect) = o.prop(s, "Fill") {
+            o.select(
+                rect,
+                None,
+                &choice.label(),
+                Action::MarkingFillMenu(slot),
+                self.menu == Some(chrome::MENU_SLOT)
+                    && self.ed.markings.fill_menu
+                    && self.ed.markings.slot_menu.is_some_and(|(n, _)| n == slot),
+            );
+        }
+        if let Some(f) = fill {
+            let why = match f.source {
+                FillSource::Surface(_) => "surface below",
+                FillSource::Skin => "skin, no surface",
+                FillSource::Stored => "stored",
+                FillSource::Picked => "picked",
+            };
+            if let Some([x, y, w, h]) = o.prop(s, "Index") {
+                let sw = h - 4;
+                let p = self.base_palette[f.color as usize];
+                o.canvas.rect(x + 6, y + 2, sw, sw, swatch(p));
+                widgets::frame(&mut o.canvas, [x + 6, y + 2, sw, sw], c::LINE_STRONG);
+                let tx = x + 6 + sw + space::SPACE_2;
+                let text = f.color.to_string();
+                let base = widgets::baseline(y, h, Style::Value);
+                o.canvas.styled(tx, base, &text, c::INK, Style::Value);
+                let ux = tx + text_width(&text, Style::Value) + 4;
+                o.canvas.styled(
+                    ux,
+                    base,
+                    &fit(why, x + w - ux, Style::Value),
+                    c::INK_MUTED,
+                    Style::Value,
+                );
+            }
+        }
+        if matches!(choice, FillChoice::Pick(_)) {
+            let colors = *self.base_palette;
+            let cell = ((s.w - 2 * space::SPACE_2) / 16).max(8);
+            for row in 0..16 {
+                if s.collapsed() {
+                    break;
+                }
+                let Some([x, y, ..]) = s.take(cell) else {
+                    continue;
+                };
+                for col in 0..16 {
+                    let i = row * 16 + col;
+                    let xx = x + col * cell;
+                    o.canvas
+                        .rect(xx, y, cell - 1, cell - 1, swatch(colors[i as usize]));
+                    if choice == FillChoice::Pick(i as u8) {
+                        widgets::frame(
+                            &mut o.canvas,
+                            [xx - 1, y - 1, cell + 1, cell + 1],
+                            c::AMBER,
+                        );
+                    }
+                    o.hit(
+                        [xx, y, cell - 1, cell - 1],
+                        Action::MarkingFillColor(slot, i as u8),
+                    );
+                }
+            }
+            s.gap(space::SPACE_1);
+        }
+    }
+    /// The fill choice of `slot`.
+    pub(super) fn fill_choice(&self, slot: u16) -> FillChoice {
+        self.ed
+            .markings
+            .fill
+            .iter()
+            .find(|f| f.0 == slot)
+            .map_or(FillChoice::Surface, |f| f.1)
+    }
+    fn set_fill_choice(&mut self, slot: u16, choice: FillChoice) {
+        let fill = &mut self.ed.markings.fill;
+        match fill.iter_mut().find(|f| f.0 == slot) {
+            Some(f) => f.1 = choice,
+            None => fill.push((slot, choice)),
+        }
+    }
+    /// The textures of the open LIB, by name.
+    fn texture_bytes(&self, name: &str) -> Option<Vec<u8>> {
+        let a = &self.doc.archive;
+        a.find(name).and_then(|i| a.entries[i].read().ok())
+    }
+    /// The fill `choice` gives `slot` of the shown shape.
+    fn fill_of(&self, slot: u16, choice: FillChoice) -> Option<Fill> {
+        if let FillChoice::Pick(color) = choice {
+            return Some(Fill {
+                color,
+                source: FillSource::Picked,
+            });
+        }
+        let entry = self
+            .marking_entry()
+            .map(|i| &self.doc.archive.entries[i])
+            .filter(|e| e.name.ends_with(".SH"))?;
+        let a = &self.doc.archive;
+        let fresh = self.ed.markings.fills.borrow().as_ref().is_some_and(|c| {
+            c.shape.name == entry.name
+                && c.shape.same_storage(entry)
+                && c.used.iter().all(|u| {
+                    a.find(&u.name)
+                        .is_some_and(|i| a.entries[i].same_storage(u))
+                })
+        });
+        if !fresh {
+            let bytes = entry.read().unwrap_or_default();
+            let used = RefCell::new(Vec::new());
+            let lookup = |n: &str| {
+                let i = a.find(n)?;
+                used.borrow_mut().push(a.entries[i].clone());
+                a.entries[i].read().ok()
+            };
+            let slots = mk::markings(&bytes)
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|r| {
+                    let of = |mode| fill_preview(&bytes, r.slot, mode, &lookup).ok();
+                    Some((r.slot, of(FillMode::Surface)?, of(FillMode::Panel)?))
+                })
+                .collect();
+            *self.ed.markings.fills.borrow_mut() = Some(FillCache {
+                shape: entry.clone(),
+                used: used.into_inner(),
+                slots,
+            });
+        }
+        let cache = self.ed.markings.fills.borrow();
+        let (_, surface, panel) = cache.as_ref()?.slots.iter().find(|f| f.0 == slot)?;
+        Some(if choice == FillChoice::Panel {
+            *panel
+        } else {
+            *surface
+        })
+    }
+    /// Open the Fill Select of row `slot`, anchored under it.
+    pub(super) fn open_fill_menu(&mut self, slot: u16) {
+        self.open_slot_menu(slot);
+        self.ed.markings.fill_menu = true;
+    }
+    /// Fill Select item `kind` of row `slot`.
+    pub(super) fn marking_fill(&mut self, slot: u16, kind: u8) {
+        self.ed.markings.slot_menu = None;
+        self.ed.markings.fill_menu = false;
+        self.menu = None;
+        let choice = match kind {
+            FILL_PANEL => FillChoice::Panel,
+            FILL_PICK => FillChoice::Pick(
+                self.fill_of(slot, FillChoice::Surface)
+                    .map_or(0, |f| f.color),
+            ),
+            _ => FillChoice::Surface,
+        };
+        self.set_fill_choice(slot, choice);
+        self.status = format!(
+            "Make paintable will fill {}: {}.",
+            slot_title(slot),
+            choice.label()
+        );
+    }
+    /// Palette grid cell: pick fill index `i` for `slot`.
+    pub(super) fn marking_fill_color(&mut self, slot: u16, i: u8) {
+        self.set_fill_choice(slot, FillChoice::Pick(i));
+        self.status = format!(
+            "Make paintable will fill {} with index {i}.",
+            slot_title(slot)
+        );
+    }
     /// Open the slot Select of row `slot`, anchored under it.
     pub(super) fn open_slot_menu(&mut self, slot: u16) {
+        self.ed.markings.fill_menu = false;
         let rect = self
             .layout()
             .hits
@@ -337,6 +566,21 @@ impl App {
         let Some((from, _)) = self.ed.markings.slot_menu else {
             return Vec::new();
         };
+        if self.ed.markings.fill_menu {
+            let on = self.fill_choice(from);
+            return [
+                (
+                    "From the surface below",
+                    FILL_SURFACE,
+                    on == FillChoice::Surface,
+                ),
+                ("Panel colour", FILL_PANEL, on == FillChoice::Panel),
+                ("Pick\u{2026}", FILL_PICK, matches!(on, FillChoice::Pick(_))),
+            ]
+            .into_iter()
+            .map(|(label, kind, on)| (label.to_string(), Action::MarkingFill(from, kind), on))
+            .collect();
+        }
         (0..mk::SLOT_COUNT)
             .map(|to| {
                 (
@@ -457,7 +701,8 @@ impl App {
         let mut skipped = Vec::new();
         let mut done = Vec::new();
         let paint_name = self.paint_name(slot);
-        let mut sheet: Option<([u32; 2], u8)> = None;
+        let mut sheet: Option<([u32; 2], u8, FillSource)> = None;
+        let choice = self.fill_choice(slot);
         let mut picture = None;
         for (k, at) in targets.iter().enumerate() {
             let name = self.doc.archive.entries[*at].name.clone();
@@ -477,10 +722,11 @@ impl App {
                     slot,
                     &paint_name,
                     sheet.map(|s| s.0),
-                    sheet.map(|s| s.1),
+                    sheet.map_or(choice.mode(), |s| FillMode::Index(s.1)),
+                    &|n| self.texture_bytes(n),
                 )
                 .map(|p| {
-                    sheet.get_or_insert((p.size, p.color));
+                    sheet.get_or_insert((p.size, p.color, p.fill));
                     picture.get_or_insert(p.picture);
                     p.shape
                 }),
@@ -531,10 +777,17 @@ impl App {
             MK_TOGGLE if hide => format!("Hid {}", slot_title(slot)),
             MK_TOGGLE => format!("Showed {}", slot_title(slot)),
             MK_PAINT => format!(
-                "Made {} paintable on {paint_name}, {} \u{d7} {} px",
+                "Made {} paintable on {paint_name}, {} \u{d7} {} px, filled with index {} ({})",
                 slot_title(slot),
                 sheet.map_or(0, |s| s.0[0]),
-                sheet.map_or(0, |s| s.0[1])
+                sheet.map_or(0, |s| s.0[1]),
+                sheet.map_or(0, |s| s.1),
+                match sheet.map(|s| s.2) {
+                    Some(FillSource::Surface(_)) => "the surface below",
+                    Some(FillSource::Skin) => "the shape skin, no surface found",
+                    Some(FillSource::Picked) => "picked",
+                    _ => "the panel colour",
+                }
             ),
             MK_RESTORE => format!("Restored {} to the game's image", slot_title(slot)),
             _ => format!(
@@ -619,6 +872,10 @@ impl App {
     }
 }
 /// A 1px line on a raster, clipped; dashed lines draw 3 of every 6 pixels.
+/// A palette colour as a theme colour.
+fn swatch(p: [u8; 3]) -> theme::Rgb {
+    theme::Rgb((p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32)
+}
 fn line(
     pixels: &mut [u32],
     [w, h]: [usize; 2],
@@ -752,6 +1009,16 @@ impl App {
             .into_iter()
             .find(|r| r.slot == slot)
             .unwrap_or_else(|| panic!("slot {slot}: {}", self.status))
+    }
+    /// Choose a slot's fill through its rendered Select and menu item.
+    fn smoke_fill(&mut self, slot: u16, kind: u8) {
+        self.scroll_to_markings();
+        let select = self.smoke_find(&|x| matches!(x, Action::MarkingFillMenu(s) if s == slot));
+        self.chrome_click(select);
+        assert_eq!(self.menu, Some(chrome::MENU_SLOT));
+        let item =
+            self.smoke_find(&|x| matches!(x, Action::MarkingFill(s, k) if s == slot && k == kind));
+        self.chrome_click(item);
     }
     fn smoke_mk(&mut self, slot: u16, op: u8) {
         self.scroll_to_markings();
@@ -889,6 +1156,65 @@ impl App {
         a.chrome_click(item);
         assert!(a.status.contains("would merge"), "{}", a.status);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // Fill: the default is the colour the marking sits on (the kit's
+        // wing plate, 151), not the marking's stored 150 and not index 0.
+        let fill_pixels = |a: &App| -> Vec<u8> {
+            let pic = a.doc.archive.find("MKM4.PIC").expect("sheet");
+            let bytes = a.doc.archive.entries[pic].read().unwrap();
+            let mut px = Pic::parse(&bytes).unwrap().pixels;
+            px.sort_unstable();
+            px.dedup();
+            px
+        };
+        assert_eq!(a.fill_choice(4), FillChoice::Surface);
+        a.scroll_to_markings();
+        assert!(a
+            .draw()
+            .commands
+            .iter()
+            .any(|d| matches!(d, Draw::Text(_, _, t, ..) if t == "From the surface below")));
+        a.smoke_geometry("fill row");
+        a.smoke_mk(4, MK_PAINT);
+        assert!(
+            a.status
+                .contains("filled with index 151 (the surface below)"),
+            "{}",
+            a.status
+        );
+        assert_eq!(fill_pixels(&a), [151]);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // Panel colour: the old fill.
+        a.smoke_fill(4, FILL_PANEL);
+        assert_eq!(a.fill_choice(4), FillChoice::Panel);
+        a.smoke_mk(4, MK_PAINT);
+        assert!(
+            a.status
+                .contains("filled with index 150 (the panel colour)"),
+            "{}",
+            a.status
+        );
+        assert_eq!(fill_pixels(&a), [150]);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // Pick: starts on the surface's index, then a palette cell.
+        a.smoke_fill(4, FILL_PICK);
+        assert_eq!(a.fill_choice(4), FillChoice::Pick(151));
+        a.scroll_to_markings();
+        a.smoke_geometry("fill palette grid");
+        a.smoke_tap(&|x| matches!(x, Action::MarkingFillColor(4, 42)));
+        assert_eq!(a.fill_choice(4), FillChoice::Pick(42));
+        a.smoke_mk(4, MK_PAINT);
+        assert!(
+            a.status.contains("filled with index 42 (picked)"),
+            "{}",
+            a.status
+        );
+        assert_eq!(fill_pixels(&a), [42]);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        a.smoke_fill(4, FILL_SURFACE);
+        assert_eq!(a.fill_choice(4), FillChoice::Surface);
         // Make paintable: a retail-layout PIC, the faces drawn from it.
         a.smoke_mk(4, MK_PAINT);
         assert!(
@@ -947,7 +1273,10 @@ impl App {
             a.smoke_geometry("runtime markings");
             let r = a.right();
             for hit in a.layout().hits {
-                if matches!(hit.action, Action::Marking(..) | Action::MarkingMenu(_)) {
+                if matches!(
+                    hit.action,
+                    Action::Marking(..) | Action::MarkingMenu(_) | Action::MarkingFillMenu(_)
+                ) {
                     assert!(
                         hit.rect[0] > r && hit.rect[0] + hit.rect[2] <= w,
                         "{w}x{h} {:?}",
@@ -1042,107 +1371,116 @@ impl App {
             &format!("  shown again after reopening: byte-identical to the original {entry}\n");
         // Make the last slot paintable and paint a roundel with the brush.
         let slot = rows.last().map(|r| r.slot).unwrap_or(4);
-        self.scroll_to_markings();
-        self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_PAINT) if s == slot));
-        report += &format!("  {}\n", self.status);
-        let row = self
-            .marking_rows()
-            .into_iter()
-            .find(|r| r.slot == slot)
-            .ok_or("Slot lost")?;
-        let name = row
-            .painted
-            .first()
-            .map(|p| p.1.clone())
-            .ok_or("Not paintable")?;
-        let pic = self.doc.archive.find(&name).ok_or("No sheet")?;
-        let size = Pic::parse(&self.doc.archive.entries[pic].read()?)?;
-        let near = |a: &App, rgb: [i32; 3]| -> u8 {
-            (0..256)
-                .min_by_key(|i| {
-                    let p = a.base_palette[*i];
-                    (0..3).map(|k| (p[k] as i32 - rgb[k]).pow(2)).sum::<i32>()
+        // The old fill (the marking's stored colour) first, for comparison,
+        // then the default (the surface under the marking).
+        for (kind, prefix, lib) in [
+            (FILL_PANEL, "panel-fill", "MKPANEL"),
+            (FILL_SURFACE, "painted", "MKPAINT"),
+        ] {
+            self.smoke_fill(slot, kind);
+            report += &format!("  {prefix}: {}\n", self.status);
+            self.scroll_to_markings();
+            self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_PAINT) if s == slot));
+            report += &format!("  {}\n", self.status);
+            let row = self
+                .marking_rows()
+                .into_iter()
+                .find(|r| r.slot == slot)
+                .ok_or("Slot lost")?;
+            let name = row
+                .painted
+                .first()
+                .map(|p| p.1.clone())
+                .ok_or("Not paintable")?;
+            let pic = self.doc.archive.find(&name).ok_or("No sheet")?;
+            let size = Pic::parse(&self.doc.archive.entries[pic].read()?)?;
+            let near = |a: &App, rgb: [i32; 3]| -> u8 {
+                (0..256)
+                    .min_by_key(|i| {
+                        let p = a.base_palette[*i];
+                        (0..3).map(|k| (p[k] as i32 - rgb[k]).pow(2)).sum::<i32>()
+                    })
+                    .unwrap_or(0) as u8
+            };
+            let (blue, white, red) = (
+                near(self, [30, 50, 140]),
+                near(self, [240, 240, 240]),
+                near(self, [200, 30, 30]),
+            );
+            let u = row
+                .painted
+                .first()
+                .and_then(|p| {
+                    self.model
+                        .as_ref()?
+                        .faces
+                        .iter()
+                        .find(|f| f.offset == p.0)
+                        .map(|f| f.uv.clone())
                 })
-                .unwrap_or(0) as u8
-        };
-        let (blue, white, red) = (
-            near(self, [30, 50, 140]),
-            near(self, [240, 240, 240]),
-            near(self, [200, 30, 30]),
-        );
-        let u = row
-            .painted
-            .first()
-            .and_then(|p| {
-                self.model
-                    .as_ref()?
-                    .faces
-                    .iter()
-                    .find(|f| f.offset == p.0)
-                    .map(|f| f.uv.clone())
-            })
-            .unwrap_or_default();
-        let (w, h) = (
-            u.iter().map(|p| p[0]).max().unwrap_or(1) + 1,
-            u.iter().map(|p| p[1]).max().unwrap_or(1) + 1,
-        );
-        let (cx, cy, radius) = (w / 2, size.height as i32 - 1 - h / 2, w.min(h) / 2);
-        self.brush_radius = 0;
-        for (color, r) in [(blue, radius), (white, radius * 2 / 3), (red, radius / 3)] {
-            self.brush = color;
-            for y in cy - r..=cy + r {
-                for x in cx - r..=cx + r {
-                    if (x - cx).pow(2) + (y - cy).pow(2) <= r * r && x >= 0 && y >= 0 {
-                        self.paint_at(pic, x as usize, y as usize);
+                .unwrap_or_default();
+            let (w, h) = (
+                u.iter().map(|p| p[0]).max().unwrap_or(1) + 1,
+                u.iter().map(|p| p[1]).max().unwrap_or(1) + 1,
+            );
+            let (cx, cy, radius) = (w / 2, size.height as i32 - 1 - h / 2, w.min(h) / 2);
+            self.brush_radius = 0;
+            for (color, r) in [(blue, radius), (white, radius * 2 / 3), (red, radius / 3)] {
+                self.brush = color;
+                for y in cy - r..=cy + r {
+                    for x in cx - r..=cx + r {
+                        if (x - cx).pow(2) + (y - cy).pow(2) <= r * r && x >= 0 && y >= 0 {
+                            self.paint_at(pic, x as usize, y as usize);
+                        }
                     }
                 }
             }
+            self.finish_stroke();
+            report += &format!(
+                "  painted {name} ({} x {}): roundel of indices {blue}, {white}, {red}, radius {radius} px. {}\n",
+                size.width, size.height, self.status
+            );
+            report += &format!(
+                "  {prefix}, from below: {}\n",
+                self.markings_png(out, &format!("{prefix}-bottom.png"), -90)?
+            );
+            report += &format!(
+                "  {prefix}, from above: {}\n",
+                self.markings_png(out, &format!("{prefix}-top.png"), 90)?
+            );
+            let saved = format!("{out}/{lib}.LIB");
+            crate::platform::write_new(&saved, &self.doc.archive.bytes()?)?;
+            let reopened = Archive::parse(crate::platform::read(&saved)?)?;
+            let sheet = reopened.find(&name).ok_or("Sheet not saved")?;
+            let bytes = reopened.entries[sheet].read()?;
+            let shape = reopened.entries[reopened.find(entry).ok_or("SH not saved")?].read()?;
+            let painted = mk::markings(&shape)?
+                .into_iter()
+                .find(|r| r.slot == slot)
+                .map_or(0, |r| r.painted.len());
+            report += &format!(
+                "  saved {saved} and reopened: {name} retail layout {}, {painted} face drawn from it\n",
+                picture::is_retail_texture(&bytes)
+            );
+            // Restore runtime marking: the entry and the entry list as before.
+            self.scroll_to_markings();
+            self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_RESTORE) if s == slot));
+            report += &format!("  {}\n", self.status);
+            let at = self.doc.archive.find(entry).ok_or("SH lost")?;
+            let back = self.doc.archive.entries[at].read()?;
+            let org = hangar_core::originals::companion(&name).unwrap_or_default();
+            if back != original
+                || self.doc.archive.find(&name).is_some()
+                || self.doc.archive.find(&org).is_some()
+            {
+                return Err(format!(
+                    "{entry}: Restore runtime marking did not return the original bytes"
+                ));
+            }
+            report += &format!(
+                "  restored: {entry} byte-identical to the original, {name} and {org} removed\n"
+            );
         }
-        self.finish_stroke();
-        report += &format!(
-            "  painted {name} ({} x {}): roundel of indices {blue}, {white}, {red}, radius {radius} px. {}\n",
-            size.width, size.height, self.status
-        );
-        report += &format!(
-            "  painted, from below: {}\n",
-            self.markings_png(out, "painted-bottom.png", -90)?
-        );
-        report += &format!(
-            "  painted, from above: {}\n",
-            self.markings_png(out, "painted-top.png", 90)?
-        );
-        let saved = format!("{out}/MKPAINT.LIB");
-        crate::platform::write_new(&saved, &self.doc.archive.bytes()?)?;
-        let reopened = Archive::parse(crate::platform::read(&saved)?)?;
-        let sheet = reopened.find(&name).ok_or("Sheet not saved")?;
-        let bytes = reopened.entries[sheet].read()?;
-        let shape = reopened.entries[reopened.find(entry).ok_or("SH not saved")?].read()?;
-        let painted = mk::markings(&shape)?
-            .into_iter()
-            .find(|r| r.slot == slot)
-            .map_or(0, |r| r.painted.len());
-        report += &format!(
-            "  saved {saved} and reopened: {name} retail layout {}, {painted} face drawn from it\n",
-            picture::is_retail_texture(&bytes)
-        );
-        // Restore runtime marking: the entry and the entry list as before.
-        self.scroll_to_markings();
-        self.smoke_tap(&|x| matches!(x, Action::Marking(s, MK_RESTORE) if s == slot));
-        report += &format!("  {}\n", self.status);
-        let at = self.doc.archive.find(entry).ok_or("SH lost")?;
-        let back = self.doc.archive.entries[at].read()?;
-        let org = hangar_core::originals::companion(&name).unwrap_or_default();
-        if back != original
-            || self.doc.archive.find(&name).is_some()
-            || self.doc.archive.find(&org).is_some()
-        {
-            return Err(format!(
-                "{entry}: Restore runtime marking did not return the original bytes"
-            ));
-        }
-        report += &format!(
-            "  restored: {entry} byte-identical to the original, {name} and {org} removed\n"
-        );
         Ok(report)
     }
     /// The textured viewport from above (pitch 90) or below (-90) as a

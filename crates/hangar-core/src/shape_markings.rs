@@ -19,7 +19,8 @@
 //! - **Reassign** changes the slot word of the slot's E0 records in place,
 //!   to 0..=4 only.
 //! - **Make paintable** draws the slot's faces from a new PIC in the retail
-//!   texture layout through a texture-assignment continuation; its restore
+//!   texture layout through a texture-assignment continuation, filled with
+//!   the colour of the surface under the marking (`shape_fill`); its restore
 //!   selector is the E0 itself, so the slot stays recorded and **Restore**
 //!   is Use shape texture.
 //!
@@ -32,6 +33,7 @@ use crate::{
     picture::{retail_texture, TEXTURE_WIDTH},
     shape_code::{Kind, Target},
     shape_edit::{continuation_start, jump, replace_continuation},
+    shape_fill::{fill_for, FillMode, FillSource, Textures},
     shape_geometry::{others_unchanged, pose_drawing, verify_structure, Frame, Geometry},
     shape_texture::{
         assign_texture_uvs, assignments, atlas_density, planar, restore_texture_assignment,
@@ -766,6 +768,8 @@ pub struct Painted {
     pub size: [u32; 2],
     /// Palette index the panel area is filled with.
     pub color: u8,
+    /// Where `color` came from.
+    pub fill: FillSource,
 }
 /// The sheet size `make_paintable` would use for a slot's faces, from the
 /// shape's texel density.
@@ -793,8 +797,9 @@ fn plan_uvs(g: &Geometry, faces: &[usize], fit: Fit) -> Result<(Uvs, [u32; 2])> 
 /// Draw every face of `slot` from a new PIC `name` instead of the runtime
 /// image: planar UVs from the faces' plane at the shape's texel density
 /// (or inside `size` when given, as the damage family shares one sheet),
-/// the panel area filled with `color` (default: the faces' commonest
-/// colour index). The faces go through `assign_texture_uvs`, so its proofs,
+/// the panel area filled as `fill` says (see `shape_fill`: by default the
+/// colour of the surface under the marking, looked up through `textures`).
+/// The faces go through `assign_texture_uvs`, so its proofs,
 /// continuation rules and verification apply; the continuation restores the
 /// E0, so the slot stays recorded and `restore_slot` reverses it.
 pub fn make_paintable(
@@ -802,7 +807,8 @@ pub fn make_paintable(
     slot: u16,
     name: &str,
     size: Option<[u32; 2]>,
-    color: Option<u8>,
+    fill: FillMode,
+    textures: Textures,
 ) -> Result<Painted> {
     let g = Geometry::parse(source)?;
     let m = slot_row(&g, slot)?;
@@ -833,17 +839,8 @@ pub fn make_paintable(
     if size[0] as usize > TEXTURE_WIDTH {
         return Err(invalid("The panel is wider than a 256-pixel texture"));
     }
-    let color = color.unwrap_or_else(|| {
-        let mut counts = [0usize; 256];
-        for o in &m.faces {
-            if let Some(i) = g.face_at(*o) {
-                counts[(g.faces[i].color & 0xff) as usize] += 1;
-            }
-        }
-        (0..256)
-            .max_by_key(|i| (counts[*i], core::cmp::Reverse(*i)))
-            .unwrap_or(0) as u8
-    });
+    let fill = fill_for(source, &g, &m, fill, textures);
+    let color = fill.color;
     let rows = (size[1] as usize).max(crate::shape_remap::MIN_ROWS as usize);
     let picture = retail_texture(rows, &alloc::vec![color; TEXTURE_WIDTH * rows])?;
     let assigned = assign_texture_uvs(source, &m.faces, name, &uvs)?;
@@ -868,6 +865,7 @@ pub fn make_paintable(
         faces: assigned.faces,
         size,
         color,
+        fill: fill.source,
     })
 }
 /// Undo Make paintable for `slot`: the faces go back to the runtime slot
