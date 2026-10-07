@@ -453,6 +453,8 @@ pub struct App {
     collapsed: [bool; 10],
     root_collapsed: bool,
     category: Option<usize>,
+    /// Outliner type filter (aircraft, shapes, images): only that group shows.
+    type_filter: Option<usize>,
     menu: Option<usize>,
     dock: u8,
     table_scroll: usize,
@@ -599,6 +601,7 @@ impl App {
             required: Vec::new(),
             collapsed: [true; 10],
             root_collapsed: false,
+            type_filter: None,
             category: None,
             menu: None,
             dock: 0,
@@ -770,7 +773,7 @@ impl App {
             .iter()
             .position(|i| *i == self.selected)
             .unwrap_or(0);
-        let table_rows = ((self.dock_y() - 80) / 24).max(1) as usize;
+        let table_rows = self.browse_rows();
         if table_position < self.table_scroll || table_position >= self.table_scroll + table_rows {
             self.table_scroll = table_position.saturating_sub(table_rows / 2);
         }
@@ -779,7 +782,7 @@ impl App {
             .iter()
             .position(|(id, _, i)| *id == self.library_id && *i == Some(self.selected))
             .unwrap_or(0);
-        let rows = ((self.height - self.tree_start() - 54) / 22).max(1) as usize;
+        let rows = self.outliner_rows();
         if position < self.scroll || position >= self.scroll + rows {
             self.scroll = position.saturating_sub(rows / 2);
         }
@@ -2410,7 +2413,7 @@ impl App {
         }
         if self.mouse[0] < self.left() {
             let count = self.library_rows().len();
-            let rows = ((self.height - self.tree_start() - 54) / 22).max(1) as usize;
+            let rows = self.outliner_rows();
             self.scroll = (self.scroll as i32 - delta * 3)
                 .clamp(0, count.saturating_sub(rows) as i32) as usize;
         } else if self.mouse[0] >= self.right() {
@@ -2435,7 +2438,7 @@ impl App {
                 .clamp(0, n.saturating_sub(1) as i32) as usize;
         } else if self.mode == Mode::Browse {
             let n = self.browser_entries().len();
-            let rows = ((self.dock_y() - 86) / 24).max(1) as usize;
+            let rows = self.browse_rows();
             self.table_scroll = (self.table_scroll as i32 - delta * 3)
                 .clamp(0, n.saturating_sub(rows) as i32) as usize;
         } else {

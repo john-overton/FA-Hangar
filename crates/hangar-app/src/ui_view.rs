@@ -13,6 +13,8 @@ pub(super) enum Action {
     Close,
     Help,
     Filter,
+    /// Outliner type filter: aircraft (0), shapes (1), images (2); again clears.
+    TypeFilter(usize),
     Category(usize),
     Entry(usize),
     Related(usize),
@@ -144,9 +146,15 @@ const GROUPS: [(&str, &str, Icon); 10] = [
     ("Palettes", "PAL", Icon::Palette),
     ("Missions", "M", Icon::Mission),
     ("Sounds", "11K", Icon::Sound),
-    ("Other resources", "...", Icon::Lib),
+    ("Other resources", "", Icon::Lib),
     ("Original textures", "ORG", Icon::Image),
 ];
+/// Outliner group order: stored originals sit right below their images.
+pub(super) const GROUP_ORDER: [usize; 10] = [0, 1, 2, 9, 3, 4, 5, 6, 7, 8];
+/// Outliner footer (Open LIB, Export object) height.
+pub(super) const OUTLINER_FOOTER: i32 = theme::metric::EDITOR_HEADER_H;
+/// Browse table column header height.
+const TABLE_HEAD_H: i32 = theme::metric::EDITOR_HEADER_H;
 pub(super) fn category_of(name: &str) -> usize {
     match extension(name) {
         "PT" => 0,
@@ -189,15 +197,6 @@ pub(super) fn badge(d: &mut Canvas, x: i32, y: i32, s: &str) {
     let w = s.len() as i32 * 7 + 8;
     d.rect(x, y, w, 16, c::GM_600);
     d.text(x + 4, y + 12, s, c::INK_MUTED);
-}
-/// Disclosure chevron centred on (x + 4, y + 4), the old 8px twisty box.
-fn chevron(d: &mut Canvas, x: i32, y: i32, open: bool) {
-    let g = if open {
-        Icon::ChevronDown
-    } else {
-        Icon::ChevronRight
-    };
-    d.icon(x - 4, y - 4, g, c::INK_MUTED, c::GM_800);
 }
 impl Layout {
     pub(super) fn hit(&mut self, rect: [i32; 4], action: Action) {
@@ -524,6 +523,15 @@ impl App {
             Action::Filter => {
                 self.filter_focus = true;
                 self.category = None;
+                self.table_scroll = 0;
+            }
+            Action::TypeFilter(cat) => {
+                self.type_filter = if self.type_filter == Some(cat) {
+                    None
+                } else {
+                    Some(cat)
+                };
+                self.scroll = 0;
                 self.table_scroll = 0;
             }
             Action::Category(n) => {
@@ -1135,6 +1143,10 @@ impl App {
             self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
         }
     }
+    /// Browse table rows that fit above the dock.
+    pub(super) fn browse_rows(&self) -> usize {
+        ((self.dock_y() - 54 - TABLE_HEAD_H) / theme::metric::ROW_H).max(1) as usize
+    }
     pub(super) fn browser_entries(&self) -> Vec<usize> {
         let f = self.filter.to_ascii_uppercase();
         self.doc
@@ -1143,7 +1155,10 @@ impl App {
             .iter()
             .enumerate()
             .filter(|(_, e)| {
-                self.category.is_none_or(|n| category_of(&e.name) == n) && e.name.contains(&f)
+                let cat = category_of(&e.name);
+                self.category.is_none_or(|n| cat == n)
+                    && self.type_filter.is_none_or(|n| cat == n)
+                    && e.name.contains(&f)
             })
             .map(|(i, _)| i)
             .collect()
@@ -1304,51 +1319,104 @@ impl App {
 
         out
     }
+    /// Outliner header geometry: filter field, type filter segmented control,
+    /// open button.
+    pub(super) fn outliner_header(&self) -> ([i32; 4], [i32; 4], [i32; 4]) {
+        use theme::{metric as m, space};
+        let l = self.left();
+        let y = m::MENUBAR_H + (m::EDITOR_HEADER_H - m::BUTTON_H) / 2;
+        let plus = [
+            l - space::SPACE_2 - m::ICON_BUTTON,
+            y,
+            m::ICON_BUTTON,
+            m::BUTTON_H,
+        ];
+        let seg_w = 3 * m::ICON_BUTTON + 2;
+        let seg = [plus[0] - space::SPACE_1 - seg_w, y, seg_w, m::BUTTON_H];
+        let filter = [
+            space::SPACE_2,
+            m::MENUBAR_H + (m::EDITOR_HEADER_H - m::FIELD_H) / 2,
+            seg[0] - space::SPACE_1 - space::SPACE_2,
+            m::FIELD_H,
+        ];
+        (filter, seg, plus)
+    }
     fn outliner(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, dot, notched, type_badge, Btn, Tone};
         let l = self.left();
         let h = self.height;
+        let (filter, seg, plus) = self.outliner_header();
         let d = &mut o.canvas;
-        d.rect(0, 26, l, 28, c::GM_800);
-        d.rect(6, 30, l - 40, 20, c::GM_950);
-        border(
-            d,
-            6,
-            30,
-            l - 40,
-            20,
-            if self.filter_focus {
-                c::FOCUS
-            } else {
-                c::LINE_STRONG
-            },
+        d.rect(0, m::MENUBAR_H, l, m::EDITOR_HEADER_H, c::GM_800);
+        d.rect(0, m::MENUBAR_H + m::EDITOR_HEADER_H - 1, l, 1, c::GM_1000);
+        // Filter field: sunken, `focus` border while typing, ink text.
+        let [fx, fy, fw, fh] = filter;
+        let hover = o.over(filter);
+        let fill = if hover && !self.filter_focus {
+            c::GM_1000
+        } else {
+            c::GM_950
+        };
+        let edge = if self.filter_focus {
+            c::FOCUS
+        } else {
+            c::LINE_STRONG
+        };
+        let d = &mut o.canvas;
+        notched(d, filter, Some(fill), Some(edge));
+        d.icon_sm(
+            fx + 5,
+            fy + (fh - m::ICON_SM) / 2,
+            Icon::Search,
+            c::INK_MUTED,
+            fill,
         );
-        icon(d, 10, 32, Icon::Search, c::INK_MUTED);
-        text_fit(
-            d,
-            30,
-            44,
-            l - 68,
-            if self.filter.is_empty() {
+        let tx = fx + 5 + m::ICON_SM + space::SPACE_1;
+        let room = fx + fw - 5 - tx;
+        let base = baseline(fy, fh, Style::Value);
+        if self.filter.is_empty() && !self.filter_focus {
+            let hint = if text_width("Filter entries", Style::Value) <= room {
                 "Filter entries"
             } else {
-                &self.filter
-            },
+                "Filter"
+            };
+            d.styled(
+                tx,
+                base,
+                &fit(hint, room, Style::Value),
+                c::INK_FAINT,
+                Style::Value,
+            );
+        } else {
+            // Show the end of a long filter; the caret follows the text.
+            let mut text = self.filter.clone();
+            while text_width(&text, Style::Value) > room - 2 && !text.is_empty() {
+                text.remove(0);
+            }
+            d.styled(tx, base, &text, c::INK, Style::Value);
             if self.filter_focus {
-                c::AMBER
-            } else {
-                c::INK_MUTED
-            },
-        );
-        o.hit([6, 30, l - 40, 20], Action::Filter);
-        o.tool(
-            [l - 29, 29, 24, 23],
-            Icon::Plus,
-            Action::File(FileAction::Open),
-            true,
-            false,
-        );
+                let cx = tx + text_width(&text, Style::Value) + 1;
+                d.rect(cx, fy + 4, 1, fh - 8, c::INK);
+            }
+        }
+        o.hit(filter, Action::Filter);
+        let types: Vec<(Btn, Action)> = [(0, Icon::Aircraft), (1, Icon::Shape), (2, Icon::Image)]
+            .into_iter()
+            .map(|(cat, g)| {
+                (
+                    Btn::icon(g).on(self.type_filter == Some(cat)),
+                    Action::TypeFilter(cat),
+                )
+            })
+            .collect();
+        o.segmented(seg, &types);
+        o.button_ex(plus, Btn::icon(Icon::Plus), Action::File(FileAction::Open));
         let rows = self.library_rows();
-        let visible = ((h - self.tree_start() - 54) / 22).max(1) as usize;
+        let top = self.tree_start();
+        let bottom = h - m::STATUSBAR_H - OUTLINER_FOOTER;
+        let visible = self.outliner_rows();
+        let indent = m::TREE_INDENT;
         for (row, (id, cat, entry)) in rows.iter().skip(self.scroll).take(visible).enumerate() {
             let active = *id == self.library_id;
             let (doc, path, root_collapsed, collapsed, filter) = if active {
@@ -1373,57 +1441,120 @@ impl App {
                     &library.filter,
                 )
             };
-            let y = self.tree_start() + row as i32 * 22;
-            if let Some(cat) = cat {
-                if let Some(i) = entry {
+            let y = top + row as i32 * m::ROW_H;
+            let rect = [0, y, l, m::ROW_H];
+            // Active: the entry Properties shows. Selected: the entries it is
+            // working with (its linked shape, the model a texture came from).
+            let (is_active, is_selected) = match (cat, entry) {
+                (_, Some(i)) if active => (
+                    *i == self.selected,
+                    *i != self.selected
+                        && (self.model_entry == Some(*i) || self.context_entry == Some(*i)),
+                ),
+                (_, Some(i)) => (false, self.external_model == Some((*id, *i))),
+                _ => (false, false),
+            };
+            let fill = if is_active || is_selected {
+                c::AMBER_DEEP
+            } else if o.over(rect) {
+                c::GM_700
+            } else if (row + self.scroll) % 2 == 1 {
+                c::GM_900
+            } else {
+                c::GM_800
+            };
+            let d = &mut o.canvas;
+            d.rect(0, y, l, m::ROW_H, fill);
+            let mid = y + (m::ROW_H - m::ICON) / 2;
+            let twisty = y + (m::ROW_H - m::ICON_SM) / 2;
+            let right = l - space::SPACE_2;
+            match (cat, entry) {
+                (Some(cat), Some(i)) => {
                     let e = &doc.archive.entries[*i];
-                    let selected = active && *i == self.selected;
-                    o.canvas.rect(
-                        0,
-                        y,
-                        l,
-                        22,
-                        if selected { c::AMBER_DEEP } else { c::GM_900 },
-                    );
-                    icon(
-                        &mut o.canvas,
-                        46,
-                        y + 3,
+                    let x = 4 + 2 * indent + m::ICON_SM + space::SPACE_1;
+                    d.icon(
+                        x,
+                        mid,
                         GROUPS[*cat].2,
-                        if selected { c::AMBER } else { c::INK_MUTED },
+                        if is_active { c::AMBER } else { c::INK_MUTED },
+                        fill,
                     );
-                    text_fit(
-                        &mut o.canvas,
-                        68,
-                        y + 16,
-                        l - 94,
-                        &e.name,
-                        if selected { c::AMBER } else { c::INK },
+                    let changed = doc.entry_changed(e);
+                    let tx = x + m::ICON + space::SPACE_1;
+                    let room = right - tx - if changed { m::DIRTY_DOT + 4 } else { 0 };
+                    d.styled(
+                        tx,
+                        baseline(y, m::ROW_H, Style::Value),
+                        &fit(&e.name, room, Style::Value),
+                        if is_active { c::AMBER_BRIGHT } else { c::INK },
+                        Style::Value,
                     );
-                    if doc.entry_changed(e) {
-                        o.canvas.rect(l - 13, y + 9, 5, 5, c::AMBER);
+                    if changed {
+                        dot(
+                            d,
+                            right - m::DIRTY_DOT,
+                            y + (m::ROW_H - m::DIRTY_DOT) / 2,
+                            c::AMBER,
+                        );
                     }
                     o.hit(
-                        [0, y, l, 22],
+                        rect,
                         if active {
                             Action::Entry(*i)
                         } else {
                             Action::LibraryEntry(*id, *i)
                         },
                     );
-                } else {
-                    o.canvas.rect(0, y, l, 22, c::GM_800);
-                    chevron(
-                        &mut o.canvas,
-                        24,
-                        y + 7,
-                        !collapsed[*cat] || !filter.is_empty(),
+                }
+                (Some(cat), None) => {
+                    let open = !collapsed[*cat] || !filter.is_empty();
+                    let x = 4 + indent;
+                    d.icon_sm(
+                        x,
+                        twisty,
+                        if open {
+                            Icon::ChevronDown
+                        } else {
+                            Icon::ChevronRight
+                        },
+                        c::INK_MUTED,
+                        fill,
                     );
-                    icon(&mut o.canvas, 40, y + 3, GROUPS[*cat].2, c::INK_MUTED);
-                    label_fit(&mut o.canvas, 62, y + 16, l - 104, GROUPS[*cat].0, c::INK);
-                    badge(&mut o.canvas, l - 36, y + 3, GROUPS[*cat].1);
+                    let ix = x + m::ICON_SM + space::SPACE_1;
+                    d.icon(ix, mid, GROUPS[*cat].2, c::INK_MUTED, fill);
+                    // Count in value-sm, then the type badge, right-aligned.
+                    let (name, ext, _) = GROUPS[*cat];
+                    let mut rx = right;
+                    if !ext.is_empty() {
+                        rx -= widgets::badge_width(ext);
+                        type_badge(d, rx, y + (m::ROW_H - m::BADGE_H) / 2, ext, Tone::Neutral);
+                        rx -= space::SPACE_1;
+                    }
+                    let n = doc
+                        .archive
+                        .entries
+                        .iter()
+                        .filter(|e| category_of(&e.name) == *cat)
+                        .count();
+                    let count = widgets::format_number(n as i64, 0);
+                    rx -= text_width(&count, Style::ValueSm);
+                    d.styled(
+                        rx,
+                        baseline(y, m::ROW_H, Style::ValueSm),
+                        &count,
+                        c::INK_MUTED,
+                        Style::ValueSm,
+                    );
+                    let tx = ix + m::ICON + space::SPACE_1;
+                    d.styled(
+                        tx,
+                        baseline(y, m::ROW_H, Style::Label),
+                        &fit(name, rx - space::SPACE_2 - tx, Style::Label),
+                        c::INK,
+                        Style::Label,
+                    );
                     o.hit(
-                        [0, y, l, 22],
+                        rect,
                         if active {
                             Action::Category(*cat)
                         } else {
@@ -1431,52 +1562,71 @@ impl App {
                         },
                     );
                 }
-            } else {
-                o.canvas
-                    .rect(0, y, l, 22, if active { c::GM_700 } else { c::GM_900 });
-                chevron(&mut o.canvas, 8, y + 8, !root_collapsed);
-                icon(
-                    &mut o.canvas,
-                    24,
-                    y + 3,
-                    Icon::Lib,
-                    if active { c::STEEL } else { c::INK_MUTED },
-                );
-                text_fit(
-                    &mut o.canvas,
-                    46,
-                    y + 16,
-                    l - 92,
-                    path,
-                    if active { c::INK } else { c::INK_MUTED },
-                );
-                text_fit(
-                    &mut o.canvas,
-                    l - 39,
-                    y + 16,
-                    35,
-                    &format!("{}", doc.archive.entries.len()),
-                    c::INK_MUTED,
-                );
-                if doc.dirty() {
-                    o.canvas.rect(l - 49, y + 9, 5, 5, c::AMBER);
+                (None, _) => {
+                    d.icon_sm(
+                        4,
+                        twisty,
+                        if root_collapsed {
+                            Icon::ChevronRight
+                        } else {
+                            Icon::ChevronDown
+                        },
+                        c::INK_MUTED,
+                        fill,
+                    );
+                    let ix = 4 + m::ICON_SM + space::SPACE_1;
+                    d.icon(ix, mid, Icon::Lib, c::INK_MUTED, fill);
+                    let count = widgets::format_number(doc.archive.entries.len() as i64, 0);
+                    let mut rx = right - text_width(&count, Style::ValueSm);
+                    d.styled(
+                        rx,
+                        baseline(y, m::ROW_H, Style::ValueSm),
+                        &count,
+                        c::INK_MUTED,
+                        Style::ValueSm,
+                    );
+                    if doc.dirty() {
+                        rx -= m::DIRTY_DOT + space::SPACE_1;
+                        dot(d, rx, y + (m::ROW_H - m::DIRTY_DOT) / 2, c::AMBER);
+                    }
+                    let tx = ix + m::ICON + space::SPACE_1;
+                    d.styled(
+                        tx,
+                        baseline(y, m::ROW_H, Style::Value),
+                        &fit(path, rx - space::SPACE_2 - tx, Style::Value),
+                        if active { c::INK } else { c::INK_MUTED },
+                        Style::Value,
+                    );
+                    let toggle = 4 + m::ICON_SM + 2;
+                    o.hit([toggle, y, l - toggle, m::ROW_H], Action::Library(*id));
+                    o.hit([0, y, toggle, m::ROW_H], Action::LibraryToggle(*id));
                 }
-                o.hit([22, y, l - 22, 22], Action::Library(*id));
-                o.hit([0, y, 22, 22], Action::LibraryToggle(*id));
             }
         }
-        o.canvas.line(0, h - 51, l, h - 51, c::GM_1000);
-        o.button(
-            [8, h - 46, 76, 20],
-            "Open LIB",
+        if rows.len() > visible {
+            // Scroll cue: a thumb at the right edge over the rows.
+            let track = bottom - top - 4;
+            let thumb = (track * visible as i32 / rows.len() as i32).max(16);
+            let span = (rows.len() - visible) as i32;
+            let ty = top + 2 + (track - thumb) * (self.scroll as i32).min(span) / span;
+            o.canvas.rect(l - 4, ty, 3, thumb, c::GM_600);
+        }
+        let d = &mut o.canvas;
+        d.rect(0, bottom, l, OUTLINER_FOOTER, c::GM_800);
+        d.rect(0, bottom, l, 1, c::GM_1000);
+        let by = bottom + (OUTLINER_FOOTER - m::BUTTON_H) / 2;
+        let open = Btn::new("Open LIB");
+        let ow = open.width();
+        o.button_ex(
+            [space::SPACE_2, by, ow, m::BUTTON_H],
+            open,
             Action::File(FileAction::Open),
-            false,
         );
-        o.button(
-            [92, h - 46, l - 100, 20],
-            "Export object",
+        let ex = space::SPACE_2 + ow + space::SPACE_1;
+        o.button_ex(
+            [ex, by, l - space::SPACE_2 - ex, m::BUTTON_H],
+            Btn::new("Export object"),
             Action::File(FileAction::Variant),
-            false,
         );
     }
     fn model_layout(&self, o: &mut Layout) {
@@ -1524,98 +1674,145 @@ impl App {
         }
     }
     fn browse_layout(&self, o: &mut Layout) {
+        use theme::{metric as m, space};
+        use widgets::{baseline, dot, Btn};
         let l = self.left();
         let r = self.right();
         let width = r - l;
+        let top = m::MENUBAR_H;
         let d = &mut o.canvas;
-        d.rect(l + 1, 26, width - 2, 28, c::GM_800);
-        text_fit(
-            d,
-            l + 10,
-            44,
-            width - 130,
-            &format!(
-                "{}  >  {}",
-                self.lib_name(),
-                self.category.map_or("All entries", |c| GROUPS[c].0)
-            ),
-            c::INK_MUTED,
+        d.rect(l + 1, top, width - 2, m::EDITOR_HEADER_H, c::GM_800);
+        d.rect(
+            l + 1,
+            top + m::EDITOR_HEADER_H - 1,
+            width - 2,
+            1,
+            c::GM_1000,
         );
-        o.button(
-            [r - 101, 29, 94, 22],
-            "Open model",
+        // Breadcrumb: LIB name, chevron, group.
+        let open = Btn::new("Open model");
+        let bw = open.width();
+        let bx = r - 1 - space::SPACE_1 - bw;
+        o.button_ex(
+            [
+                bx,
+                top + (m::EDITOR_HEADER_H - m::BUTTON_H) / 2,
+                bw,
+                m::BUTTON_H,
+            ],
+            open,
             Action::Mode(Mode::Model),
-            false,
         );
         let d = &mut o.canvas;
-        d.rect(l + 1, 54, width - 2, 26, c::GM_900);
-        d.label(l + 12, 72, "ENTRY", c::INK_MUTED);
-        d.label(l + width / 2, 72, "BYTES", c::INK_MUTED);
-        d.label(r - 85, 72, "STATUS", c::INK_MUTED);
+        let x = l + 1 + space::SPACE_3;
+        let lib = fit(self.lib_name(), (bx - x) / 2, Style::Value);
+        d.styled(
+            x,
+            baseline(top, m::EDITOR_HEADER_H, Style::Value),
+            &lib,
+            c::INK,
+            Style::Value,
+        );
+        let cx = x + text_width(&lib, Style::Value) + space::SPACE_1;
+        d.icon_sm(
+            cx,
+            top + (m::EDITOR_HEADER_H - m::ICON_SM) / 2,
+            Icon::ChevronRight,
+            c::INK_MUTED,
+            c::GM_800,
+        );
+        let group = self
+            .category
+            .or(self.type_filter)
+            .map_or("All entries", |c| GROUPS[c].0);
+        let gx = cx + m::ICON_SM + space::SPACE_1;
+        d.styled(
+            gx,
+            baseline(top, m::EDITOR_HEADER_H, Style::Label),
+            &fit(group, bx - space::SPACE_2 - gx, Style::Label),
+            c::INK_MUTED,
+            Style::Label,
+        );
+        // Column header.
+        let hy = top + m::EDITOR_HEADER_H;
+        d.rect(l + 1, hy, width - 2, TABLE_HEAD_H, c::GM_900);
+        d.rect(l + 1, hy + TABLE_HEAD_H - 1, width - 2, 1, c::GM_1000);
+        let bytes_right = l + width * 3 / 4;
+        let status_x = bytes_right + space::SPACE_4;
+        let head = baseline(hy, TABLE_HEAD_H, Style::Section);
+        d.styled(l + 12, head, "ENTRY", c::INK_MUTED, Style::Section);
+        d.styled(
+            bytes_right - text_width("BYTES", Style::Section),
+            head,
+            "BYTES",
+            c::INK_MUTED,
+            Style::Section,
+        );
+        d.styled(status_x, head, "STATUS", c::INK_MUTED, Style::Section);
+        let start = hy + TABLE_HEAD_H;
         for (row, i) in self
             .browser_entries()
             .iter()
             .skip(self.table_scroll)
-            .take(((self.dock_y() - 80) / 24).max(0) as usize)
+            .take(self.browse_rows())
             .enumerate()
         {
             let e = &self.doc.archive.entries[*i];
-            let y = 80 + row as i32 * 24;
-            let d = &mut o.canvas;
+            let y = start + row as i32 * m::ROW_H;
+            let rect = [l + 1, y, width - 2, m::ROW_H];
             let selected = *i == self.selected;
-            d.rect(
-                l + 1,
-                y,
-                width - 2,
-                24,
-                if selected {
-                    c::AMBER_DEEP
-                } else if row % 2 == 0 {
-                    c::GM_800
-                } else {
-                    c::GM_900
-                },
-            );
-            icon(
-                d,
+            let fill = if selected {
+                c::AMBER_DEEP
+            } else if o.over(rect) {
+                c::GM_700
+            } else if row % 2 == 0 {
+                c::GM_800
+            } else {
+                c::GM_900
+            };
+            let d = &mut o.canvas;
+            d.rect(rect[0], y, rect[2], m::ROW_H, fill);
+            d.icon(
                 l + 10,
-                y + 4,
+                y + (m::ROW_H - m::ICON) / 2,
                 GROUPS[category_of(&e.name)].2,
                 if selected { c::AMBER } else { c::INK_MUTED },
+                fill,
             );
-            text_fit(
-                d,
-                l + 34,
-                y + 16,
-                width / 2 - 40,
-                &e.name,
-                if selected { c::AMBER } else { c::INK },
+            let base = baseline(y, m::ROW_H, Style::Value);
+            d.styled(
+                l + 32,
+                base,
+                &fit(&e.name, bytes_right - 80 - l - 32, Style::Value),
+                if selected { c::AMBER_BRIGHT } else { c::INK },
+                Style::Value,
             );
-            text_fit(
-                d,
-                l + width / 2,
-                y + 16,
-                width / 2 - 96,
-                &format!("{}", e.stored_len()),
+            let size = widgets::format_number(e.stored_len() as i64, 0);
+            d.styled(
+                bytes_right - text_width(&size, Style::Value),
+                base,
+                &size,
                 c::INK_MUTED,
+                Style::Value,
             );
-            text_fit(
-                d,
-                r - 85,
-                y + 16,
-                79,
-                if self.doc.entry_changed(e) {
-                    "EDITED"
-                } else {
-                    "SAVED"
-                },
-                if self.doc.entry_changed(e) {
-                    c::AMBER
-                } else {
-                    c::INK_FAINT
-                },
+            let changed = self.doc.entry_changed(e);
+            let mut sx = status_x;
+            if changed {
+                dot(d, sx, y + (m::ROW_H - m::DIRTY_DOT) / 2, c::AMBER);
+                sx += m::DIRTY_DOT + space::SPACE_1;
+            }
+            d.styled(
+                sx,
+                baseline(y, m::ROW_H, Style::Label),
+                &fit(
+                    if changed { "Edited" } else { "Saved" },
+                    r - 4 - sx,
+                    Style::Label,
+                ),
+                if changed { c::AMBER } else { c::INK_MUTED },
+                Style::Label,
             );
-            o.hit([l + 1, y, width - 2, 24], Action::Entry(*i));
+            o.hit(rect, Action::Entry(*i));
         }
     }
     fn inspector(&self, o: &mut Layout) {
@@ -2200,6 +2397,7 @@ impl App {
         }
         self.smoke_widgets();
         self.smoke_chrome();
+        self.smoke_outliner();
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();
@@ -2274,6 +2472,120 @@ impl App {
     }
 }
 impl App {
+    /// Outliner header and rows through their hit regions: type filter,
+    /// group collapse, the filter field, hover, active vs selected rows and
+    /// the stored-originals group below Images.
+    fn smoke_outliner(&mut self) {
+        let hit = |app: &App, predicate: &dyn Fn(Action) -> bool| {
+            app.layout()
+                .hits
+                .into_iter()
+                .find(|h| predicate(h.action) && h.rect[0] < app.left())
+                .map(|h| h.rect)
+                .expect("Outliner control missing")
+        };
+        let press = |app: &mut App, r: [i32; 4]| {
+            let (x, y) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
+            app.motion(x, y, false);
+            app.click(x, y, 1, true);
+            app.click(x, y, 1, false);
+        };
+        for (w, h) in [(1280, 800), (800, 600)] {
+            self.demo();
+            self.width = w;
+            self.height = h;
+            self.mode = Mode::Model;
+            self.select_entry(1);
+            let all = self.library_rows().len();
+            // Type filter: Shapes only, then back to every group.
+            let shapes = hit(self, &|a| matches!(a, Action::TypeFilter(1)));
+            press(self, shapes);
+            assert_eq!(self.type_filter, Some(1));
+            assert!(self
+                .library_rows()
+                .iter()
+                .all(|(_, cat, _)| cat.is_none_or(|c| c == 1)));
+            assert!(self.browser_entries().iter().all(|i| {
+                category_of(&self.doc.archive.entries[*i].name) == 1
+                    || self.category.is_some_and(|c| c != 1)
+            }));
+            press(self, shapes);
+            assert_eq!(self.type_filter, None);
+            assert_eq!(self.library_rows().len(), all);
+            // Group rows collapse and expand; their count and badge are drawn.
+            let group = hit(self, &|a| matches!(a, Action::Category(1)));
+            assert_eq!(group[3], theme::metric::ROW_H);
+            assert_eq!(group[1], self.tree_start() + 3 * theme::metric::ROW_H);
+            press(self, group);
+            assert!(self.collapsed[1] && self.library_rows().len() < all);
+            press(self, group);
+            assert!(!self.collapsed[1]);
+            assert!(self
+                .draw()
+                .commands
+                .iter()
+                .any(|d| matches!(d, Draw::Text(_, _, s, _, Style::ValueSm) if s == "6")));
+            // Active entry: amber-bright text; its linked shape is selected.
+            let fills = |app: &App, entry: usize| {
+                let r = hit(app, &|a| matches!(a, Action::Entry(i) if i == entry));
+                app.draw()
+                    .commands
+                    .into_iter()
+                    .filter_map(|d| match d {
+                        Draw::Rect(x, y, w, h, c) if [x, y, w, h] == r => Some(c),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+            };
+            self.mouse = [0, 0];
+            assert!(fills(self, 1).contains(&c::AMBER_DEEP.0));
+            assert!(
+                fills(self, 0).contains(&c::AMBER_DEEP.0),
+                "Linked SH selected"
+            );
+            assert!(self.draw().commands.iter().any(|d| matches!(d,
+                Draw::Text(_, _, s, color, _) if s == "DEMO.PT" && *color == c::AMBER_BRIGHT.0)));
+            // Hover is gm-700; zebra rows alternate gm-800 / gm-900.
+            let row = hit(self, &|a| matches!(a, Action::Entry(3)));
+            self.mouse = [row[0] + 4, row[1] + 4];
+            assert!(fills(self, 3).contains(&c::GM_700.0));
+            self.mouse = [0, 0];
+            assert!(fills(self, 3).contains(&c::GM_800.0) || fills(self, 3).contains(&c::GM_900.0));
+            // The filter field takes focus, shows ink text with a caret.
+            let field = hit(self, &|a| matches!(a, Action::Filter));
+            press(self, field);
+            assert!(self.filter_focus);
+            for ch in "_A".chars() {
+                self.key(Key::Char(ch), false, false);
+            }
+            assert!(self.draw().commands.iter().any(|d| matches!(d,
+                Draw::Text(_, _, s, color, _) if s == "_A" && *color == c::INK.0)));
+            assert!(
+                self.library_rows()
+                    .iter()
+                    .all(|(_, _, e)| e
+                        .is_none_or(|i| self.doc.archive.entries[i].name.contains("_A")))
+            );
+            self.key(Key::Escape, false, false);
+            self.filter.clear();
+            // Stored originals list right below Images.
+            self.doc.import("DEMO.ORG", picture::demo()).unwrap();
+            self.refresh();
+            let cats: Vec<usize> = self
+                .library_rows()
+                .iter()
+                .filter(|(_, _, e)| e.is_none())
+                .filter_map(|(_, c, _)| *c)
+                .collect();
+            let images = cats.iter().position(|c| *c == 2).unwrap();
+            assert_eq!(cats[images + 1], 9, "Original textures follow Images");
+            self.doc.undo();
+            self.refresh();
+        }
+        self.width = 1280;
+        self.height = 800;
+        self.demo();
+    }
     /// Select tool, shading toggle, menu padding and hover under overlays.
     fn smoke_toolbar_and_menus(&mut self) {
         let find = |app: &App, predicate: &dyn Fn(Action) -> bool| {

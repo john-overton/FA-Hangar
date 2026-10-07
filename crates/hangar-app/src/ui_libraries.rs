@@ -77,8 +77,14 @@ impl App {
             Some(entry)
         }
     }
+    /// First outliner row, just below the 28px outliner header.
     pub(super) fn tree_start(&self) -> i32 {
-        56
+        theme::metric::MENUBAR_H + theme::metric::EDITOR_HEADER_H
+    }
+    /// Outliner rows that fit above the footer.
+    pub(super) fn outliner_rows(&self) -> usize {
+        ((self.height - self.tree_start() - super::view::OUTLINER_FOOTER) / theme::metric::ROW_H)
+            .max(1) as usize
     }
     fn capture_library(&mut self) -> Library {
         Library {
@@ -810,7 +816,11 @@ impl App {
                 continue;
             }
             let filter = filter.to_ascii_uppercase();
-            for (cat, closed) in collapsed.iter().enumerate() {
+            for cat in super::view::GROUP_ORDER {
+                if self.type_filter.is_some_and(|t| t != cat) {
+                    continue;
+                }
+                let closed = &collapsed[cat];
                 let entries: Vec<_> = doc
                     .archive
                     .entries
@@ -858,7 +868,7 @@ impl App {
         } else if let Some(l) = self.libraries.iter_mut().find(|l| l.id == id) {
             l.root_collapsed = !l.root_collapsed;
         }
-        let rows = ((self.height - self.tree_start() - 54) / 22).max(1) as usize;
+        let rows = self.outliner_rows();
         self.scroll = self
             .scroll
             .min(self.library_rows().len().saturating_sub(rows));
