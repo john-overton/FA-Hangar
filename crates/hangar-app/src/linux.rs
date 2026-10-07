@@ -159,6 +159,16 @@ unsafe extern "C" {
         bg: c_ulong,
     ) -> c_ulong;
     fn XStoreName(d: *mut c_void, w: c_ulong, name: *const c_char) -> c_int;
+    fn XChangeProperty(
+        d: *mut c_void,
+        w: c_ulong,
+        property: c_ulong,
+        kind: c_ulong,
+        format: c_int,
+        mode: c_int,
+        data: *const u8,
+        n: c_int,
+    ) -> c_int;
     fn XSelectInput(d: *mut c_void, w: c_ulong, mask: c_long) -> c_int;
     fn XMapWindow(d: *mut c_void, w: c_ulong) -> c_int;
     fn XCreateGC(d: *mut c_void, w: c_ulong, mask: c_ulong, values: *mut c_void) -> *mut c_void;
@@ -294,6 +304,34 @@ unsafe extern "C" {
     fn malloc(size: usize) -> *mut c_void;
     fn free(data: *mut c_void);
 }
+/// `_NET_WM_ICON` cardinals (width, height, ARGB rows top-down) for the 16,
+/// 32 and 48px 32-bit entries of the committed app icon. A 32-bit DIB pixel
+/// read as a little-endian u32 is already 0xAARRGGBB.
+fn wm_icon() -> Vec<c_ulong> {
+    const ICO: &[u8] = include_bytes!("../../../tore-hangar-design/icons/app/tore-hangar.ico");
+    let int = |at: usize, len: usize| {
+        ICO.get(at..at + len)
+            .map_or(0, |b| b.iter().rev().fold(0, |v, &x| v << 8 | x as usize))
+    };
+    let mut out = Vec::new();
+    for entry in (0..int(4, 2)).map(|i| 6 + i * 16) {
+        let (n, offset) = (int(entry, 1), int(entry + 12, 4));
+        if !matches!(n, 16 | 32 | 48) || int(entry + 6, 2) != 32 || int(offset, 4) != 40 {
+            continue;
+        }
+        let Some(pixels) = ICO.get(offset + 40..offset + 40 + n * n * 4) else {
+            continue;
+        };
+        out.extend([n as c_ulong, n as c_ulong]);
+        for row in pixels.chunks_exact(n * 4).rev() {
+            out.extend(
+                row.chunks_exact(4)
+                    .map(|p| u32::from_le_bytes([p[0], p[1], p[2], p[3]]) as c_ulong),
+            );
+        }
+    }
+    out
+}
 pub fn run(app: App) -> Result<()> {
     run_surface(app, None)
 }
@@ -322,6 +360,21 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
         );
         let title = CString::new(format!("TORE Hangar {}", env!("CARGO_PKG_VERSION"))).unwrap();
         XStoreName(d, w, title.as_ptr());
+        let icon = wm_icon();
+        if !icon.is_empty() {
+            let atom = XInternAtom(d, c"_NET_WM_ICON".as_ptr(), 0);
+            // XA_CARDINAL, format 32 (C longs), PropModeReplace.
+            XChangeProperty(
+                d,
+                w,
+                atom,
+                6,
+                32,
+                0,
+                icon.as_ptr().cast(),
+                icon.len() as c_int,
+            );
+        }
         XSelectInput(d, w, 1 | 4 | 8 | 64 | 32768 | 131072);
         let mut delete = XInternAtom(d, c"WM_DELETE_WINDOW".as_ptr(), 0);
         XSetWMProtocols(d, w, &mut delete, 1);

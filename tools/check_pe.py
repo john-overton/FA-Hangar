@@ -10,7 +10,8 @@ from pathlib import Path
 ALLOWED = {
     'winmm.dll': {'PlaySoundA'},
     'kernel32.dll': set('CloseHandle CreateFileA DeleteFileA MoveFileA ExitProcess FlushFileBuffers GetCommandLineA GetFileSize GetLastError GetModuleHandleA GetProcessHeap HeapAlloc HeapFree ReadFile WriteFile GetCurrentDirectoryA GetLogicalDriveStringsA FindFirstFileA FindNextFileA FindClose GetFileAttributesA GetModuleFileNameA SetFilePointer'.split()),
-    'user32.dll': set('BeginPaint CreateWindowExA DefWindowProcA DestroyWindow DispatchMessageA EndPaint FillRect GetClientRect GetKeyState GetMessageA InvalidateRect LoadCursorA MessageBoxA PostQuitMessage RegisterClassA ReleaseCapture SetCapture ShowWindow TranslateMessage UpdateWindow'.split()),
+    # LoadIconA (Windows 95+) loads the app icon resource for WNDCLASSA.hIcon.
+    'user32.dll': set('BeginPaint CreateWindowExA DefWindowProcA DestroyWindow DispatchMessageA EndPaint FillRect GetClientRect GetKeyState GetMessageA InvalidateRect LoadCursorA LoadIconA MessageBoxA PostQuitMessage RegisterClassA ReleaseCapture SetCapture ShowWindow TranslateMessage UpdateWindow'.split()),
     'gdi32.dll': set('BitBlt CreateCompatibleBitmap CreateCompatibleDC CreateFontA CreatePen CreateSolidBrush DeleteDC DeleteObject LineTo MoveToEx SelectObject SetBkMode SetTextColor TextOutA StretchDIBits'.split()),
 }
 

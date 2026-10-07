@@ -141,6 +141,7 @@ unsafe extern "system" {
     fn GetClientRect(hwnd: Handle, rect: *mut Rect) -> i32;
     fn FillRect(dc: Handle, rect: *const Rect, brush: Handle) -> i32;
     fn LoadCursorA(instance: Handle, name: *const c_char) -> Handle;
+    fn LoadIconA(instance: Handle, name: *const c_char) -> Handle;
     fn GetKeyState(key: i32) -> i16;
     fn SetCapture(hwnd: Handle) -> Handle;
     fn ReleaseCapture() -> i32;
@@ -712,7 +713,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
             cls_extra: 0,
             wnd_extra: 0,
             instance,
-            icon: ptr::null_mut(),
+            // MAKEINTRESOURCE(1): RT_GROUP_ICON 1, linked in by build.rs.
+            icon: LoadIconA(instance, ptr::without_provenance(1)),
             cursor: LoadCursorA(ptr::null_mut(), 32512usize as *const c_char),
             background: ptr::null_mut(),
             menu: ptr::null(),
