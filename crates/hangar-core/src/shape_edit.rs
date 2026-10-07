@@ -1,5 +1,8 @@
 //! First SH authoring layer: source-provenance edits and bounded continuations.
-//! Existing instruction RVAs are retained, including opaque code and relocations.
+//! Body instruction RVAs stay fixed; the end/import tail is relocated explicitly.
+#[path = "shape_layout.rs"]
+mod layout;
+
 use crate::{invalid, model::Model, slice, u16_at, u32_at, Result};
 use alloc::{collections::BTreeSet, vec::Vec};
 #[derive(Debug)]
@@ -139,6 +142,25 @@ fn ensure_face_not_relocated(source: &[u8], start: usize, end: usize) -> Result<
                         "Face overlaps a module relocation; structural rewrite refused",
                     ));
                 }
+                if value >> 12 == 3 {
+                    let base = u32_at(source, p + 52)?;
+                    for n in 0..count {
+                        let h = slice(source, table + n * 40, 40)?;
+                        let rva = u32_at(h, 12)?;
+                        let size = u32_at(h, 8)?.min(u32_at(h, 16)?);
+                        if let Some(offset) = target.checked_sub(rva) {
+                            if offset.checked_add(4).is_some_and(|end| end <= size) {
+                                let address = u32_at(source, u32_at(h, 20)? + offset)?;
+                                if address
+                                    .checked_sub(base)
+                                    .is_some_and(|v| v > start && v < end)
+                                {
+                                    return Err(invalid("Native code references fields inside this face; a full record writer is required"));
+                                }
+                            }
+                        }
+                    }
+                }
             }
             at += size;
         }
@@ -197,6 +219,8 @@ pub fn texture_panel(
     if !name.ends_with(".PIC") {
         return Err(invalid("Panel texture must be a PIC"));
     }
+    let repaired = repair_panel_layout(source)?;
+    let source = repaired.as_ref().map_or(source, |r| r.shape.as_slice());
     let original = Model::parse(source)?;
     let face = original
         .faces
@@ -256,14 +280,16 @@ pub fn texture_panel(
     let mut extension = vec![0xe2, 0];
     extension.extend(name.as_bytes());
     extension.resize(16, 0);
-    let new_face = code.len + 16;
+    let tail = layout::tail(source, &code)?;
+    let extension_start = tail.map_or(code.len, |t| t.start);
+    let new_face = extension_start + 16;
     extension.extend(record);
     if face.material_selector.is_empty() {
         extension.extend([0xe0, 0, 0, 0]);
     } else {
         extension.extend(&face.material_selector);
     }
-    extension.extend(jump(code.len + extension.len(), successor)?);
+    extension.extend(jump(extension_start + extension.len(), successor)?);
     let new_len = code.len + extension.len();
     if new_len > code.limit {
         return Err(invalid(
@@ -277,42 +303,49 @@ pub fn texture_panel(
         return Err(invalid("Face too short for a continuation stub"));
     }
     payload[local..successor].fill(0x1e);
-    payload[local..local + 4].copy_from_slice(&jump(local, code.len)?);
+    payload[local..local + 4].copy_from_slice(&jump(local, extension_start)?);
     payload[successor - 4..successor].copy_from_slice(&jump(successor - 4, successor)?);
-    payload.extend(extension);
-    let mut out = source.to_vec();
-    let new_start;
-    if new_len <= code.raw_size
-        && source[code.start + code.len..code.start + new_len]
-            .iter()
-            .all(|b| *b == 0)
-    {
-        new_start = code.start;
-        out[new_start..new_start + new_len].copy_from_slice(&payload);
+    let (out, new_start) = if let Some(tail) = tail {
+        let out = layout::append_before_tail(source, payload, extension, tail)?;
+        let start = self::code(&out)?.start;
+        (out, start)
     } else {
-        new_start = align(out.len(), code.alignment)?;
-        out.resize(new_start, 0);
-        out.extend(&payload);
-        let raw = align(new_len, code.alignment)?;
-        out.resize(new_start + raw, 0);
-        put32(&mut out, code.header + 20, new_start)?;
-        put32(&mut out, code.header + 16, raw)?;
-        if code.optional_size >= 64 {
-            let old = u32_at(source, code.optional + 4)?;
-            put32(
-                &mut out,
-                code.optional + 4,
-                old.saturating_sub(code.raw_size) + raw,
-            )?;
+        payload.extend(extension);
+        let mut out = source.to_vec();
+        let new_start;
+        if new_len <= code.raw_size
+            && source[code.start + code.len..code.start + new_len]
+                .iter()
+                .all(|b| *b == 0)
+        {
+            new_start = code.start;
+            out[new_start..new_start + new_len].copy_from_slice(&payload);
+        } else {
+            new_start = align(out.len(), code.alignment)?;
+            out.resize(new_start, 0);
+            out.extend(&payload);
+            let raw = align(new_len, code.alignment)?;
+            out.resize(new_start + raw, 0);
+            put32(&mut out, code.header + 20, new_start)?;
+            put32(&mut out, code.header + 16, raw)?;
+            if code.optional_size >= 64 {
+                let old = u32_at(source, code.optional + 4)?;
+                put32(
+                    &mut out,
+                    code.optional + 4,
+                    old.saturating_sub(code.raw_size) + raw,
+                )?;
+            }
         }
-    }
-    put32(&mut out, code.header + 8, new_len)?;
-    if code.optional_size >= 68 {
-        let image = u32_at(source, code.optional + 56)?
-            .max(align(code.rva + new_len, code.section_alignment)?);
-        put32(&mut out, code.optional + 56, image)?;
-        put32(&mut out, code.optional + 64, 0)?;
-    }
+        put32(&mut out, code.header + 8, new_len)?;
+        if code.optional_size >= 68 {
+            let image = u32_at(source, code.optional + 56)?
+                .max(align(code.rva + new_len, code.section_alignment)?);
+            put32(&mut out, code.optional + 56, image)?;
+            put32(&mut out, code.optional + 64, 0)?;
+        }
+        (out, new_start)
+    };
     if out.len() > crate::archive::RESOURCE_LIMIT {
         return Err(invalid("Expanded shape exceeds resource limit"));
     }
@@ -344,6 +377,14 @@ pub fn texture_panel(
         picture: raw_picture(size, face.color, palette)?,
         face: new_index,
     })
+}
+/// Repair only the exact legacy Hangar continuation layout; leave PICs untouched.
+pub struct PanelRepair {
+    pub shape: Vec<u8>,
+    pub panels: usize,
+}
+pub fn repair_panel_layout(source: &[u8]) -> Result<Option<PanelRepair>> {
+    layout::repair(source).map(|r| r.map(|(shape, panels)| PanelRepair { shape, panels }))
 }
 /// Safe selected-vertex edits on the understood spatial-record-free subset.
 pub fn move_vertices(source: &[u8], selected: &[usize], delta: [i32; 3]) -> Result<Vec<u8>> {

@@ -250,7 +250,8 @@ store/icon stem pairs. PT roots retain the reviewed damage-family rules.
 Opaque bytes stay unchanged with a dependency-discovery note. Leaf media is
 copied without inventing references; only recognized identity text is renamed.
 
-`shape_edit.rs` adds a bounded panel continuation writer. It replaces a reviewed
+The original 0.7 shape_edit.rs added a bounded panel continuation writer
+(the tail placement below is superseded by 0.8.2). It replaces a reviewed
 opaque FC polygon site with a relative jump to an appended E2/FC sequence,
 restores its known E0/E2 material selector, and returns to the old successor.
 All original instruction RVAs remain stable. New byte UVs use dominant-axis
@@ -357,10 +358,9 @@ buttons; its destructive action is scoped to the pending close dialog.
    turret/launcher consumers. Current state switches are not continuous animation.
 3. Add local-space geometry edits with all affected normals, visibility planes,
    bounds and contact records updated; retain unsupported records explicitly.
-4. Replace the bounded texture continuation with a complete module layout writer
-   that keeps the SH terminator/import-trampoline conventions accepted by the
-   independent whole-module tool. The current continuation still needs native
-   game acceptance even though its bounded pose matrices pass.
+4. Extend module layout support beyond the bounded tail relocation added in
+   0.8.2. CODE currently grows only within its original virtual-address gap;
+   arbitrary section/RVA movement and other module directories remain unsupported.
 5. Reconcile the user's Windows results for each baseline/edited candidate,
    including launch points, slew arcs, skin orientation, LOD and damage states.
 
@@ -380,3 +380,29 @@ providers. Both document drafts must validate before either is assigned.
 The histories remain per document; source and target each have one undo step.
 Moving the final entries may empty the source in memory, while the existing
 nonempty LIB save contract remains in force.
+
+
+## Native generated-panel layout and repair (0.8.2)
+
+The user supplied A10_V2.LIB after three generated engine panels disappeared
+in FA while remaining visible in Hangar. The old writer placed their E2/FC
+routines after the EndShape marker and import stubs, and sometimes placed a
+new raw CODE copy at the end of the file. The bounded projection followed
+these jumps, hiding the module-layout errors from the editor checks.
+
+shape_layout.rs now inserts complete continuations before the marker. Body
+instruction RVAs remain fixed. The marker/stub tail moves by a 16-byte-aligned
+amount; HIGHLOW target values and relocation sites move together. Relocation
+blocks are regrouped by page. CODE is packed first at the native 0x200/0x400
+offset, relocation padding ends at a 4 KiB file boundary, and code/initialized
+data sizes are updated. Import section data and other section payloads survive.
+Native code that references fields inside the converted face is rejected.
+
+Legacy repair recognizes only Hangar's E2/FC/restore/jump pattern, checks every
+source stub and return, and handles both padded and old unpadded stubs. It
+moves those routines before the terminator, then verifies identical decoded
+geometry and materials. Existing PICs are not rewritten. Repair is explicit
+in the Entry menu, or included when another panel is generated on a legacy SH.
+Unrecognized tails, relocation kinds/directories, and exhausted address/relocation
+space fail without applying an edit. This remains bounded SH authoring, not an
+arbitrary PE or full animated geometry writer.

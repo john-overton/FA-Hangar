@@ -44,6 +44,14 @@ All modifications in Hangar are separate from the upstream implementation.
 No retail game content is included. Users supply their own LIB files.
 The supplied design system uses system font fallbacks; no external fonts ship.
 
+## OpenFA format references
+
+Native SH/import-tail packing was implemented with OpenFA's SH records and
+peff builder as format references (revision 7507fef5bbb126302a59cb413e80cadf5c547f9d,
+GPL-3.0-or-later). The locally patched static decoder/compiler is used for
+development validation; it is not bundled or required by Hangar.
+Source: https://gitlab.com/openfa/openfa
+
 ## PNG decompression
 
 PNG decal decoding links miniz_oxide 0.9.1 (MIT license) and its adler2 2.0.1

@@ -249,3 +249,35 @@ collapses inactive roots, scrolls to the last root, and checks 800x600 hit bound
 Native compact outliner and drop-review layouts were inspected. Original-game
 acceptance assets are unchanged from the 0.8 handoff; the included editor is
 updated to 0.8.1.
+
+
+## Version 0.8.2 generated-panel repair
+
+The user-provided A10_V2.LIB has 47 entries and three generated PICs.
+The repaired package changes only A10_V2.SH. All 46 other stored payloads and
+compression flags, including every painted texture and PT operand, stay exact.
+The input file remains unchanged (SHA-256
+4de3682ad5c574d1f75f5bd6f45a883e3ad1e230a8b7c73b0a55158b372f1ca7).
+
+The independent reader compares all eight combinations of the observed A-10
+state guards, matching symbols across relocated aliases. Face positions, normals,
+colors, UVs, material names and counts are identical before/after repair. The
+shared UI repair command preserves rendered pixels, one undo restores the exact
+archive and redo restores the repaired archive.
+
+The patched static OpenFA decoder/compiler now round-trips the repaired SH
+byte-for-byte: 25,088 bytes, SHA-256
+0ed99e88320068203849a4916bbde88ac730667fc6b61f281dcdd49c25e58457.
+It also passes exact round trips for another panel added to that repaired SH
+and new generated-panel outputs from the stock A-10 and F-18. These replace
+the failing whole-module checks recorded for earlier appended-tail layouts.
+
+64 core tests include import-tail movement across relocation pages, repeated
+panel generation, padded/unpadded legacy repair, no-op idempotence, native
+record references, malformed/truncated modules and unsupported metadata.
+Original-game visual confirmation remains pending the user's retest; parser
+and compiler success alone is not recorded as native-game acceptance.
+
+Formatting, strict Clippy, shared UI smoke, both Windows cross-builds and PE
+audits pass. The binaries are 672,256 bytes (32-bit) and 786,944 bytes (64-bit),
+with the same 59 reviewed imports and no runtime DLL additions.

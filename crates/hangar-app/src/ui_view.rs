@@ -66,6 +66,7 @@ pub(super) enum Action {
     Recolor,
     BaseColor(bool),
     PanelTexture,
+    RepairPanels,
     MeshMode,
     MeshVertex(usize),
     MeshAll,
@@ -502,6 +503,10 @@ impl App {
                     value: "LIVERY.PIC".into(),
                     axis: 0,
                 });
+            }
+            Action::RepairPanels => {
+                let result = self.repair_panels();
+                self.result(result);
             }
             Action::PanelTexture => {
                 let result = self.create_panel_texture();
@@ -2457,6 +2462,7 @@ impl App {
                 ("Preview / Paint media", Action::Mode(Mode::Media)),
                 ("Hardpoint tools", Action::Hardpoints),
                 ("Animation / parts", Action::Animation),
+                ("Repair generated panel mappings", Action::RepairPanels),
                 ("Decals / markings", Action::MediaTab(2)),
                 ("Base color", Action::BaseColor(false)),
                 ("Panel color", Action::BaseColor(true)),

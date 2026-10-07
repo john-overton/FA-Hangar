@@ -259,7 +259,7 @@ fn run() -> Result<()> {
         } else {
             "No neutral C4 part; no part-placement candidate.".into()
         };
-        report.push_str(&format!("texture-{stem}: panel {} (source FC file {:X}), asymmetric F/checker indices {:?}. Geometry/reopen/one-step undo PASS. CODE continuation retains original RVAs. Native-game texture/state/LOD/damage acceptance is PENDING. Independent OpenFA full-module parsing does not accept this appended-tail layout; static projection checks do not resolve that limitation.\n  {part_note}\n",face+1,model.faces[face].offset,colors));
+        report.push_str(&format!("texture-{stem}: panel {} (source FC file {:X}), asymmetric F/checker indices {:?}. Geometry/reopen/one-step undo PASS. CODE continuation retains original RVAs. Native-game texture/state/LOD/damage acceptance is PENDING. Panel records precede the SH terminator and import stubs are relocated; original-game acceptance still requires this test.\n  {part_note}\n",face+1,model.faces[face].offset,colors));
         report.push_str(&format!("  Part-edit preview state: {part_state:?}\n"));
         let symbols = animation::symbols(&bytes)?;
         for addr in model.state_words {

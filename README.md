@@ -16,6 +16,8 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
+Version 0.8.2 corrects generated-panel SH layout and provides repair for older
+painted LIBs while preserving their PIC pixels.
 Version 0.8.1 adds collapsible multi-LIB trees, reviewed copy/move drops, no fixed\nopen-LIB count cap, and distinct workspace tabs.\nVersion 0.8 adds ship/ground-vehicle NT fields and station tools, SH state-switch
 preview and part placement, a viewport brush that crosses panels, corrected
 camera handedness and skin composition, and clickable discard controls.
@@ -182,7 +184,7 @@ python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently
-under 750 KiB. Copy it to a writable location and run it. No installer or runtime
+under 800 KiB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
@@ -456,10 +458,22 @@ cargo run --locked -p hangar-core --example acceptance -- FA_2.LIB FA_1.LIB NEW_
 ```
 
 The folder contains READ-ME.txt and a pending results sheet. Test one candidate
-folder at a time. The generated texture continuation is experimental: independent
-static poses pass, but the OpenFA whole-module reader rejects its appended-tail
-layout. Original-game acceptance remains required. Part-placement candidates
-retain the original module layout and pass exact independent round trips.
+folder at a time. Version 0.8.2 places generated panel records before the SH end
+marker, relocates the import tail and writes native module packing. Tested A-10
+and F-18 outputs pass exact independent SH round trips; original-game acceptance
+still requires a game test. Part-placement candidates retain the original layout.
+
+For LIBs painted with earlier builds, select the affected SH (or its linked
+aircraft) and choose **Entry > Repair generated panel mappings**, then save the
+custom LIB. Repair is one undo step and keeps every PIC unchanged. The CLI can
+instead write a separate new file:
+
+~~~sh
+cargo run --locked -- repair-panels INPUT.LIB MODEL.SH FIXED.LIB
+~~~
+
+Do not load the original and repaired copies together: they retain the same
+resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 
 ## Scope still ahead
 

@@ -217,6 +217,19 @@ separately. No retail data is included in the test package.
 3. Check inactive and active workspace tabs look separate from File/Edit menus,
    at 800x600 and a larger window.
 
+## Generated-panel repair (0.8.2)
+
+1. Open an older custom LIB containing automatically generated panel PICs.
+   Select its SH and choose Entry > Repair generated panel mappings. Confirm
+   the three A10_V2 engine panels retain their painted pixels in the viewport.
+2. Undo once and verify the original SH returns; redo and save the repaired
+   custom LIB. The repair must not change any PIC or aircraft numeric fields.
+3. Load only the repaired copy in FA. Inspect the marked engine panels at the
+   same distance/view as the reported missing geometry. Test gear/flaps, nearby
+   and distant views and damage states separately.
+4. Paint another supported blank panel using the updated editor, save/reopen
+   and retest it in FA. Already repaired files must report no repair needed.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

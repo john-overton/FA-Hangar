@@ -12,7 +12,7 @@ pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -43,6 +43,26 @@ pub fn run() -> Result<()> {
             crate::saving::smoke();
             app.smoke_save_policy();
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
+        },
+        Some("--repair-check")=>{
+            app.open(argument(&args,1)?)?;
+            let at=app.doc.archive.find(argument(&args,2)?).ok_or("SH not found")?;
+            app.select_entry(at);
+            app.check_panel_repair()?;
+            println!("PASS: repair preserves rendered pixels; one undo restores the exact archive; redo restores the repaired SH");
+        },
+        Some("repair-panels")=>{
+            let mut doc=Document::new(Archive::parse(platform::read(argument(&args,1)?)?)?);
+            let name=argument(&args,2)?;
+            let at=doc.archive.find(name).ok_or("SH not found")?;
+            let before=doc.archive.entries[at].read()?;
+            let repaired=hangar_core::shape_edit::repair_panel_layout(&before)?.ok_or("No legacy generated panel layout found")?;
+            let count=repaired.panels;
+            doc.replace(at,repaired.shape)?;
+            let output=argument(&args,3)?;
+            if hangar_core::save::protected_name(output).is_some(){return Err("Choose a new custom LIB name".into());}
+            platform::write_new(output,&doc.archive.bytes()?)?;
+            println!("Repaired {count} generated panels in {name}; all other entries unchanged; wrote {output}");
         },
         Some("--panel-check")=>{
             let bytes=platform::read(argument(&args,1)?)?;let model=Model::parse(&bytes)?;

@@ -18,6 +18,26 @@ pub(super) struct MeshDrag {
     pub delta: [i32; 3],
 }
 impl App {
+    pub(super) fn repair_panels(&mut self) -> Result<()> {
+        self.finish_stroke();
+        let entry = self
+            .model_entry
+            .or(self.context_entry)
+            .ok_or("Select the local SH or its owning object")?;
+        let source = self.doc.archive.entries[entry].read()?;
+        if let Some(repaired) = shape_edit::repair_panel_layout(&source)? {
+            let panels = repaired.panels;
+            self.doc.replace(entry, repaired.shape)?;
+            self.animation_state.clear();
+            self.refresh();
+            self.status = format!(
+                "Repaired {panels} generated panels / painted PICs preserved / one undo step"
+            );
+        } else {
+            self.status = "No legacy generated-panel layout found / nothing changed".into();
+        }
+        Ok(())
+    }
     pub(super) fn panel_plan(&self, face: usize) -> Result<PanelPlan> {
         let entry = self
             .model_entry
@@ -506,5 +526,48 @@ impl App {
             }
             a.key(Key::Escape, false, false);
         }
+    }
+}
+
+#[cfg(not(windows))]
+impl App {
+    pub fn check_panel_repair(&mut self) -> Result<()> {
+        self.mode = Mode::Model;
+        self.textured = true;
+        self.perspective = false;
+        let before = self.doc.archive.bytes()?;
+        let images = |app: &App| {
+            app.draw()
+                .commands
+                .into_iter()
+                .filter_map(|d| {
+                    if let Draw::Bitmap(_, _, _, _, p) = d {
+                        Some(p)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        let pixels = images(self);
+        self.repair_panels()?;
+        if !self.doc.dirty() {
+            return Err("Repair did not change a legacy SH".into());
+        }
+        if images(self) != pixels {
+            return Err("Repair changed viewport pixels".into());
+        }
+        let repaired = self.doc.archive.bytes()?;
+        self.doc.undo();
+        self.refresh();
+        if self.doc.archive.bytes()? != before {
+            return Err("Repair undo did not restore archive".into());
+        }
+        self.doc.redo();
+        self.refresh();
+        if self.doc.archive.bytes()? != repaired {
+            return Err("Repair redo differs".into());
+        }
+        Ok(())
     }
 }
