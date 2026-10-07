@@ -76,7 +76,6 @@ pub(super) enum Action {
     MeshVertex(usize),
     MeshAll,
     MeshMove,
-    Textured,
     ModelPaint,
     PaintLock,
     Isolate,
@@ -102,6 +101,10 @@ pub(super) enum Action {
     DecalPlace,
     DecalCancel,
     DecalApply,
+    /// Viewport mode Select: object, edit mesh, hardpoints, parts, paint.
+    ViewportMode(u8),
+    /// Shading: wireframe, solid, textured.
+    Shading(u8),
     /// Press on a NumberField: starts a scrub (handled in `App::pointer`).
     Number(widgets::NumberTarget),
     /// NumberField hover arrow: step down (-1) or up (+1).
@@ -356,10 +359,6 @@ impl App {
             Action::Brush(i) => self.brush = i,
             Action::Radius(n) => self.brush_radius = n,
             Action::OpenTexture(i) => self.open_texture(i),
-            Action::Textured => {
-                self.textured = !self.textured;
-                self.perspective = false;
-            }
             Action::PaintLock => {
                 self.finish_stroke();
                 self.paint_lock = !self.paint_lock;
@@ -881,6 +880,38 @@ impl App {
                 self.field_scroll = 0;
                 self.mode = Mode::Properties;
             }
+            Action::ViewportMode(n) => {
+                let current = self.viewport_mode();
+                if current == n as usize && n != 0 {
+                    return;
+                }
+                // Leave the current mode through its own toggle, then enter the new one.
+                match current {
+                    1 => self.act(Action::MeshMode),
+                    2 => self.hp_tool = false,
+                    3 => {
+                        self.animation_tool = false;
+                        self.animation_state.clear();
+                        self.preview = None;
+                    }
+                    4 => self.act(Action::ModelPaint),
+                    _ => {}
+                }
+                self.mode = Mode::Model;
+                match n {
+                    1 => self.act(Action::MeshMode),
+                    2 => self.act(Action::Hardpoints),
+                    3 => self.act(Action::Animation),
+                    4 => self.act(Action::ModelPaint),
+                    _ => {}
+                }
+            }
+            Action::Shading(n) => {
+                self.finish_stroke();
+                self.textured = n > 0;
+                self.flat = n == 1;
+                self.perspective &= n == 0;
+            }
             Action::Number(t) => self.number_press(t, self.mouse[0]),
             Action::NumberStep(t, direction) => self.number_step(t, direction),
             Action::Apply => self.key(Key::Enter, false, false),
@@ -1042,9 +1073,10 @@ impl App {
             self.act(Action::Validate);
             return Ok(());
         }
-        if name == "textured" {
+        if name == "textured" || name == "solid" {
             self.mode = Mode::Model;
             self.textured = true;
+            self.flat = name == "solid";
             return Ok(());
         }
         if name == "browser" {
@@ -1452,46 +1484,7 @@ impl App {
         let r = self.right();
         let dock = self.dock_y();
         let width = r - l;
-        let d = &mut o.canvas;
-        d.rect(l + 1, 26, width - 2, 28, c::GM_800);
-        icon(d, l + 8, 32, Icon::Select, c::INK_MUTED);
-        o.button(
-            [l + 27, 29, 92, 22],
-            if self.mesh_edit {
-                "Edit mesh"
-            } else {
-                "Object mode"
-            },
-            Action::MeshMode,
-            self.mesh_edit,
-        );
-        o.button(
-            [l + 125, 29, 105, 22],
-            "Hardpoints",
-            Action::Hardpoints,
-            self.hp_tool,
-        );
-        o.button(
-            [l + 235, 29, 78, 22],
-            "Parts",
-            Action::Animation,
-            self.animation_tool,
-        );
-        if width > 590 {
-            o.button(
-                [r - 254, 29, 94, 22],
-                "Textured",
-                Action::Textured,
-                self.textured,
-            );
-            o.button(
-                [r - 153, 29, 65, 22],
-                "Top",
-                Action::View(7),
-                self.pitch == 90,
-            );
-            o.button([r - 84, 29, 77, 22], "Frame", Action::View(0), false);
-        }
+        self.viewport_header(o);
         if let Some(m) = self.preview.as_ref().or(self.model.as_ref()) {
             if self.textured {
                 self.draw_model(o, l + 1, 54, width - 2, dock - 54);
@@ -1500,122 +1493,30 @@ impl App {
             }
         } else {
             let d = &mut o.canvas;
-            d.label(l + 32, 144, "A workshop for Fighters Anthology", c::INK);
+            d.styled(l + 64, 144, "No shape loaded", c::INK, Style::Title);
             label_fit(
                 d,
-                l + 32,
-                174,
-                width - 64,
+                l + 64,
+                170,
+                width - 96,
                 "Open a LIB and select an aircraft or shape.",
                 c::INK_MUTED,
             );
-            o.button(
-                [l + 32, 204, 128, 26],
-                "Open LIB",
+            o.button_ex(
+                [l + 64, 186, 96, theme::metric::BUTTON_H],
+                widgets::Btn::new("Open LIB").primary(),
                 Action::File(FileAction::Open),
-                true,
             );
-            o.button([l + 172, 204, 124, 26], "Load demo", Action::Demo, false);
+            o.button_ex(
+                [l + 168, 186, 96, theme::metric::BUTTON_H],
+                widgets::Btn::new("Load demo"),
+                Action::Demo,
+            );
         }
         let writable = self.model.as_ref().is_some_and(|m| m.writable)
             && self.model_entry == Some(self.selected);
-        let x = l + 8;
-        for (n, (i, a, enabled)) in [
-            (Icon::Select, Action::SelectTool, true),
-            (Icon::Move, Action::Transform('g'), writable),
-            (Icon::Rotate, Action::Transform('r'), writable),
-            (Icon::Scale, Action::Transform('s'), writable),
-            (Icon::Frame, Action::View(0), true),
-            (Icon::Brush, Action::ModelPaint, self.model.is_some()),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            o.tool(
-                [x, 64 + n as i32 * 31, 28, 28],
-                i,
-                a,
-                enabled,
-                if n == 5 {
-                    self.model_paint
-                } else {
-                    n == 0 && !self.model_paint
-                },
-            );
-        }
-        let label = if self.perspective {
-            "Perspective"
-        } else if self.pitch == 90 {
-            "Top / Orthographic"
-        } else if self.yaw == 90 && self.pitch == 0 {
-            "Side / Orthographic"
-        } else if self.yaw == 0 && self.pitch == 0 {
-            "Front / Orthographic"
-        } else {
-            "User / Orthographic"
-        };
-        let d = &mut o.canvas;
-        d.text(l + 51, 75, label, c::INK);
-        if let Some(i) = self.model_entry {
-            text_fit(
-                d,
-                l + 51,
-                95,
-                width - 130,
-                &self.doc.archive.entries[i].name,
-                c::INK_MUTED,
-            );
-        }
-        if let Some(m) = &self.model {
-            d.text(
-                l + 51,
-                115,
-                &format!("{} verts / {} faces", m.vertices.len(), m.faces.len()),
-                c::INK_MUTED,
-            );
-        }
-        if let Some(i) = self.model_entry {
-            let users = self
-                .dependencies
-                .incoming(&self.doc.archive.entries[i].name)
-                .count();
-            if users > 1 {
-                label_fit(
-                    d,
-                    l + 51,
-                    136,
-                    width - 110,
-                    &format!("Shared shape / {users} direct users in this LIB"),
-                    c::AMBER,
-                );
-            }
-        }
-        let gx = r - 43;
-        let gy = 92;
-        d.line(gx - 19, gy, gx + 19, gy, c::AXIS_X);
-        d.line(gx, gy + 20, gx, gy - 20, c::AXIS_Y);
-        d.text(gx + 14, gy + 4, "X", c::AXIS_X);
-        d.text(gx - 3, gy - 18, "Y", c::AXIS_Y);
-        d.text(gx - 3, gy + 5, "Z", c::AXIS_Z);
-        text_fit(
-            d,
-            l + 51,
-            dock - 12,
-            width - 150,
-            if self.mesh_edit {
-                if writable {
-                    "Edit mode / vertices"
-                } else {
-                    "Edit mode / inspect only"
-                }
-            } else if writable {
-                "Object mode / editable static mesh"
-            } else {
-                "Object mode / static preview"
-            },
-            c::INK_MUTED,
-        );
-        d.text(r - 65, dock - 12, &format!("{}%", self.zoom), c::INK_FAINT);
+        self.tool_strip(o, writable);
+        self.viewport_overlay(o, writable);
         if self.mesh_edit {
             self.mesh_overlay(o);
         } else {
@@ -2391,32 +2292,22 @@ impl App {
         self.click(tool[0] + 4, tool[1] + 4, 1, true);
         assert!(!self.model_paint, "Select tool leaves paint mode");
         let (zoom, pan) = (self.zoom, self.pan);
-        for textured in [false, true] {
-            self.textured = textured;
-            let labels: Vec<_> = self
-                .draw()
-                .commands
-                .into_iter()
-                .filter_map(|d| match d {
-                    Draw::Text(_, _, s, color, _) if s == "Textured" || s == "Wireframe" => {
-                        Some((s, color))
-                    }
-                    _ => None,
-                })
-                .collect();
-            let color = if textured { c::AMBER.0 } else { c::INK.0 };
-            assert_eq!(
-                labels,
-                vec![("Textured".to_string(), color)],
-                "Shading state"
-            );
+        // Shading is one segmented control: each member selects its mode.
+        for (n, textured, flat) in [(1u8, true, true), (2, true, false), (0, false, false)] {
+            let seg = find(self, &|a| matches!(a, Action::Shading(m) if m == n)).expect("Shading");
+            self.click(seg[0] + seg[2] / 2, seg[1] + seg[3] / 2, 1, true);
+            self.click(seg[0] + seg[2] / 2, seg[1] + seg[3] / 2, 1, false);
+            assert_eq!((self.textured, self.flat), (textured, flat), "Shading {n}");
         }
-        let button = find(self, &|a| matches!(a, Action::Hardpoints)).unwrap();
+        self.hp_visible = false;
+        let button = find(self, &|a| matches!(a, Action::HardpointVisibility)).unwrap();
         self.mouse = [button[0] + 4, button[1] + 4];
+        // Hovered buttons fill gm-600 inside their notched keyline.
+        let face = [button[0] + 1, button[1] + 1, button[2] - 2, button[3] - 2];
         let hovered = |app: &App| {
             app.draw().commands.iter().any(|d| {
                 matches!(d, Draw::Rect(x, y, w, h, color)
-                    if [*x, *y, *w, *h] == button && *color == c::GM_600.0)
+                    if [*x, *y, *w, *h] == face && *color == c::GM_600.0)
             })
         };
         assert!(hovered(self));

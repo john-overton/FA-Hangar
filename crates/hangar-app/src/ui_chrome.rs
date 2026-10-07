@@ -5,9 +5,14 @@
 use super::view::{Action, Icon, Layout};
 use super::widgets::{baseline, dot, keycap, keycap_width, notched, Btn, Item};
 use super::*;
+use alloc::vec;
 use theme::{metric as m, space};
 
 const MENUS: [&str; 7] = ["File", "Edit", "Lib", "Entry", "View", "Tools", "Help"];
+/// Dropdown ids beyond the seven menu bar menus.
+pub(super) const MENU_MODE: usize = 7;
+pub(super) const MENU_VIEW: usize = 8;
+pub(super) const MENU_SHADING: usize = 9;
 const TABS: [(&str, Mode); 6] = [
     ("Browse", Mode::Browse),
     ("Model", Mode::Model),
@@ -232,7 +237,7 @@ impl App {
                 Item::new("Panel color", Action::BaseColor(true)),
                 Item::new("Remap color indices", Action::Recolor),
             ],
-            4 => {
+            4 | MENU_VIEW => {
                 let mut items = vec![
                     Item::new("Frame all", Action::View(0)).key("Home"),
                     Item::new("Front", Action::View(1)).key("1"),
@@ -242,7 +247,7 @@ impl App {
                 ];
                 if menu == 4 {
                     items.push(Item::sep());
-                    items.push(Item::new("Toggle textured", Action::Textured));
+                    items.extend(self.shading_items());
                 }
                 items
             }
@@ -258,16 +263,70 @@ impl App {
                 Item::new("Graft characteristics", Action::Mode(Mode::Graft)),
                 Item::new("Copy one donor field", Action::File(FileAction::Graft)),
             ],
+            MENU_MODE => {
+                let current = self.viewport_mode();
+                VIEWPORT_MODES
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (label, glyph, key))| {
+                        let item = Item::new(label, Action::ViewportMode(i as u8))
+                            .icon(*glyph)
+                            .on(i == current);
+                        match key {
+                            Some(k) => item.key(k),
+                            None => item,
+                        }
+                    })
+                    .collect()
+            }
+            MENU_SHADING => self.shading_items(),
             _ => vec![
                 Item::new("Controls", Action::Help).key("F1"),
                 Item::new("Load synthetic demo", Action::Demo),
             ],
         }
     }
+    fn shading_items(&self) -> Vec<Item<'static>> {
+        let shading = self.shading();
+        let mut items: Vec<Item<'static>> = SHADING
+            .iter()
+            .enumerate()
+            .map(|(i, (label, glyph))| {
+                Item::new(label, Action::Shading(i as u8))
+                    .icon(*glyph)
+                    .on(i == shading)
+            })
+            .collect();
+        items.push(
+            Item::new("Show hardpoints", Action::HardpointVisibility)
+                .icon(Icon::Hardpoint)
+                .on(self.hp_visible),
+        );
+        items
+    }
+    /// The open dropdown's drawn rect.
+    pub(super) fn open_menu_rect(&self) -> Option<[i32; 4]> {
+        let menu = self.menu?;
+        let (x, y) = self.menu_anchor(menu);
+        let (w, h) = super::widgets::menu_size(&self.menu_items(menu));
+        let x = x.min(self.width - w).max(0);
+        let y = y.min(self.height - h).max(0);
+        Some([x, y, w, h])
+    }
     /// Top-left anchor of dropdown `menu`.
     pub(super) fn menu_anchor(&self, menu: usize) -> (i32, i32) {
-        let bar = self.bar();
-        (bar.menus[menu.min(6)][0], m::MENUBAR_H)
+        match menu {
+            0..=6 => (self.bar().menus[menu][0], m::MENUBAR_H),
+            _ => {
+                let header = self.viewport_header_slots();
+                let rect = match menu {
+                    MENU_MODE => header.mode,
+                    MENU_VIEW => header.view,
+                    _ => header.overflow.unwrap_or(header.shading),
+                };
+                (rect[0], rect[1] + rect[3] + 1)
+            }
+        }
     }
     pub(super) fn menu_layout(&self, o: &mut Layout, menu: usize) {
         let (x, y) = self.menu_anchor(menu);
@@ -474,4 +533,403 @@ impl App {
             );
         }
     }
+}
+// ---------------------------------------------------------------- viewport header
+
+/// Viewport interaction modes offered by the mode Select.
+pub(super) const VIEWPORT_MODES: [(&str, Icon, Option<&str>); 5] = [
+    ("Object Mode", Icon::Select, Some("Tab")),
+    ("Edit Mesh", Icon::Shape, Some("Tab")),
+    ("Hardpoints", Icon::Hardpoint, None),
+    ("Parts", Icon::Sliders, None),
+    ("Texture Paint", Icon::Brush, None),
+];
+/// Shading modes: wireframe, solid (flat face colors), textured.
+pub(super) const SHADING: [(&str, Icon); 3] = [
+    ("Wireframe", Icon::Wire),
+    ("Solid", Icon::Solid),
+    ("Textured", Icon::Textured),
+];
+pub(super) struct HeaderSlots {
+    pub mode: [i32; 4],
+    pub view: [i32; 4],
+    pub visibility: [i32; 4],
+    pub shading: [i32; 4],
+    /// Set when the right group does not fit: one button opens it as a menu.
+    pub overflow: Option<[i32; 4]>,
+}
+impl App {
+    pub(super) fn viewport_mode(&self) -> usize {
+        if self.mesh_edit {
+            1
+        } else if self.hp_tool {
+            2
+        } else if self.animation_tool {
+            3
+        } else if self.model_paint {
+            4
+        } else {
+            0
+        }
+    }
+    pub(super) fn shading(&self) -> usize {
+        match (self.textured, self.flat) {
+            (false, _) => 0,
+            (true, true) => 1,
+            (true, false) => 2,
+        }
+    }
+    pub(super) fn viewport_header_slots(&self) -> HeaderSlots {
+        let l = self.left() + 1;
+        let r = self.right() - 1;
+        let y = m::MENUBAR_H + (m::EDITOR_HEADER_H - m::BUTTON_H) / 2;
+        let h = m::BUTTON_H;
+        let mode_w = VIEWPORT_MODES
+            .iter()
+            .map(|(label, _, _)| Layout::select_width(true, label))
+            .max()
+            .unwrap_or(116);
+        let mode = [l + space::SPACE_1, y, mode_w, h];
+        let view_w = Btn::new("View").ghost().width();
+        let view = [mode[0] + mode_w + space::SPACE_2, y, view_w, h];
+        let seg_w = 3 * m::ICON_BUTTON + 2;
+        let shading = [r - space::SPACE_1 - seg_w, y, seg_w, h];
+        let visibility = [
+            shading[0] - space::SPACE_2 - m::ICON_BUTTON,
+            y,
+            m::ICON_BUTTON,
+            h,
+        ];
+        let overflow = (visibility[0] < view[0] + view[2] + space::SPACE_2).then_some([
+            r - space::SPACE_1 - m::ICON_BUTTON,
+            y,
+            m::ICON_BUTTON,
+            h,
+        ]);
+        HeaderSlots {
+            mode,
+            view,
+            visibility,
+            shading,
+            overflow,
+        }
+    }
+    /// Viewport editor header: mode Select, View menu, hardpoint overlay
+    /// toggle and the wireframe / solid / textured segmented control.
+    pub(super) fn viewport_header(&self, o: &mut Layout) {
+        let l = self.left() + 1;
+        let width = self.right() - self.left() - 2;
+        let top = m::MENUBAR_H;
+        o.canvas.rect(l, top, width, m::EDITOR_HEADER_H, c::GM_800);
+        o.canvas
+            .rect(l, top + m::EDITOR_HEADER_H - 1, width, 1, c::GM_1000);
+        let s = self.viewport_header_slots();
+        let (label, glyph, _) = VIEWPORT_MODES[self.viewport_mode()];
+        o.select(
+            [s.mode[0], s.mode[1] + 1, s.mode[2], m::FIELD_H],
+            Some(glyph),
+            label,
+            Action::Menu(MENU_MODE),
+            self.menu == Some(MENU_MODE),
+        );
+        o.button_ex(
+            s.view,
+            Btn::new("View").ghost().on(self.menu == Some(MENU_VIEW)),
+            Action::Menu(MENU_VIEW),
+        );
+        if let Some(rect) = s.overflow {
+            o.button_ex(
+                rect,
+                Btn::icon(SHADING[self.shading()].1)
+                    .ghost()
+                    .on(self.menu == Some(MENU_SHADING)),
+                Action::Menu(MENU_SHADING),
+            );
+            return;
+        }
+        o.button_ex(
+            s.visibility,
+            Btn::icon(Icon::Hardpoint).on(self.hp_visible),
+            Action::HardpointVisibility,
+        );
+        let shading = self.shading();
+        let items: Vec<(Btn, Action)> = SHADING
+            .iter()
+            .enumerate()
+            .map(|(i, (_, g))| (Btn::icon(*g).on(i == shading), Action::Shading(i as u8)))
+            .collect();
+        o.segmented(s.shading, &items);
+    }
+    /// Floating tool strip: Select, Move, Rotate, Scale | Frame, Paint.
+    pub(super) fn tool_strip(&self, o: &mut Layout, writable: bool) {
+        let x = self.left() + 1 + space::SPACE_2;
+        let y = m::MENUBAR_H + m::EDITOR_HEADER_H + space::SPACE_2;
+        let b = m::TOOLSTRIP_BUTTON;
+        let tools: [Option<(Icon, Action, bool, bool)>; 7] = [
+            Some((Icon::Select, Action::SelectTool, true, !self.model_paint)),
+            Some((Icon::Move, Action::Transform('g'), writable, false)),
+            Some((Icon::Rotate, Action::Transform('r'), writable, false)),
+            Some((Icon::Scale, Action::Transform('s'), writable, false)),
+            None,
+            Some((Icon::Frame, Action::View(0), true, false)),
+            Some((
+                Icon::Brush,
+                Action::ModelPaint,
+                self.model.is_some(),
+                self.model_paint,
+            )),
+        ];
+        let h = 3 + 6 * (b + 2) - 2 + 5 + 3;
+        let w = b + 6;
+        notched(
+            &mut o.canvas,
+            [x, y, w, h],
+            Some(c::GM_800),
+            Some(c::GM_1000),
+        );
+        let mut ty = y + 3;
+        for tool in tools {
+            match tool {
+                None => {
+                    o.canvas.rect(x + 3 + 2, ty + 1, b - 4, 1, c::GM_600);
+                    ty += 5;
+                }
+                Some((g, action, enabled, on)) => {
+                    o.button_ex(
+                        [x + 3, ty, b, b],
+                        Btn::icon(g).ghost().on(on).enabled(enabled),
+                        action,
+                    );
+                    ty += b + 2;
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- viewport overlays
+
+/// Integer square root (floor).
+pub(super) fn isqrt(n: i64) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+/// Filled disc of radius `r` centred on (cx, cy), drawn as row spans.
+pub(super) fn disc(d: &mut Canvas, cx: i32, cy: i32, r: i32, color: Rgb) {
+    for dy in -r..=r {
+        let dx = isqrt((r * r - dy * dy) as i64 + r as i64 / 2) as i32;
+        d.rect(cx - dx, cy + dy, 2 * dx + 1, 1, color);
+    }
+}
+/// Disc with a 1px (or `width`) ring in `edge`.
+pub(super) fn ring(d: &mut Canvas, cx: i32, cy: i32, r: i32, edge: Rgb, fill: Rgb) {
+    disc(d, cx, cy, r, edge);
+    disc(d, cx, cy, r - 1, fill);
+}
+impl App {
+    fn view_name(&self) -> &'static str {
+        if self.perspective {
+            "User \u{b7} Perspective"
+        } else if self.pitch == 90 {
+            "Top \u{b7} Orthographic"
+        } else if self.yaw == 90 && self.pitch == 0 {
+            "Side \u{b7} Orthographic"
+        } else if self.yaw == 0 && self.pitch == 0 {
+            "Front \u{b7} Orthographic"
+        } else {
+            "User \u{b7} Orthographic"
+        }
+    }
+    /// Overlay text (view, entry, counts; mode bottom-left, zoom bottom-right)
+    /// and the navigation gizmo.
+    pub(super) fn viewport_overlay(&self, o: &mut Layout, writable: bool) {
+        let l = self.left() + 1;
+        let r = self.right() - 1;
+        let top = m::MENUBAR_H + m::EDITOR_HEADER_H;
+        let bottom = self.dock_y();
+        let x = l + space::SPACE_2 + m::TOOLSTRIP_BUTTON + 6 + space::SPACE_2 + space::SPACE_1;
+        let room = r - 2 * space::SPACE_2 - m::GIZMO - x;
+        let line = Style::ValueSm.spec().line;
+        let mut y = top + space::SPACE_2 + 11;
+        let d = &mut o.canvas;
+        d.styled(x, y, self.view_name(), c::INK, Style::ValueSm);
+        y += line;
+        if let Some(i) = self.model_entry {
+            d.styled(
+                x,
+                y,
+                &fit(&self.doc.archive.entries[i].name, room, Style::ValueSm),
+                c::INK_MUTED,
+                Style::ValueSm,
+            );
+            y += line;
+        }
+        if let Some(model) = &self.model {
+            let counts = format!(
+                "{} \u{b7} {}",
+                view::count(model.vertices.len(), "vert", "verts"),
+                view::count(model.faces.len(), "face", "faces")
+            );
+            d.styled(
+                x,
+                y,
+                &fit(&counts, room, Style::ValueSm),
+                c::INK_MUTED,
+                Style::ValueSm,
+            );
+            y += line;
+        }
+        if let Some(i) = self.model_entry {
+            let users = self
+                .dependencies
+                .incoming(&self.doc.archive.entries[i].name)
+                .count();
+            if users > 1 {
+                d.icon_sm(x, y - 10, Icon::Warning, c::AMBER, c::GM_950);
+                d.styled(
+                    x + m::ICON_SM + space::SPACE_1,
+                    y,
+                    &fit(
+                        &format!("Shared shape \u{b7} {users} direct users in this LIB"),
+                        room - m::ICON_SM - space::SPACE_1,
+                        Style::ValueSm,
+                    ),
+                    c::AMBER,
+                    Style::ValueSm,
+                );
+            }
+        }
+        let zoom = format!("zoom {}%", self.zoom);
+        let zoom_w = text_width(&zoom, Style::ValueSm);
+        let base = bottom - space::SPACE_2 - 3;
+        d.styled(
+            r - space::SPACE_3 - zoom_w,
+            base,
+            &zoom,
+            c::INK_MUTED,
+            Style::ValueSm,
+        );
+        let mode = format!(
+            "{} \u{b7} {}",
+            VIEWPORT_MODES[self.viewport_mode()].0,
+            if self.mesh_edit {
+                if writable {
+                    "vertices"
+                } else {
+                    "inspect only"
+                }
+            } else if writable {
+                "editable static mesh"
+            } else {
+                "static preview"
+            }
+        );
+        d.styled(
+            x,
+            base,
+            &fit(
+                &mode,
+                r - space::SPACE_3 - zoom_w - space::SPACE_4 - x,
+                Style::ValueSm,
+            ),
+            c::INK_MUTED,
+            Style::ValueSm,
+        );
+        if self.model.is_some() || self.preview.is_some() {
+            self.gizmo(o, r - space::SPACE_2 - m::GIZMO / 2, top + 6 + m::GIZMO / 2);
+        }
+    }
+    /// Navigation gizmo: the body axes through the current camera rotation,
+    /// positive ends as labelled axis-colored caps on 2px stems, negative ends
+    /// as rings, drawn back to front. A positive cap views along that axis.
+    pub(super) fn gizmo(&self, o: &mut Layout, cx: i32, cy: i32) {
+        const LEN: i32 = 28;
+        const UNIT: i32 = 1024;
+        let colors = [c::AXIS_X, c::AXIS_Y, c::AXIS_Z];
+        let views = [3u8, 1, 7];
+        let mut caps: Vec<(i32, usize, bool, i32, i32)> = Vec::new();
+        for axis in 0..3 {
+            let mut p = [0; 3];
+            p[axis] = UNIT;
+            let v = self.camera_point(p);
+            for positive in [true, false] {
+                let s = if positive { 1 } else { -1 };
+                caps.push((
+                    s * v[2],
+                    axis,
+                    positive,
+                    cx + s * v[0] * LEN / UNIT,
+                    cy - s * v[1] * LEN / UNIT,
+                ));
+            }
+        }
+        // Far caps first; the camera looks down -z, so larger z is nearer.
+        caps.sort_unstable_by_key(|cap| (cap.0, cap.1, cap.2));
+        for (_, axis, positive, x, y) in caps {
+            let color = colors[axis];
+            if positive {
+                // 2px stem: two 1px lines offset across the stem direction.
+                let horizontal = (x - cx).abs() >= (y - cy).abs();
+                for k in 0..2 {
+                    let (ox, oy) = if horizontal { (0, k) } else { (k, 0) };
+                    o.canvas.line(cx + ox, cy + oy, x + ox, y + oy, color);
+                }
+                disc(&mut o.canvas, x, y, 8, color);
+                let label = ["X", "Y", "Z"][axis];
+                o.canvas.styled(
+                    x - text_width(label, Style::Badge) / 2,
+                    y + 4,
+                    label,
+                    c::GM_1000,
+                    Style::Badge,
+                );
+                o.hit([x - 8, y - 8, 17, 17], Action::View(views[axis]));
+            } else {
+                ring(&mut o.canvas, x, y, 6, color, c::GM_800);
+            }
+        }
+    }
+}
+
+/// Solid-mode light for a face, 96..=256 of 256: faces turned toward the
+/// camera are brighter. Uses the stored normal or the first triangle's.
+/// Integer only.
+pub(super) fn light(app: &App, m: &hangar_core::model::Model, f: &hangar_core::model::Face) -> i32 {
+    let n = f.normal.or_else(|| {
+        let p = |k: usize| m.vertices.get(*f.indices.get(k)?).map(|v| v.point);
+        let (a, b, c) = (p(0)?, p(1)?, p(2)?);
+        let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]].map(|v| v as i64);
+        let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]].map(|v| v as i64);
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let big = n.iter().map(|c| c.abs()).max().unwrap_or(0);
+        let scale = (big / 30000).max(1);
+        Some(n.map(|c| (c / scale) as i32))
+    });
+    let Some(n) = n else {
+        return 200;
+    };
+    let v = app.camera_point(n);
+    let len = isqrt(n.iter().map(|c| *c as i64 * *c as i64).sum());
+    if len == 0 {
+        return 200;
+    }
+    96 + (160 * (v[2] as i64).abs() / len).min(160) as i32
+}
+/// `color` (0xRRGGBB) scaled by `light`/256.
+pub(super) fn shade(color: u32, light: i32) -> u32 {
+    let l = light.clamp(0, 256) as u32;
+    let ch = |shift: u32| ((color >> shift & 255) * l / 256) << shift;
+    ch(16) | ch(8) | ch(0)
 }

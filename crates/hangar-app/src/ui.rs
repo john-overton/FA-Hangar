@@ -486,6 +486,8 @@ pub struct App {
     pick_color: bool,
     textures: BTreeMap<String, Pic>,
     textured: bool,
+    /// Solid shading: the textured raster with flat, lit face colors.
+    flat: bool,
     stroke: Option<Stroke>,
     stroke_parked: Vec<Stroke>,
     panel_draft: Option<Box<mesh_ui::PanelPlan>>,
@@ -631,6 +633,7 @@ impl App {
             pick_color: false,
             textures: BTreeMap::new(),
             textured: false,
+            flat: false,
             stroke: None,
             stroke_parked: Vec::new(),
             panel_draft: None,
@@ -2072,6 +2075,23 @@ impl App {
             self.finish_stroke();
             return;
         }
+        if button == 1 && down && self.prompt.is_none() && self.menu.is_some() {
+            let inside = self
+                .open_menu_rect()
+                .is_some_and(|[mx, my, mw, mh]| x >= mx && y >= my && x < mx + mw && y < my + mh);
+            let action = self
+                .layout()
+                .hits
+                .into_iter()
+                .rev()
+                .find(|h| h.contains(x, y))
+                .map(|h| h.action);
+            match action {
+                Some(a) if inside || matches!(a, view::Action::Menu(_)) => self.act(a),
+                _ => self.menu = None,
+            }
+            return;
+        }
         if button == 1 && down && self.prompt.is_none() && self.mode == Mode::Model {
             let hp = self
                 .layout()
@@ -2461,20 +2481,38 @@ impl App {
                 d.line(a[0], a[1], b[0], b[1], color);
             }
         };
-        for i in -40..=40 {
-            let a = i * span / 10;
-            line(
-                d,
-                project([a + center[0], center[1] - span * 4, 0]),
-                project([a + center[0], center[1] + span * 4, 0]),
-                c::GM_800,
-            );
-            line(
-                d,
-                project([center[0] - span * 4, a + center[1], 0]),
-                project([center[0] + span * 4, a + center[1], 0]),
-                c::GM_800,
-            );
+        // Grid on the ground plane, aligned to the origin; every fifth line gm-700.
+        let step = (span / 10).max(1);
+        let reach = span * 4;
+        for axis in 0..2 {
+            let from = (center[axis] - reach).div_euclid(step);
+            let to = (center[axis] + reach).div_euclid(step);
+            for k in from..=to {
+                if k == 0 {
+                    continue;
+                }
+                let mut a = [0; 3];
+                let mut b = [0; 3];
+                a[axis] = k * step;
+                b[axis] = k * step;
+                a[1 - axis] = center[1 - axis] - reach;
+                b[1 - axis] = center[1 - axis] + reach;
+                let major = k.rem_euclid(theme::metric::GRID_MAJOR) == 0;
+                line(
+                    d,
+                    project(a),
+                    project(b),
+                    if major { c::GM_700 } else { c::GM_800 },
+                );
+            }
+        }
+        // Full-length X and Y axis lines through the origin.
+        for (axis, color) in [(0, c::AXIS_X), (1, c::AXIS_Y)] {
+            let mut a = [0; 3];
+            let mut b = [0; 3];
+            a[axis] = center[axis] - reach;
+            b[axis] = center[axis] + reach;
+            line(d, project(a), project(b), color);
         }
         let mut edges = BTreeMap::<([i32; 3], [i32; 3]), (usize, bool, bool)>::new();
         for f in &m.faces {
@@ -2507,10 +2545,10 @@ impl App {
                 },
             );
         }
-        for (j, color) in [c::AXIS_X, c::AXIS_Y, c::AXIS_Z].into_iter().enumerate() {
-            let mut p = center;
-            p[j] += span / 3;
-            line(d, project(center), project(p), color);
+        let origin = project([0, 0, 0]);
+        if origin[0] > x + 4 && origin[1] > y + 4 && origin[0] < x + w - 4 && origin[1] < y + h - 4
+        {
+            chrome::ring(d, origin[0], origin[1], 3, c::GM_1000, c::AMBER_BRIGHT);
         }
     }
 }

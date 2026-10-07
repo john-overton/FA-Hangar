@@ -430,8 +430,18 @@ impl App {
             if f.sub & 4 != 0 && f.sub & 3 == 0 && f.texture.is_empty() {
                 continue;
             }
-            let texture = self.texture_for(&f.texture);
+            let flat = self.flat && self.mode == Mode::Model && !self.model_paint;
+            let texture = if flat {
+                None
+            } else {
+                self.texture_for(&f.texture)
+            };
             let colors = texture.map(|p| p.colors(&self.base_palette));
+            let light = if flat {
+                super::chrome::light(self, m, f)
+            } else {
+                256
+            };
             for j in 1..f.indices.len() - 1 {
                 let ids = [0, j, j + 1];
                 let tri = ids.map(|i| points[f.indices[i]]);
@@ -491,7 +501,12 @@ impl App {
                         {
                             continue;
                         }
-                        let mut color = rgb(self.base_palette[f.color as usize]);
+                        // Solid mode shows textured panels in neutral ink-muted.
+                        let mut color = if flat && !f.texture.is_empty() {
+                            c::INK_MUTED.0
+                        } else {
+                            rgb(self.base_palette[f.color as usize])
+                        };
                         if f.sub == 0xee && f.colors.len() == f.indices.len() {
                             let channels: [u8; 3] = core::array::from_fn(|channel| {
                                 ((0..3)
@@ -533,6 +548,9 @@ impl App {
                                 }
                                 uv = [u as i32, v as i32];
                             }
+                        }
+                        if light < 256 {
+                            color = super::chrome::shade(color, light);
                         }
                         depth[i] = z;
                         frame.pixels[i] = color;
