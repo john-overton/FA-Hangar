@@ -1011,3 +1011,156 @@ fn loop_proofs_survive_truncation_and_corruption() {
         }
     }
 }
+
+/// Points of a decoded face, through its proved writers.
+fn face_points(g: &Geometry, j: usize) -> Vec<[i32; 3]> {
+    g.faces[j]
+        .slots
+        .iter()
+        .map(|s| {
+            let b = g.writer(j, *s).unwrap();
+            g.buffers[b].points[*s - g.buffers[b].slot]
+        })
+        .collect()
+}
+
+#[test]
+fn split_face_fans_around_the_point_with_retail_normals() {
+    let (b, l) = fixture();
+    let before = Geometry::parse(&b).unwrap();
+    let fa = face(&l, "fa");
+    let original = before.faces[before.face_at(fa).unwrap()].clone();
+    let s = split_faces(&b, &[fa], [5, 5, 0]).unwrap();
+    assert_eq!((s.faces.len(), s.vertices.len()), (3, 1));
+    let g = Geometry::parse(&s.shape).unwrap();
+    assert!(g.inventory.contiguous() && g.inventory.opaque_bytes() == 0);
+    assert_eq!(g.inventory.bindings, before.inventory.bindings);
+    // The original record is a same-size jump stub now.
+    assert!(g.face_at(fa).is_none());
+    let (vb, vi) = g.vertex_at(s.vertices[0]).unwrap();
+    assert_eq!(g.buffers[vb].points[vi], [5, 5, 0]);
+    let corners = [[0, 0, 0], [20, 0, 0], [0, 20, 0]];
+    for (k, o) in s.faces.iter().enumerate() {
+        let j = g.face_at(*o).unwrap();
+        let f = &g.faces[j];
+        let p = face_points(&g, j);
+        assert_eq!(p, [corners[k], corners[(k + 1) % 3], [5, 5, 0]]);
+        assert_eq!((f.content, f.color), (original.content, original.color));
+        // Retail normal and centre of the triangle, facing as the original.
+        assert_eq!(f.normal, face_normal(&p));
+        assert_eq!(f.centre, Some(average(&p)));
+        let (n, m) = (f.normal.unwrap(), original.normal.unwrap());
+        assert!((0..3).map(|c| n[c] as i64 * m[c] as i64).sum::<i64>() > 0);
+    }
+    let (m0, m1) = (Model::parse(&b).unwrap(), Model::parse(&s.shape).unwrap());
+    assert_eq!(m1.faces.len(), m0.faces.len() + 2);
+    assert_eq!(m1.vertices.len(), m0.vertices.len() + 1);
+}
+
+#[test]
+fn split_textured_face_interpolates_uvs_and_keeps_its_texture() {
+    let (b, l) = fixture();
+    let ft = face(&l, "ft");
+    // Weights 2:1:1 over (0, 20, 0), (20, 20, 0), (20, 0, 20) with UVs
+    // (0, 0), (63, 0), (0, 63): the point (10, 15, 5), UV (15.75, 15.75).
+    let s = split_faces(&b, &[ft], [10, 15, 5]).unwrap();
+    assert_eq!(s.faces.len(), 3);
+    let g = Geometry::parse(&s.shape).unwrap();
+    let uv = [[0, 0], [63, 0], [0, 63]];
+    for (k, o) in s.faces.iter().enumerate() {
+        let f = &g.faces[g.face_at(*o).unwrap()];
+        assert_eq!(f.content & 4, 4);
+        assert_eq!(f.uv, [uv[k], uv[(k + 1) % 3], [16, 16]]);
+    }
+    let m = Model::parse(&s.shape).unwrap();
+    for o in &s.faces {
+        let f = m.faces.iter().find(|f| f.offset == *o).unwrap();
+        assert_eq!(f.texture, "BASE.PIC");
+    }
+    // Faces drawn later keep their own state.
+    let late = m
+        .faces
+        .iter()
+        .find(|f| f.offset == face(&l, "late"))
+        .unwrap();
+    assert_eq!(late.texture, "BASE.PIC");
+}
+
+#[test]
+fn split_edge_splits_both_faces_without_a_crack() {
+    let (b, l) = fixture();
+    let (fa, fb) = (face(&l, "fa"), face(&l, "fb"));
+    // (10, 10, 0) is the midpoint of the edge (20, 0, 0)-(0, 20, 0) they share.
+    let s = split_faces(&b, &[fa, fb], [10, 10, 0]).unwrap();
+    assert_eq!((s.faces.len(), s.vertices.len()), (4, 2));
+    let g = Geometry::parse(&s.shape).unwrap();
+    assert!(g.face_at(fa).is_none() && g.face_at(fb).is_none());
+    let mut edges = Vec::new();
+    for o in &s.faces {
+        let j = g.face_at(*o).unwrap();
+        let p = face_points(&g, j);
+        assert!(face_normal(&p).is_some(), "no degenerate triangle");
+        assert_eq!(p[2], [10, 10, 0]);
+        edges.push((p[0], p[1]));
+    }
+    // Every outer edge of the two faces, none of the shared one.
+    assert!(!edges
+        .iter()
+        .any(|e| *e == ([20, 0, 0], [0, 20, 0]) || *e == ([0, 20, 0], [20, 0, 0])));
+    assert_eq!(edges.len(), 4);
+    for v in &s.vertices {
+        let (vb, vi) = g.vertex_at(*v).unwrap();
+        assert_eq!(g.buffers[vb].points[vi], [10, 10, 0]);
+    }
+    assert_eq!(
+        Model::parse(&s.shape).unwrap().faces.len(),
+        Model::parse(&b).unwrap().faces.len() + 2
+    );
+}
+
+#[test]
+fn split_refusals_are_explicit() {
+    let (b, l) = fixture();
+    let fa = face(&l, "fa");
+    let e = split_faces(&b, &[fa], [0, 0, 0]).unwrap_err();
+    assert!(e.contains("corner"), "{e}");
+    let e = split_faces(&b, &[fa], [30, 30, 0]).unwrap_err();
+    assert!(e.contains("not on the face"), "{e}");
+    let e = split_faces(&b, &[fa], [5, 5, 9]).unwrap_err();
+    assert!(e.contains("not on the face"), "{e}");
+    let gear = Geometry::parse(&b)
+        .unwrap()
+        .faces
+        .iter()
+        .find(|f| f.color == 40)
+        .unwrap()
+        .offset;
+    let e = split_faces(&b, &[fa, gear], [5, 5, 0]).unwrap_err();
+    assert!(e.contains("one part"), "{e}");
+    let e = split_faces(&b, &[], [5, 5, 0]).unwrap_err();
+    assert!(e.contains("one to eight"), "{e}");
+    let e = split_faces(&b, &[fa, fa], [5, 5, 0]).unwrap_err();
+    assert!(e.contains("twice"), "{e}");
+    let e = split_faces(&b, &[fa + 1], [5, 5, 0]).unwrap_err();
+    assert!(e.contains("No FC face"), "{e}");
+    // face_refusal: a pointer into the middle of fb.
+    let (p, pl) = build(Opt {
+        inner_pointer: true,
+        ..Opt::default()
+    });
+    let e = split_faces(&p, &[face(&pl, "fb")], [15, 15, 0]).unwrap_err();
+    assert!(e.starts_with("Face at"), "{e}");
+    // Per-vertex shading: new corners would have no F6 records.
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x40, 0]);
+    a.b(&[0xf2, 0]).rel16("end", 2);
+    a.label("body").verts(0, &BODY);
+    a.label("fs")
+        .face(0xa3, 32, lit(&pts(&[0, 1, 2])), &[0, 1, 2], &[]);
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    let at = CS + a.at("fs");
+    let shaded = a.finish();
+    let e = split_faces(&shaded, &[at], [5, 5, 0]).unwrap_err();
+    assert!(e.contains("per vertex"), "{e}");
+}

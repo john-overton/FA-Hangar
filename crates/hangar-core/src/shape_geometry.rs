@@ -1835,6 +1835,184 @@ pub fn add_vertices(
         },
     )
 }
+/// Result of `split_faces`; offsets refer to the new shape.
+#[derive(Clone, Debug)]
+pub struct Split {
+    pub shape: Vec<u8>,
+    /// File offsets of the new triangles, face by face.
+    pub faces: Vec<usize>,
+    /// Coordinate file offsets of the new vertex, one copy per split face.
+    pub vertices: Vec<usize>,
+}
+/// The fan replacing face `i` around a new vertex at `point` (local to the
+/// face's frame): one triangle per edge the point is not on.
+fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
+    let f = &g.faces[i];
+    let at = f.offset;
+    if let Some(e) = g.face_refusal(i) {
+        return Err(format!("Face at {at:X}: {e}"));
+    }
+    if f.content & 0x80 != 0 {
+        return Err(format!(
+            "Face at {at:X} is shaded per vertex; new corners carry no F6 records"
+        ));
+    }
+    if f.color > 255 {
+        return Err(format!(
+            "Face at {at:X} has a colour word that is not a palette index"
+        ));
+    }
+    let mut offsets = Vec::new();
+    let mut points = Vec::new();
+    for s in &f.slots {
+        let b = g
+            .writer(i, *s)
+            .map_err(|e| format!("Face at {at:X}: slot {s} is not provably current: {e}"))?;
+        let k = *s - g.buffers[b].slot;
+        offsets.push(g.buffers[b].vertex(k));
+        points.push(g.buffers[b].points[k]);
+    }
+    let n = points.len();
+    if let Some(k) = points.iter().position(|p| *p == point) {
+        return Err(format!(
+            "The point is corner {k} of the face at {at:X}; select that vertex instead"
+        ));
+    }
+    let off_plane = crate::surface::plane_distance(&points, point)
+        .ok_or_else(|| format!("Face at {at:X} is degenerate: its corners are collinear"))?;
+    let located = crate::surface::locate3(&points, point)
+        .and_then(|l| l.mix(&points).map(|p| (l, p)))
+        .filter(|(_, p)| (0..3).all(|k| (p[k] - point[k]).abs() <= 1));
+    let Some((located, _)) = located.filter(|_| off_plane <= 1) else {
+        return Err(format!("The point is not on the face at {at:X}"));
+    };
+    let textured = f.content & 4 != 0;
+    if textured && f.uv.len() != n {
+        return Err(format!("Face at {at:X} has no UV for every corner"));
+    }
+    let uv = if textured {
+        Some(
+            located
+                .mix(&f.uv)
+                .ok_or("UV interpolation")?
+                .map(|v| v.clamp(0, 65535)),
+        )
+    } else {
+        None
+    };
+    let skip = crate::surface::on_edge(&points, point);
+    let mut fan = Vec::new();
+    for k in 0..n {
+        let j = (k + 1) % n;
+        let (a, b) = (points[k], points[j]);
+        let d: [i64; 3] = core::array::from_fn(|c| b[c] as i64 - a[c] as i64);
+        let w: [i64; 3] = core::array::from_fn(|c| point[c] as i64 - a[c] as i64);
+        let cross = [
+            d[1] * w[2] - d[2] * w[1],
+            d[2] * w[0] - d[0] * w[2],
+            d[0] * w[1] - d[1] * w[0],
+        ];
+        if skip == Some(k) || cross == [0; 3] {
+            continue;
+        }
+        fan.push(NewFace {
+            corners: alloc::vec![
+                Corner::Vertex(offsets[k]),
+                Corner::Vertex(offsets[j]),
+                Corner::New(0)
+            ],
+            style: FaceStyle {
+                content: f.content,
+                color: f.color as u8,
+                texture: None,
+                uv: match uv {
+                    Some(p) => alloc::vec![f.uv[k], f.uv[j], p],
+                    None => Vec::new(),
+                },
+            },
+        });
+    }
+    if fan.len() < 2 {
+        return Err(format!("The point does not split the face at {at:X}"));
+    }
+    Ok(fan)
+}
+/// Split faces at one point (local to their frame, on each face): every
+/// face (file offset) is replaced by a fan of triangles from its edges to a
+/// new vertex at `point`, skipping the edge the point lies on, so a point
+/// on an edge shared by two faces splits both without a crack. Triangles
+/// keep the face's content, colour and material (the continuation draws
+/// where the face was); the point's UVs come from integer barycentrics over
+/// the face's fan; lit triangles store their own normal and centre, as
+/// retail faces do. Each face is detoured to its own continuation and its
+/// record becomes a same-size jump stub (`Base::Remove`), face after face,
+/// in one result. Refused: faces of different frames, per-vertex shading,
+/// a point off a face or at a corner, and every `face_refusal`.
+pub fn split_faces(source: &[u8], faces: &[usize], point: [i32; 3]) -> Result<Split> {
+    if faces.is_empty() || faces.len() > 8 {
+        return Err(invalid("Split one to eight faces at a time"));
+    }
+    if !in_word(&point) {
+        return Err(invalid("Vertex exceeds signed 16-bit source coordinates"));
+    }
+    let g0 = Geometry::parse(source)?;
+    let cs0 = g0.inventory.code_start;
+    let picked = pick_faces(&g0, faces)?;
+    if picked.len() != faces.len() {
+        return Err(invalid("A face is named twice"));
+    }
+    let frame = g0.faces[picked[0]].frame;
+    if picked.iter().any(|i| g0.faces[*i].frame != frame) {
+        return Err(invalid("Split faces of one part at a time"));
+    }
+    let mut new_faces = 0;
+    for i in &picked {
+        new_faces += split_fan(&g0, *i, point)?.len();
+    }
+    // CODE offsets stay put: continuations go before the import tail.
+    let code: Vec<usize> = faces.iter().map(|f| f - cs0).collect();
+    let mut shape = source.to_vec();
+    let (mut tris, mut verts) = (Vec::new(), Vec::new());
+    for at in &code {
+        let g = Geometry::parse(&shape)?;
+        let cs = g.inventory.code_start;
+        let i = g.face_at(cs + at).ok_or("A face to split moved")?;
+        let fan = split_fan(&g, i, point)?;
+        let added = append_geometry(
+            &shape,
+            &Addition {
+                host: Some(cs + at),
+                points: alloc::vec![point],
+                faces: fan,
+                host_copy: Base::Remove,
+                flip: Vec::new(),
+                delete: Vec::new(),
+            },
+        )?;
+        let cs2 = Geometry::parse(&added.shape)?.inventory.code_start;
+        tris.extend(added.faces.iter().map(|o| o - cs2));
+        verts.extend(added.vertices.iter().map(|o| o - cs2));
+        shape = added.shape;
+    }
+    // Verify the whole edit against the source.
+    let after = verify_structure(&g0, source, &shape)?;
+    let cs = after.inventory.code_start;
+    if after.faces.len() + picked.len() != g0.faces.len() + new_faces
+        || code.iter().any(|at| after.face_at(cs + at).is_some())
+    {
+        return Err(invalid("The split did not replace exactly the faces"));
+    }
+    let mut changed = BTreeSet::new();
+    for at in &code {
+        changed.insert(*at);
+    }
+    others_unchanged(&g0, &after, &changed)?;
+    Ok(Split {
+        shape,
+        faces: tris.iter().map(|o| o + cs).collect(),
+        vertices: verts.iter().map(|o| o + cs).collect(),
+    })
+}
 /// Resolved corners of each selected face, and their common frame.
 type Selection = (Vec<Vec<(usize, usize)>>, Frame);
 fn selection(g: &Geometry, picked: &[usize]) -> Result<Selection> {
