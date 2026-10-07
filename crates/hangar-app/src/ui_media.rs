@@ -1,12 +1,14 @@
 use super::view::{border, label_fit, Action, Icon, Layout};
 use super::*;
 use hangar_core::originals;
-struct Frame {
+pub(super) struct Frame {
     w: usize,
     h: usize,
     pixels: Vec<u32>,
-    faces: Vec<usize>,
+    pub faces: Vec<usize>,
     uv: Vec<[i32; 2]>,
+    /// Camera depth per pixel (larger is nearer), `i64::MIN` where empty.
+    pub depth: Vec<i64>,
 }
 fn rgb(p: [u8; 3]) -> u32 {
     (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32
@@ -494,6 +496,7 @@ impl App {
             pixels: vec![c::GM_950.0; w * h],
             faces: vec![usize::MAX; w * h],
             uv: vec![[0, 0]; w * h],
+            depth: Vec::new(),
         };
         let Some(m) = self.model_for_paint() else {
             return frame;
@@ -651,6 +654,7 @@ impl App {
                 }
             }
         }
+        frame.depth = depth;
         // Selected faces: amber edges and an amber-deep fill. Outside Edit
         // Mesh and Parts the selected panels fill only while no paint tool is
         // on, so strokes stay visible.
@@ -714,6 +718,18 @@ impl App {
             }
         }
         frame
+    }
+    /// `raster_point` framed as `render_model` frames the shown model.
+    pub(super) fn shown_raster_point(&self, w: usize, h: usize, p: [i32; 3]) -> [i32; 3] {
+        let (center, span) = self
+            .model_bounds()
+            .or_else(|| self.model_for_paint().map(super::hardpoint_ui::bounds))
+            .unwrap_or(([0; 3], 1));
+        self.raster_point(p, [w, h], center, span)
+    }
+    /// The shaded raster with its face and depth buffers (occlusion tests).
+    pub(super) fn raster(&self, w: usize, h: usize) -> Frame {
+        self.render_model(w, h)
     }
     pub(super) fn draw_model(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
         let rw = (w as usize).min(512);

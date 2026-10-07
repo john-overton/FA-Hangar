@@ -409,6 +409,8 @@ pub struct App {
     ed: Box<edit_ui::EditState>,
     mesh_vertices: Vec<usize>,
     mesh_drag: Option<Box<mesh_ui::MeshDrag>>,
+    /// Transform gizmo, magnetic snap and X-ray, boxed to keep `App` small.
+    gizmo: Box<gizmo_ui::GizmoState>,
     hp_visible: bool,
     hp_drag: Option<hardpoint_ui::Drag>,
     media_tab: u8,
@@ -573,6 +575,7 @@ impl App {
             ed: Box::default(),
             mesh_vertices: Vec::new(),
             mesh_drag: None,
+            gizmo: Box::default(),
             hp_visible: false,
             hp_drag: None,
             media_tab: 0,
@@ -1673,11 +1676,24 @@ impl App {
             }
             return;
         }
+        if self.gizmo.drag.is_some() {
+            match key {
+                Key::Escape => self.cancel_gizmo(),
+                Key::Char('z') | Key::Char('Z') if ctrl => self.cancel_gizmo(),
+                // A typed value continues as the numeric G/R/S prompt.
+                Key::Char(ch) if !ctrl && (ch.is_ascii_digit() || ch == '-') => {
+                    self.gizmo_typed(ch)
+                }
+                _ => {}
+            }
+            return;
+        }
         if self.mesh_drag.is_some()
             && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
         {
             self.mesh_drag = None;
             self.preview = None;
+            self.gizmo.snap = None;
             self.status = "Vertex drag cancelled".into();
             return;
         }
@@ -2293,6 +2309,11 @@ impl App {
                 self.finish_box();
                 return;
             }
+            if self.gizmo.drag.is_some() {
+                let result = self.finish_gizmo();
+                self.result(result);
+                return;
+            }
             if self.mesh_drag.is_some() {
                 let result = self.finish_mesh_drag();
                 self.result(result);
@@ -2370,12 +2391,47 @@ impl App {
                 .rev()
                 .find(|h| h.contains(x, y))
                 .map(|h| h.action);
+            // Over the viewport (not chrome): gizmo handles first, except
+            // that a vertex under the free-move or scale centre wins, and
+            // Shift+click always selects.
+            let viewport = matches!(
+                hit,
+                None | Some(view::Action::MeshVertex(_)) | Some(view::Action::Gizmo(_))
+            ) && self.in_viewport(x, y)
+                && !self.ed.box_armed;
+            if viewport {
+                let vertex = (!self.ed.face_select)
+                    .then(|| self.pick_handle(x, y))
+                    .flatten();
+                match self.gizmo_pick(x, y) {
+                    Some(h @ (gizmo_ui::Handle::Free | gizmo_ui::Handle::Uniform))
+                        if !shift && vertex.is_none() =>
+                    {
+                        self.gizmo_press(h);
+                        return;
+                    }
+                    Some(h)
+                        if !shift
+                            && !matches!(h, gizmo_ui::Handle::Free | gizmo_ui::Handle::Uniform) =>
+                    {
+                        self.gizmo_press(h);
+                        return;
+                    }
+                    _ => {}
+                }
+                if let Some(i) = vertex {
+                    self.mesh_press(i, shift);
+                    return;
+                }
+            }
             match hit {
                 Some(view::Action::MeshVertex(i)) if !self.ed.box_armed => {
                     self.mesh_press(i, shift);
                     return;
                 }
-                None | Some(view::Action::MeshVertex(_)) if self.in_viewport(x, y) => {
+                None | Some(view::Action::MeshVertex(_)) | Some(view::Action::Gizmo(_))
+                    if self.in_viewport(x, y) =>
+                {
                     self.edit_press(x, y, shift);
                     return;
                 }
@@ -2485,8 +2541,28 @@ impl App {
             // RMB closes menus and cancels drags and prompts (transforms);
             // on an outliner entry or LIB root it opens the context menu.
             let inside = self.menu.is_some() && self.in_open_menu(x, y);
+            let was_open = self.menu.is_some();
             self.menu = None;
-            if self.drag_live() {
+            if self.gizmo.drag.is_some() {
+                self.cancel_gizmo();
+            } else if self.mesh_drag.is_some() {
+                self.key(Key::Escape, false, false);
+            } else if self.prompt.is_none()
+                && !was_open
+                && self.mesh_edit
+                && self.mode == Mode::Model
+                && self.in_viewport(x, y)
+                && !self.layout().hits.iter().any(|h| {
+                    h.contains(x, y)
+                        && !matches!(
+                            h.action,
+                            view::Action::MeshVertex(_) | view::Action::Gizmo(_)
+                        )
+                })
+            {
+                // Idle right-click on the Edit Mesh viewport: the gizmo menu.
+                self.open_gizmo_menu(x, y);
+            } else if self.drag_live() {
                 self.resource_drag = None;
                 self.status = "Drag cancelled; nothing changed".into();
             } else if self.prompt.is_some() {
@@ -2548,8 +2624,13 @@ impl App {
             self.mouse = [x, y];
             return;
         }
+        if self.gizmo.drag.is_some() {
+            self.gizmo_motion(x, y, shift);
+            self.mouse = [x, y];
+            return;
+        }
         if self.mesh_drag.is_some() {
-            let result = self.mesh_motion(x, y);
+            let result = self.mesh_motion(x, y, shift);
             self.result(result);
             self.mouse = [x, y];
             return;
@@ -2572,6 +2653,17 @@ impl App {
         }
         if self.menu == Some(chrome::MENU_CONTEXT) {
             self.context_hover(x, y);
+        }
+        // Hovering a dimmed gizmo says why it is disabled.
+        if self.mesh_edit
+            && self.menu.is_none()
+            && self.prompt.is_none()
+            && !self.drag
+            && self.gizmo_pick(x, y).is_some()
+        {
+            if let Some(why) = self.gizmo_refusal() {
+                self.status = format!("Gizmo unavailable: {why}");
+            }
         }
         if let Some(d) = &mut self.resource_drag {
             d.live |=
@@ -2977,3 +3069,6 @@ mod markings_ui;
 
 #[path = "ui_palette.rs"]
 mod palette_ui;
+
+#[path = "ui_gizmo.rs"]
+mod gizmo_ui;

@@ -417,6 +417,9 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                     if alt {
                         if sym == b'n' as c_ulong || sym == b'N' as c_ulong {
                             app.alt_key('n');
+                        } else if sym == b'z' as c_ulong || sym == b'Z' as c_ulong {
+                            // Alt+Z: X-ray.
+                            app.alt_key('z');
                         }
                     } else if let Some(k) = key {
                         app.key(k, ctrl, shift);

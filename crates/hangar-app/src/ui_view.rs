@@ -47,6 +47,14 @@ pub(super) enum Action {
     MeshOp(u8),
     /// R/S pivot: median (false) or individual origins (true).
     Pivot(bool),
+    /// Edit Mesh transform gizmo handle (drag in `App::pointer`).
+    Gizmo(gizmo_ui::Handle),
+    /// Gizmo mode `gizmo_ui::G_*`: none, move, rotate, scale.
+    GizmoMode(u8),
+    /// Snap to vertices (magnet) toggle.
+    Magnet,
+    /// X-ray: pick and box vertices behind faces (Alt+Z).
+    Xray,
     /// Parts list row (index into `App::parts`, then static parts).
     PartPick(usize),
     /// Pose preset `animation_ui::PRESETS` index.
@@ -451,6 +459,8 @@ impl App {
                 self.ed.mesh_box = None;
                 self.ed.box_armed = false;
                 self.mesh_drag = None;
+                self.gizmo.drag = None;
+                self.gizmo.snap = None;
                 self.model_paint = false;
                 self.paint_enabled = false;
                 self.decal_draft = None;
@@ -779,6 +789,10 @@ impl App {
             Action::SelectMode(face) => self.select_mode(face),
             Action::MeshOp(op) => self.mesh_op(op),
             Action::Pivot(individual) => self.ed.pivot_individual = individual,
+            Action::Gizmo(h) => self.gizmo_press(h),
+            Action::GizmoMode(mode) => self.gizmo_mode(mode),
+            Action::Magnet => self.toggle_magnet(),
+            Action::Xray => self.toggle_xray(),
             Action::PartPick(i) => self.pick_part(i),
             Action::PosePreset(n) => self.pose_preset(n),
             Action::PoseReset => self.pose_reset(),
@@ -1106,6 +1120,9 @@ impl App {
             self.mode = Mode::Model;
             self.menu = Some(n.parse().map_err(|_| "Menu number")?);
             return Ok(());
+        }
+        if name.starts_with("gizmo") || name.starts_with("handles") {
+            return self.snapshot_gizmo(name);
         }
         if name == "assign-texture" {
             return self.snapshot_assign();
@@ -3032,6 +3049,7 @@ impl App {
         self.smoke_originals();
         self.smoke_object_tools();
         self.smoke_edit_mode();
+        self.smoke_gizmo();
         self.smoke_parts_panel();
         self.smoke_face_textures();
         self.smoke_markings();
@@ -3114,7 +3132,7 @@ impl App {
 fn free_hit(a: Action) -> bool {
     matches!(
         a,
-        Action::HardpointSelect(_) | Action::MeshVertex(_) | Action::MenuPad
+        Action::HardpointSelect(_) | Action::MeshVertex(_) | Action::Gizmo(_) | Action::MenuPad
     )
 }
 impl App {

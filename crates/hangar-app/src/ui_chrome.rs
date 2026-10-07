@@ -296,6 +296,7 @@ impl App {
                     .collect()
             }
             MENU_SHADING => self.shading_items(),
+            gizmo_ui::MENU_GIZMO => self.gizmo_menu_items(),
             MENU_SELECT => vec![
                 Item::new("Vertex select", Action::SelectMode(false))
                     .icon(Icon::Vertex)
@@ -413,6 +414,20 @@ impl App {
                 .icon(Icon::Hardpoint)
                 .on(self.hp_visible),
         );
+        if self.mesh_edit {
+            items.push(Item::sep());
+            items.push(
+                Item::new("Snap to vertices", Action::Magnet)
+                    .icon(Icon::Magnet)
+                    .on(self.gizmo.magnet),
+            );
+            items.push(
+                Item::new("X-ray", Action::Xray)
+                    .icon(Icon::Xray)
+                    .key("Alt+Z")
+                    .on(self.gizmo.xray),
+            );
+        }
         items
     }
     /// The open dropdown's drawn rect.
@@ -454,6 +469,7 @@ impl App {
                 (rect[0], rect[1] + rect[3] + 1)
             }
             MENU_CONTEXT => (self.context.at[0], self.context.at[1]),
+            gizmo_ui::MENU_GIZMO => (self.gizmo.menu_at[0], self.gizmo.menu_at[1]),
             _ => {
                 let header = self.viewport_header_slots();
                 let rect = match menu {
@@ -601,6 +617,8 @@ impl App {
             Mode::Model if self.mesh_edit => &[
                 ("G", "Move"),
                 ("S", "Scale"),
+                ("RMB", "Gizmo menu"),
+                ("Alt+Z", "X-ray"),
                 ("1", "Vertex"),
                 ("3", "Face"),
                 ("B", "Box"),
@@ -723,6 +741,11 @@ pub(super) struct HeaderSlots {
     pub modes: Option<[i32; 4]>,
     pub visibility: [i32; 4],
     pub shading: [i32; 4],
+    /// Edit Mesh: snap to vertices and X-ray toggles, and the gizmo modes
+    /// when they fit.
+    pub magnet: Option<[i32; 4]>,
+    pub xray: Option<[i32; 4]>,
+    pub gizmo: Option<[i32; 4]>,
     /// Set when the right group does not fit: one button opens it as a menu.
     pub overflow: Option<[i32; 4]>,
 }
@@ -768,6 +791,18 @@ impl App {
             m::ICON_BUTTON,
             h,
         ];
+        let (mut magnet, mut xray) = (None, None);
+        let mut right_group = visibility[0];
+        if self.mesh_edit {
+            let x = [
+                visibility[0] - space::SPACE_2 - m::ICON_BUTTON,
+                y,
+                m::ICON_BUTTON,
+                h,
+            ];
+            let g = [x[0] - 2 - m::ICON_BUTTON, y, m::ICON_BUTTON, h];
+            (magnet, xray, right_group) = (Some(g), Some(x), g[0]);
+        }
         let mut end = view[0] + view[2];
         let (mut select, mut mesh) = (None, None);
         if self.mesh_edit {
@@ -777,13 +812,13 @@ impl App {
             mesh = Some([end + 2 * space::SPACE_1 + sw, y, mw, h]);
             end += 2 * space::SPACE_1 + sw + mw;
         }
-        let overflow = (visibility[0] < end + space::SPACE_2).then_some([
+        let overflow = (right_group < end + space::SPACE_2).then_some([
             r - space::SPACE_1 - m::ICON_BUTTON,
             y,
             m::ICON_BUTTON,
             h,
         ]);
-        let limit = overflow.map_or(visibility[0], |o| o[0]) - space::SPACE_2;
+        let limit = overflow.map_or(right_group, |o| o[0]) - space::SPACE_2;
         let seg_modes = 2 * m::ICON_BUTTON + 2;
         let modes = (self.mesh_edit && end + space::SPACE_2 + seg_modes <= limit).then_some([
             end + space::SPACE_2,
@@ -791,6 +826,14 @@ impl App {
             seg_modes,
             h,
         ]);
+        let seg_gizmo = 4 * m::ICON_BUTTON + 3;
+        let gizmo = modes.and_then(|r| {
+            let x = r[0] + r[2] + space::SPACE_2;
+            (x + seg_gizmo <= limit).then_some([x, y, seg_gizmo, h])
+        });
+        if overflow.is_some() {
+            (magnet, xray) = (None, None);
+        }
         HeaderSlots {
             mode,
             view,
@@ -799,6 +842,9 @@ impl App {
             modes,
             visibility,
             shading,
+            magnet,
+            xray,
+            gizmo,
             overflow,
         }
     }
@@ -852,6 +898,30 @@ impl App {
                 ],
             );
         }
+        if let Some(rect) = s.gizmo {
+            let mode = self.gizmo.mode;
+            o.segmented(
+                rect,
+                &[
+                    (
+                        Btn::icon(Icon::Select).on(mode == gizmo_ui::G_NONE),
+                        Action::GizmoMode(gizmo_ui::G_NONE),
+                    ),
+                    (
+                        Btn::icon(Icon::Move).on(mode == gizmo_ui::G_MOVE),
+                        Action::GizmoMode(gizmo_ui::G_MOVE),
+                    ),
+                    (
+                        Btn::icon(Icon::Rotate).on(mode == gizmo_ui::G_ROTATE),
+                        Action::GizmoMode(gizmo_ui::G_ROTATE),
+                    ),
+                    (
+                        Btn::icon(Icon::Scale).on(mode == gizmo_ui::G_SCALE),
+                        Action::GizmoMode(gizmo_ui::G_SCALE),
+                    ),
+                ],
+            );
+        }
         if let Some(rect) = s.overflow {
             o.button_ex(
                 rect,
@@ -861,6 +931,14 @@ impl App {
                 Action::Menu(MENU_SHADING),
             );
             return;
+        }
+        if let (Some(g), Some(x)) = (s.magnet, s.xray) {
+            o.button_ex(
+                g,
+                Btn::icon(Icon::Magnet).on(self.gizmo.magnet),
+                Action::Magnet,
+            );
+            o.button_ex(x, Btn::icon(Icon::Xray).on(self.gizmo.xray), Action::Xray);
         }
         o.button_ex(
             s.visibility,
@@ -880,11 +958,33 @@ impl App {
         let x = self.left() + 1 + space::SPACE_2;
         let y = m::MENUBAR_H + m::EDITOR_HEADER_H + space::SPACE_2;
         let b = m::TOOLSTRIP_BUTTON;
+        // In Edit Mesh the transform tools pick the gizmo, as in Blender.
+        let edit = self.mesh_edit && self.mesh_blocked().is_none();
+        let tool = |g: u8, key: char| {
+            if self.mesh_edit {
+                (Action::GizmoMode(g), edit, self.gizmo.mode == g)
+            } else {
+                (Action::Transform(key), writable, false)
+            }
+        };
+        let (select, select_on) = if self.mesh_edit {
+            (
+                Action::GizmoMode(gizmo_ui::G_NONE),
+                self.gizmo.mode == gizmo_ui::G_NONE,
+            )
+        } else {
+            (Action::SelectTool, !self.model_paint)
+        };
+        let [mv, rt, sc] = [
+            tool(gizmo_ui::G_MOVE, 'g'),
+            tool(gizmo_ui::G_ROTATE, 'r'),
+            tool(gizmo_ui::G_SCALE, 's'),
+        ];
         let tools: [Option<(Icon, Action, bool, bool)>; 7] = [
-            Some((Icon::Select, Action::SelectTool, true, !self.model_paint)),
-            Some((Icon::Move, Action::Transform('g'), writable, false)),
-            Some((Icon::Rotate, Action::Transform('r'), writable, false)),
-            Some((Icon::Scale, Action::Transform('s'), writable, false)),
+            Some((Icon::Select, select, true, select_on)),
+            Some((Icon::Move, mv.0, mv.1, mv.2)),
+            Some((Icon::Rotate, rt.0, rt.1, rt.2)),
+            Some((Icon::Scale, sc.0, sc.1, sc.2)),
             None,
             Some((Icon::Frame, Action::View(0), true, false)),
             Some((
@@ -1208,6 +1308,9 @@ fn chrome_action(a: Action) -> bool {
             | Action::HardpointVisibility
             | Action::SelectTool
             | Action::Transform(_)
+            | Action::GizmoMode(_)
+            | Action::Magnet
+            | Action::Xray
             | Action::ModelPaint
             | Action::View(_)
     )

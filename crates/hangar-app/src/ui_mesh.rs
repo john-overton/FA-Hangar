@@ -1,7 +1,7 @@
 //! Edit Mesh vertex drags and transactional panel texture creation.
 use super::view::Action;
 use super::*;
-use hangar_core::{shape_edit, shape_texture as tex};
+use hangar_core::{gizmo as gm, shape_edit, shape_texture as tex};
 pub(super) struct PanelPlan {
     pub entry: usize,
     pub original: Entry,
@@ -25,6 +25,10 @@ pub(super) struct MeshDrag {
     pub pressed: usize,
     pub moving: bool,
     pub axis: Option<usize>,
+    /// Last pointer and the effective pointer offset from `start` in
+    /// tenths of a pixel (Shift adds a tenth of each motion).
+    pub last: [i32; 2],
+    pub eff: [i32; 2],
 }
 /// Pixels the pointer must travel before a vertex press becomes a drag.
 const DRAG_THRESHOLD: i32 = 4;
@@ -224,18 +228,61 @@ impl App {
             pressed: i,
             moving: false,
             axis: None,
+            last: self.mouse,
+            eff: [0; 2],
         }));
     }
-    pub(super) fn mesh_motion(&mut self, x: i32, y: i32) -> Result<()> {
-        let d = self.mesh_drag.as_ref().ok_or("No mesh drag")?;
+    pub(super) fn mesh_motion(&mut self, x: i32, y: i32, shift: bool) -> Result<()> {
+        let d = self.mesh_drag.as_mut().ok_or("No mesh drag")?;
+        let scale = if shift { 1 } else { 10 };
+        d.eff = [
+            d.eff[0] + (x - d.last[0]) * scale,
+            d.eff[1] + (y - d.last[1]) * scale,
+        ];
+        d.last = [x, y];
         if !d.moving && (x - d.start[0]).abs().max((y - d.start[1]).abs()) < DRAG_THRESHOLD {
             return Ok(());
         }
         if self.perspective && !self.textured {
             return Err("Switch to an orthographic view (5) to drag vertices".into());
         }
+        let d = self.mesh_drag.take().ok_or("No mesh drag")?;
+        let result = self.mesh_drag_delta(&d, [x, y]);
+        self.mesh_drag = Some(d);
+        let (delta, note) = result?;
+        let preview = self.mesh_drag.as_ref().unwrap().model.transform_selection(
+            Transform::Translate(delta),
+            Some(&self.mesh_vertices),
+            [0; 3],
+        )?;
+        let d = self.mesh_drag.as_mut().unwrap();
+        d.moving = true;
+        d.delta = delta;
+        self.status = format!(
+            "Dragging {}. {}. Esc cancels.{}",
+            view::count(self.mesh_vertices.len(), "vertex", "vertices"),
+            match d.axis {
+                Some(a) => format!("{} axis locked", ['X', 'Y', 'Z'][a]),
+                None => "X Y Z locks an axis".into(),
+            },
+            note.map(|n| format!(" {n}.")).unwrap_or_default()
+        );
+        self.preview = Some(Box::new(preview));
+        Ok(())
+    }
+    /// The drag's model-space offset: the effective pointer in the view
+    /// plane, the axis lock, Ctrl steps of 10 and the magnetic snap.
+    fn mesh_drag_delta(
+        &mut self,
+        d: &MeshDrag,
+        cursor: [i32; 2],
+    ) -> Result<([i32; 3], Option<String>)> {
+        let at = [
+            d.start[0] + gm::div_round(d.eff[0] as i64, 10) as i32,
+            d.start[1] + gm::div_round(d.eff[1] as i64, 10) as i32,
+        ];
         let point = self
-            .cursor_station(x, y, d.reference)
+            .cursor_station(at[0], at[1], d.reference)
             .map_err(|_| "Vertex outside signed source-coordinate range")?;
         let mut delta: [i32; 3] = core::array::from_fn(|k| point[k] - d.grab[k]);
         if let Some(axis) = d.axis {
@@ -245,24 +292,18 @@ impl App {
                 }
             }
         }
-        let preview = d.model.transform_selection(
-            Transform::Translate(delta),
-            Some(&self.mesh_vertices),
-            [0; 3],
-        )?;
-        let d = self.mesh_drag.as_mut().unwrap();
-        d.moving = true;
-        d.delta = delta;
-        self.status = format!(
-            "Dragging {} vertices. {}. Esc cancels.",
-            self.mesh_vertices.len(),
-            match d.axis {
-                Some(a) => format!("{} axis locked", ['X', 'Y', 'Z'][a]),
-                None => "X Y Z locks an axis".into(),
-            }
-        );
-        self.preview = Some(Box::new(preview));
-        Ok(())
+        if self.ctrl {
+            delta = delta.map(|v| gm::step(v, 10));
+        }
+        if !self.gizmo.magnet || self.replace.alt {
+            self.gizmo.snap = None;
+            return Ok((delta, None));
+        }
+        let constraint = match d.axis {
+            Some(a) => gm::Constraint::Axis(a),
+            None => gm::Constraint::View(self.camera_inverse([0, 0, 1024])),
+        };
+        Ok(self.snap_delta(&d.model, delta, constraint, cursor))
     }
     /// X/Y/Z during a vertex drag toggles the axis lock, as in the transform prompt.
     pub(super) fn mesh_drag_axis(&mut self, axis: usize) {
@@ -274,7 +315,7 @@ impl App {
             };
             if d.moving {
                 let [x, y] = self.mouse;
-                let result = self.mesh_motion(x, y);
+                let result = self.mesh_motion(x, y, false);
                 self.result(result);
             }
         }
@@ -282,6 +323,7 @@ impl App {
     pub(super) fn finish_mesh_drag(&mut self) -> Result<()> {
         if let Some(d) = self.mesh_drag.take() {
             self.preview = None;
+            self.gizmo.snap = None;
             if !d.moving {
                 self.mesh_vertices = vec![d.pressed];
                 return Ok(());

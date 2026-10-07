@@ -268,14 +268,16 @@ impl App {
         }
         true
     }
-    /// Alt+letter from the backends: Alt+N flips normals in Edit Mesh.
+    /// Alt+letter from the backends: Alt+N flips normals in Edit Mesh,
+    /// Alt+Z toggles X-ray.
     pub fn alt_key(&mut self, ch: char) {
-        if self.mesh_edit
-            && self.mode == Mode::Model
-            && self.prompt.is_none()
-            && ch.eq_ignore_ascii_case(&'n')
-        {
+        if self.mode != Mode::Model || self.prompt.is_some() {
+            return;
+        }
+        if self.mesh_edit && ch.eq_ignore_ascii_case(&'n') {
             self.mesh_op(OP_FLIP);
+        } else if ch.eq_ignore_ascii_case(&'z') {
+            self.toggle_xray();
         }
     }
     /// The face under the pointer: the raster's face buffer when shaded,
@@ -308,20 +310,9 @@ impl App {
         }
         best.map(|(_, f)| f)
     }
-    /// The vertex marker nearest the pointer, within 8 px.
+    /// The vertex handle nearest the pointer (`pick_handle`).
     fn pick_vertex(&self, x: i32, y: i32) -> Option<usize> {
-        let model = self.model.as_ref()?;
-        model
-            .vertices
-            .iter()
-            .enumerate()
-            .filter_map(|(i, v)| {
-                let [px, py] = self.hp_project(v.point)?;
-                let d = (px - x).abs().max((py - y).abs());
-                (d <= 8).then_some((d, i))
-            })
-            .min()
-            .map(|(_, i)| i)
+        self.pick_handle(x, y)
     }
     /// Left press in the viewport off any vertex marker: a click selects,
     /// a drag (or B) draws a box.
@@ -384,10 +375,15 @@ impl App {
         let (y0, y1) = (b.start[1].min(b.end[1]), b.start[1].max(b.end[1]));
         let hit =
             |p: Option<[i32; 2]>| p.is_some_and(|[x, y]| x >= x0 && x <= x1 && y >= y0 && y <= y1);
+        // Without X-ray the shaded view boxes only what it shows.
+        let shown = self.occlusion().map(|(_, faces)| faces);
         if self.ed.face_select {
             let found: Vec<usize> = model
                 .faces
                 .iter()
+                .enumerate()
+                .filter(|(i, _)| shown.as_ref().is_none_or(|s| s.get(*i) == Some(&true)))
+                .map(|(_, f)| f)
                 .filter(|f| !f.indices.is_empty())
                 .filter(|f| {
                     let n = f.indices.len() as i64;
@@ -417,8 +413,11 @@ impl App {
             }
             self.sync_face_vertices();
         } else {
-            let found: Vec<usize> = (0..model.vertices.len())
-                .filter(|i| hit(self.hp_project(model.vertices[*i].point)))
+            let found: Vec<usize> = self
+                .vertex_handles()
+                .into_iter()
+                .filter(|h| h.visible && hit(Some(h.at)))
+                .map(|h| h.index)
                 .collect();
             if !b.extend && !b.subtract {
                 self.mesh_vertices.clear();
@@ -1001,18 +1000,7 @@ impl App {
                 }
             }
         } else {
-            for (i, v) in model.vertices.iter().enumerate() {
-                let Some([x, y]) = self.hp_project(v.point).filter(|p| visible(*p)) else {
-                    continue;
-                };
-                if self.mesh_vertices.contains(&i) {
-                    o.canvas.rect(x - 2, y - 2, 5, 5, c::AMBER);
-                    view::border(&mut o.canvas, x - 4, y - 4, 9, 9, c::AMBER);
-                } else {
-                    o.canvas.rect(x - 1, y - 1, 3, 3, c::STEEL);
-                }
-                o.hit([x - 5, y - 5, 11, 11], Action::MeshVertex(i));
-            }
+            self.draw_vertex_handles(o);
         }
         if let Some(b) = self.ed.mesh_box.filter(|b| b.boxing) {
             let (x0, y0) = (b.start[0].min(b.end[0]), b.start[1].min(b.end[1]));
@@ -1022,6 +1010,7 @@ impl App {
             );
             view::border(&mut o.canvas, x0, y0, w, h, c::AMBER);
         }
+        self.gizmo_overlay(o);
     }
     /// Edit Mesh inspector: selection, operations, refusals.
     pub(super) fn mesh_inspector(&self, o: &mut Layout) {
