@@ -53,6 +53,22 @@ in. Needs `rsvg-convert`, ImageMagick `magick` and the Liberation Sans TTFs.
   uses them (bold +8% for Tahoma Bold) to estimate label widths for truncation
   and layout. Mono styles use Lucida Console's fixed 0.6 em cell.
 
+## App icon (`app_icon.py`)
+
+```sh
+python3 tore-hangar-design/tools/gen/app_icon.py [--review DIR]
+```
+
+Renders `icons/app/tore-hangar.svg` at 256 with `rsvg-convert` (read back
+through `magick`), builds 16, 24, 32 and 48 from the hand-tuned pixel art in
+the script, and writes `icons/app/tore-hangar-<size>.png` and
+`icons/app/tore-hangar.ico` (8-bit and 32-bit DIB entries with AND masks for
+the small sizes, PNG for 256). Colors come from `tokens.json`; the script
+refuses a master that uses a color outside the tokens. `--review DIR` writes
+1x and 8x contact sheets on dark, teal and white grounds. The build reads the
+committed `.ico`, never the script. See `icons/app/README.md` for the
+per-size design.
+
 ## Previews (`build.py`, `render.py`, `icons.py`)
 
 Reference only. `build.py OUT` writes the HTML component previews into
