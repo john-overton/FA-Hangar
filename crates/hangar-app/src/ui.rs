@@ -92,6 +92,8 @@ enum PromptKind {
     Recolor,
     BaseColor(bool),
     MeshMove,
+    PartPosition(usize),
+    AnimationState(usize),
     Isolate,
     CloseLibrary,
     ResourceName(bool),
@@ -136,7 +138,7 @@ pub struct FileItem {
 struct Stroke {
     entry: usize,
     name: String,
-    generated: Option<Box<mesh_ui::PanelPlan>>,
+    original: Option<Entry>,
     bytes: Vec<u8>,
     pic: Pic,
     last: Option<(usize, usize)>,
@@ -156,7 +158,11 @@ pub struct App {
     hp_context: Option<Box<hardpoint_ui::Context>>,
     hp_selected: usize,
     hp_tool: bool,
+    hp_slew: bool,
     mesh_edit: bool,
+    animation_tool: bool,
+    animation_state: BTreeMap<usize, i32>,
+    animation_part: usize,
     mesh_vertices: Vec<usize>,
     mesh_drag: Option<Box<mesh_ui::MeshDrag>>,
     hp_visible: bool,
@@ -256,8 +262,11 @@ pub struct App {
     textures: BTreeMap<String, Pic>,
     textured: bool,
     stroke: Option<Stroke>,
+    stroke_parked: Vec<Stroke>,
+    panel_draft: Option<Box<mesh_ui::PanelPlan>>,
     selected_face: Option<usize>,
     model_paint: bool,
+    paint_lock: bool,
     context_model: Option<Model>,
     context_entry: Option<usize>,
 }
@@ -284,7 +293,11 @@ impl App {
             hp_context: None,
             hp_selected: 0,
             hp_tool: false,
+            hp_slew: false,
             mesh_edit: false,
+            animation_tool: false,
+            animation_state: BTreeMap::new(),
+            animation_part: 0,
             mesh_vertices: Vec::new(),
             mesh_drag: None,
             hp_visible: false,
@@ -338,7 +351,7 @@ impl App {
             detail: String::new(),
             prompt: None,
             yaw: 0,
-            pitch: -90,
+            pitch: 90,
             zoom: 100,
             pan: [0, 0],
             perspective: false,
@@ -390,8 +403,11 @@ impl App {
             textures: BTreeMap::new(),
             textured: false,
             stroke: None,
+            stroke_parked: Vec::new(),
+            panel_draft: None,
             selected_face: None,
             model_paint: false,
+            paint_lock: false,
             context_model: None,
             context_entry: None,
         }
@@ -500,6 +516,8 @@ impl App {
         self.envelope_scroll = 0;
         self.hp_tool = false;
         self.mesh_edit = false;
+        self.animation_tool = false;
+        self.animation_state.clear();
         self.mesh_vertices.clear();
         self.decal_active = false;
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
@@ -729,6 +747,12 @@ impl App {
         }
         self.refresh_graft();
         self.refresh_hardpoints();
+        if self.animation_tool {
+            if let Err(error) = self.animation_preview() {
+                self.preview = None;
+                self.status = error;
+            }
+        }
         self.frame();
     }
     fn frame(&mut self) {
@@ -1165,6 +1189,8 @@ impl App {
             if matches!(key, Key::Escape) {
                 self.painting = false;
                 self.stroke = None;
+                self.stroke_parked.clear();
+                self.panel_draft = None;
                 self.refresh();
                 return;
             }
@@ -1259,7 +1285,7 @@ impl App {
                                 self.discard_library();
                                 Ok(())
                             } else {
-                                Err("Type DISCARD or press Esc".into())
+                                Err("Click Discard changes or Cancel".into())
                             }
                         }
                         PromptKind::ResourceName(duplicate) => {
@@ -1304,6 +1330,10 @@ impl App {
                             self.status=format!("Cloned {to}; {n} decoded references updated. Other LOD/damage references retain original textures.");
                             Ok(())
                         })(),
+                        PromptKind::PartPosition(axis) => self.part_position(axis, &p.value),
+                        PromptKind::AnimationState(address) => {
+                            self.set_animation_state(address, &p.value)
+                        }
                         PromptKind::MeshMove => self.mesh_move(&p.value),
                         PromptKind::BaseColor(face) => self.apply_base_color(face),
                         PromptKind::Recolor => {
@@ -1478,7 +1508,7 @@ impl App {
                                 self.quit = true;
                                 Ok(())
                             } else {
-                                Err("Type DISCARD or press Esc".into())
+                                Err("Click Discard changes or Cancel".into())
                             }
                         }
                         PromptKind::File(a) => {
@@ -1578,7 +1608,7 @@ impl App {
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
                 let op=ch.to_ascii_lowercase();self.prompt=Some(Prompt{kind:PromptKind::Transform(op),title:match op{'g'=>"Move in source units",'r'=>"Rotate in degrees",_=>"Scale in percent"}.into(),value:String::new(),axis:0});self.transform_preview();
             },
-            Key::Char('1')|Key::Num(1)=>{self.yaw=0;self.pitch=0;},Key::Char('3')|Key::Num(3)=>{self.yaw=90;self.pitch=0;},Key::Char('7')|Key::Num(7)=>{self.yaw=0;self.pitch = -90;},Key::Char('5')|Key::Num(5)=>{if self.textured{self.perspective=false;self.status="Textured paint preview uses orthographic projection".into();}else{self.perspective = !self.perspective;}},
+            Key::Char('1')|Key::Num(1)=>{self.yaw=0;self.pitch=0;},Key::Char('3')|Key::Num(3)=>{self.yaw=90;self.pitch=0;},Key::Char('7')|Key::Num(7)=>{self.yaw=0;self.pitch = 90;},Key::Char('5')|Key::Num(5)=>{if self.textured{self.perspective=false;self.status="Textured paint preview uses orthographic projection".into();}else{self.perspective = !self.perspective;}},
             Key::Home|Key::Char('.')=>self.frame(),
             Key::Up=>{self.select_entry(self.selected.saturating_sub(1));},
             Key::Down=>{self.select_entry(self.selected+1);},
@@ -1596,7 +1626,7 @@ impl App {
             self.prompt = Some(Prompt {
                 kind: PromptKind::Discard,
                 title: format!(
-                    "Unsaved edits in {} LIBs: type DISCARD to close",
+                    "Unsaved edits in {} LIBs / close without saving?",
                     usize::from(self.doc.dirty())
                         + self.libraries.iter().filter(|l| l.doc.dirty()).count()
                 ),
@@ -1724,6 +1754,7 @@ impl App {
             && self.prompt.is_none()
             && self.mode == Mode::Model
             && self.model.is_some()
+            && !self.animation_tool
             && x > self.left() + 40
             && x < self.right()
             && y > 130
@@ -1839,9 +1870,14 @@ impl App {
         if self.painting {
             if self.mode == Mode::Model {
                 if let Some((face, uv)) = self.model_hit(x, y) {
-                    if Some(face) == self.selected_face {
+                    if !self.paint_lock || Some(face) == self.selected_face {
+                        self.mouse = [x, y];
                         self.paint_model_hit(face, uv);
+                    } else if let Some(s) = &mut self.stroke {
+                        s.last = None;
                     }
+                } else if let Some(s) = &mut self.stroke {
+                    s.last = None;
                 }
             } else {
                 self.paint_point(x, y);
@@ -1996,6 +2032,19 @@ impl App {
             self.zoom = (self.zoom + delta * 10).clamp(10, 1000);
         }
     }
+    /// A proper camera basis: front sees +forward, screen right is -body X.
+    /// The old X/up/forward swap had determinant -1 and mirrored every view.
+    pub(super) fn camera_point(&self, p: [i32; 3]) -> [i32; 3] {
+        model::rotate(
+            model::rotate([-p[0], p[2], p[1]], 1, self.yaw),
+            0,
+            self.pitch,
+        )
+    }
+    pub(super) fn camera_inverse(&self, p: [i32; 3]) -> [i32; 3] {
+        let p = model::rotate(model::rotate(p, 0, -self.pitch), 1, -self.yaw);
+        [-p[0], p[2], p[1]]
+    }
     fn viewport(&self, d: &mut Canvas, m: &Model, x: i32, y: i32, w: i32, h: i32) {
         let mut min = [i32::MAX; 3];
         let mut max = [i32::MIN; 3];
@@ -2008,8 +2057,7 @@ impl App {
         let center = core::array::from_fn::<_, 3, _>(|i| (min[i] + max[i]) / 2);
         let span = (0..3).map(|i| max[i] - min[i]).max().unwrap_or(1).max(1);
         let project = |p: [i32; 3]| {
-            let p = [p[0] - center[0], p[2] - center[2], p[1] - center[1]];
-            let p = model::rotate(model::rotate(p, 1, self.yaw), 0, self.pitch);
+            let p = self.camera_point(core::array::from_fn(|i| p[i] - center[i]));
             let denom = if self.perspective {
                 (span * 4 - p[2]).max(span)
             } else {
@@ -2158,3 +2206,6 @@ mod color_ui;
 
 #[path = "ui_mesh.rs"]
 mod mesh_ui;
+
+#[path = "ui_animation.rs"]
+mod animation_ui;

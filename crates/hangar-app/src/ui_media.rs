@@ -72,8 +72,22 @@ impl App {
         ))
     }
     fn paint_at(&mut self, entry: usize, x: usize, y: usize) {
+        if self.stroke.as_ref().is_none_or(|s| s.entry != entry)
+            && !self.stroke_parked.iter().any(|s| s.entry == entry)
+            && self.stroke_parked.len() + usize::from(self.stroke.is_some()) >= 64
+        {
+            self.status = "Stroke limit: release to commit before painting more textures".into();
+            return;
+        }
         if self.stroke.as_ref().is_some_and(|s| s.entry != entry) {
-            self.finish_stroke();
+            let mut previous = self.stroke.take().unwrap();
+            previous.last = None;
+            self.stroke_parked.push(previous);
+        }
+        if self.stroke.is_none() {
+            if let Some(at) = self.stroke_parked.iter().position(|s| s.entry == entry) {
+                self.stroke = Some(self.stroke_parked.remove(at));
+            }
         }
         if self.stroke.is_none() {
             let r: Result<Stroke> = (|| {
@@ -90,7 +104,7 @@ impl App {
                 Ok(Stroke {
                     entry,
                     name: self.doc.archive.entries[entry].name.clone(),
-                    generated: None,
+                    original: Some(self.doc.archive.entries[entry].clone()),
                     bytes,
                     pic,
                     last: None,
@@ -144,34 +158,45 @@ impl App {
         }
     }
     pub(super) fn finish_stroke(&mut self) {
-        if let Some(s) = self.stroke.take() {
+        if let Some(s) = self.stroke.take().or_else(|| self.stroke_parked.pop()) {
             let enabled = self.paint_enabled;
             let model_paint = self.model_paint;
             let face = self.selected_face;
-            let r = if let Some(plan) = s.generated {
-                if !self
-                    .doc
-                    .archive
-                    .entries
-                    .get(plan.entry)
-                    .is_some_and(|e| e.same_storage(&plan.original))
-                    || self.doc.archive.find(&plan.name).is_some()
-                {
-                    Err("Panel source/name changed; stroke cancelled".into())
-                } else {
-                    (|| {
-                        self.doc.transaction(
-                            vec![
-                                Entry::new(&plan.original.name, plan.shape)?,
-                                Entry::new(&plan.name, s.bytes)?,
-                            ],
-                            &[],
-                        )
-                    })()
+            let mut strokes = core::mem::take(&mut self.stroke_parked);
+            strokes.push(s);
+            let plan = self.panel_draft.take();
+            let r = (|| {
+                let mut entries = Vec::new();
+                for s in strokes {
+                    if let Some(original) = &s.original {
+                        if !self
+                            .doc
+                            .archive
+                            .entries
+                            .get(s.entry)
+                            .is_some_and(|e| e.same_storage(original))
+                        {
+                            return Err("Paint source changed; stroke cancelled".into());
+                        }
+                    } else if self.doc.archive.find(&s.name).is_some() {
+                        return Err("Generated texture name changed; stroke cancelled".into());
+                    }
+                    entries.push(Entry::new(&s.name, s.bytes)?);
                 }
-            } else {
-                self.doc.replace(s.entry, s.bytes)
-            };
+                if let Some(plan) = plan {
+                    if !self
+                        .doc
+                        .archive
+                        .entries
+                        .get(plan.entry)
+                        .is_some_and(|e| e.same_storage(&plan.original))
+                    {
+                        return Err("Panel shape changed; stroke cancelled".into());
+                    }
+                    entries.push(Entry::new(&plan.original.name, plan.shape)?);
+                }
+                self.doc.transaction(entries, &[])
+            })();
             self.painting = false;
             self.refresh();
             self.paint_enabled = enabled;
@@ -222,6 +247,12 @@ impl App {
                     .as_ref()
                     .filter(|s| s.name.eq_ignore_ascii_case(&full))
                     .map(|s| &s.pic)
+                    .or_else(|| {
+                        self.stroke_parked
+                            .iter()
+                            .find(|s| s.name.eq_ignore_ascii_case(&full))
+                            .map(|s| &s.pic)
+                    })
                     .or_else(|| self.textures.get(name))
             })
     }
@@ -250,21 +281,17 @@ impl App {
             .vertices
             .iter()
             .map(|v| {
-                let p = [
-                    v.point[0] - center[0],
-                    v.point[2] - center[2],
-                    v.point[1] - center[1],
-                ];
-                let p = model::rotate(model::rotate(p, 1, self.yaw), 0, self.pitch);
+                // Fixed-point camera/depth plus 1/16-pixel raster positions.
+                let p = self.camera_point(core::array::from_fn(|i| (v.point[i] - center[i]) * 256));
                 [
-                    w as i32 / 2
-                        + (p[0] as i64 * w.min(h) as i64 * self.zoom as i64 * 3
-                            / (span as i64 * 400)) as i32
-                        + self.pan[0] * w as i32 / (self.right() - self.left()),
-                    h as i32 / 2
-                        - (p[1] as i64 * w.min(h) as i64 * self.zoom as i64 * 3
-                            / (span as i64 * 400)) as i32
-                        + self.pan[1] * h as i32 / (self.dock_y() - 54),
+                    w as i32 * 8
+                        + (p[0] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
+                            / (span as i64 * 400 * 256)) as i32
+                        + self.pan[0] * 16 * w as i32 / (self.right() - self.left()),
+                    h as i32 * 8
+                        - (p[1] as i64 * w.min(h) as i64 * self.zoom as i64 * 48
+                            / (span as i64 * 400 * 256)) as i32
+                        + self.pan[1] * 16 * h as i32 / (self.dock_y() - 54),
                     p[2],
                 ]
             })
@@ -275,6 +302,14 @@ impl App {
                 - (y as i64 - a[1] as i64) * (b[0] as i64 - a[0] as i64)
         };
         for (fi, f) in m.faces.iter().enumerate() {
+            if f.normal.is_some_and(|n| self.camera_point(n)[2] < 0) {
+                continue;
+            }
+            // E0 refers to runtime markings; an unconfigured keyed overlay is blank,
+            // never the previous aircraft atlas or an opaque header-color polygon.
+            if f.sub & 4 != 0 && f.sub & 3 == 0 && f.texture.is_empty() {
+                continue;
+            }
             let texture = self.texture_for(&f.texture);
             let colors = texture.map(|p| p.colors(&self.base_palette));
             for j in 1..f.indices.len() - 1 {
@@ -291,41 +326,66 @@ impl App {
                     .map(|p| p[0])
                     .min()
                     .unwrap()
+                    .div_euclid(16)
                     .clamp(0, w as i32 - 1);
                 let x1 = tri
                     .iter()
                     .map(|p| p[0])
                     .max()
                     .unwrap()
+                    .div_euclid(16)
                     .clamp(0, w as i32 - 1);
                 let y0 = tri
                     .iter()
                     .map(|p| p[1])
                     .min()
                     .unwrap()
+                    .div_euclid(16)
                     .clamp(0, h as i32 - 1);
                 let y1 = tri
                     .iter()
                     .map(|p| p[1])
                     .max()
                     .unwrap()
+                    .div_euclid(16)
                     .clamp(0, h as i32 - 1);
                 for y in y0..=y1 {
                     for x in x0..=x1 {
                         let weights = [
-                            edge(tri[1], tri[2], x, y) * sign,
-                            edge(tri[2], tri[0], x, y) * sign,
-                            edge(tri[0], tri[1], x, y) * sign,
+                            edge(tri[1], tri[2], x * 16 + 8, y * 16 + 8) * sign,
+                            edge(tri[2], tri[0], x * 16 + 8, y * 16 + 8) * sign,
+                            edge(tri[0], tri[1], x * 16 + 8, y * 16 + 8) * sign,
                         ];
                         if weights.iter().any(|v| *v < 0) {
                             continue;
                         }
                         let i = y as usize * w + x as usize;
                         let z = (0..3).map(|k| weights[k] * tri[k][2] as i64).sum::<i64>() / area;
-                        if z <= depth[i] {
+                        if z < depth[i] {
+                            continue;
+                        }
+                        if z == depth[i]
+                            && frame.faces[i] != usize::MAX
+                            && m.faces[frame.faces[i]].sub & 4 != 0
+                            && f.sub & 4 == 0
+                        {
                             continue;
                         }
                         let mut color = rgb(self.base_palette[f.color as usize]);
+                        if f.sub == 0xee && f.colors.len() == f.indices.len() {
+                            let channels: [u8; 3] = core::array::from_fn(|channel| {
+                                ((0..3)
+                                    .map(|k| {
+                                        weights[k]
+                                            * self.base_palette[f.colors[ids[k]] as usize][channel]
+                                                as i64
+                                    })
+                                    .sum::<i64>()
+                                    / area)
+                                    .clamp(0, 255) as u8
+                            });
+                            color = rgb(channels);
+                        }
                         let mut uv = [-1, -1];
                         if let (Some(pic), Some(palette)) = (texture, colors.as_ref()) {
                             if f.uv.len() == f.indices.len() {
@@ -344,7 +404,13 @@ impl App {
                                 if !pic.mask[pi] {
                                     continue;
                                 }
-                                color = rgb(palette[pic.pixels[pi] as usize]);
+                                let keyed = f.sub & 8 != 0 && pic.pixels[pi] == 255;
+                                if keyed && f.sub & 3 == 0 {
+                                    continue;
+                                }
+                                if !keyed {
+                                    color = rgb(palette[pic.pixels[pi] as usize]);
+                                }
                                 uv = [u as i32, v as i32];
                             }
                         }
@@ -373,7 +439,7 @@ impl App {
         frame
     }
     pub(super) fn draw_model(&self, o: &mut Layout, x: i32, y: i32, w: i32, h: i32) {
-        let rw = (w as usize).min(384);
+        let rw = (w as usize).min(512);
         let rh = (h as usize * rw / w as usize).max(1);
         let frame = self.render_model(rw, rh);
         blit(o, [x, y, w, h], &frame.pixels, rw, rh);
@@ -386,7 +452,7 @@ impl App {
         if x < l || y < top || x >= l + w || y >= top + h {
             return None;
         }
-        let rw = (w as usize).min(384);
+        let rw = (w as usize).min(512);
         let rh = (h as usize * rw / w as usize).max(1);
         let f = self.render_model(rw, rh);
         let i = ((y - top) as usize * f.h / h as usize) * f.w + (x - l) as usize * f.w / w as usize;
@@ -397,6 +463,12 @@ impl App {
         }
     }
     pub(super) fn paint_model_hit(&mut self, face: usize, mut uv: [i32; 2]) {
+        if self.selected_face != Some(face) {
+            if let Some(s) = &mut self.stroke {
+                s.last = None;
+            }
+        }
+        self.selected_face = Some(face);
         if uv[0] < 0 || uv[1] < 0 {
             if let Err(error) = self.start_generated_stroke(face) {
                 self.status = error;
@@ -425,6 +497,12 @@ impl App {
             .as_ref()
             .filter(|s| s.name == name)
             .map(|s| s.entry)
+            .or_else(|| {
+                self.stroke_parked
+                    .iter()
+                    .find(|s| s.name == name)
+                    .map(|s| s.entry)
+            })
             .or_else(|| self.doc.archive.find(&name))
         {
             self.paint_at(i, uv[0] as usize, uv[1] as usize);
@@ -694,15 +772,26 @@ impl App {
                 );
                 y += 30;
             }
-            if self.mode == Mode::Model {
-                o.button(
-                    [r + 10, y, w - 20, 24],
-                    "Paint panel / auto-create texture",
-                    Action::ModelPaint,
-                    self.model_paint,
-                );
-                y += 32;
-            }
+        }
+        if self.mode == Mode::Model {
+            o.button(
+                [r + 10, y, w - 20, 24],
+                "Paint model / auto-create texture",
+                Action::ModelPaint,
+                self.model_paint,
+            );
+            y += 30;
+            o.button(
+                [r + 10, y, w - 20, 24],
+                if self.paint_lock {
+                    "Panel lock: on"
+                } else {
+                    "Panel lock: off / cross panels"
+                },
+                Action::PaintLock,
+                self.paint_lock,
+            );
+            y += 32;
         }
         if self.pic.is_some() {
             o.button(
@@ -958,5 +1047,141 @@ impl App {
         Ok(format!(
             "{name}: 3D brush updated one texture byte and live preview; repack and undo verified"
         ))
+    }
+}
+
+#[inline(never)]
+fn brush_test_app() -> Box<App> {
+    Box::new(App::new())
+}
+impl App {
+    #[inline(never)]
+    pub(super) fn smoke_render_and_brush(&mut self) {
+        let mut a = brush_test_app();
+        a.demo();
+        a.select_entry(0);
+        a.textured = true;
+        a.yaw = 0;
+        a.pitch = 90;
+        assert!(
+            a.camera_point([10, 0, 0])[0] < 0,
+            "Front/top camera must not mirror body X"
+        );
+        assert!(
+            a.camera_point([0, 0, 10])[2] > 0,
+            "Top must show the upper surface"
+        );
+        assert_eq!(a.camera_inverse(a.camera_point([12, 23, 34])), [12, 23, 34]);
+        let mut m = model::Model::parse(&model::demo_shape()).unwrap();
+        m.vertices = [
+            [-100, -100, 0],
+            [100, -100, 0],
+            [0, 100, 0],
+            [-100, -100, 1],
+            [100, -100, 1],
+            [0, 100, 1],
+        ]
+        .into_iter()
+        .map(|point| model::Vertex { point, offset: 0 })
+        .collect();
+        m.faces.truncate(1);
+        m.faces[0].indices = vec![0, 1, 2];
+        m.faces[0].color = 60;
+        let mut upper = m.faces[0].clone();
+        upper.indices = vec![3, 4, 5];
+        upper.color = 80;
+        m.faces.push(upper);
+        a.model = Some(m);
+        assert_eq!(a.render_model(128, 128).faces[64 * 128 + 64], 1);
+        let pic_entry = a.doc.archive.find("DEMO.PIC").unwrap();
+        let mut pic_bytes = a.doc.archive.entries[pic_entry].read().unwrap();
+        let mut pic = Pic::parse(&pic_bytes).unwrap();
+        pic.patch_indices(&mut pic_bytes, &vec![255; pic.pixels.len()])
+            .unwrap();
+        a.textures.insert("DEMO.PIC".into(), pic);
+        let f = &mut a.model.as_mut().unwrap().faces[1];
+        f.texture = "DEMO.PIC".into();
+        f.sub = 12;
+        f.uv = vec![[0, 0], [63, 0], [0, 63]];
+        assert_eq!(
+            a.render_model(128, 128).faces[64 * 128 + 64],
+            0,
+            "Keyed 255 must not hide the base or receive brush hits"
+        );
+        a.model.as_mut().unwrap().faces[1].sub = 14;
+        assert_eq!(
+            a.render_model(128, 128).faces[64 * 128 + 64],
+            1,
+            "Keyed base-fill faces stay opaque"
+        );
+        assert_eq!(
+            a.render_model(128, 128).pixels[64 * 128 + 64],
+            rgb(a.base_palette[80])
+        );
+        a.model.as_mut().unwrap().faces[1].sub = 4;
+        assert_eq!(
+            a.render_model(128, 128).faces[64 * 128 + 64],
+            1,
+            "Opaque 255 remains paintable"
+        );
+        a.model.as_mut().unwrap().faces[1].normal = Some([0, 0, -32765]);
+        assert_eq!(
+            a.render_model(128, 128).faces[64 * 128 + 64],
+            0,
+            "Rear-facing artwork cannot cover the front skin"
+        );
+        a.demo();
+        a.select_entry(0);
+        a.mode = Mode::Model;
+        a.doc
+            .transaction(
+                vec![Entry::new("SECOND.PIC", picture::demo()).unwrap()],
+                &[],
+            )
+            .unwrap();
+        a.doc.mark_saved();
+        let original = a.doc.archive.bytes().unwrap();
+        let first = a.doc.archive.find("DEMO.PIC").unwrap();
+        let second = a.doc.archive.find("SECOND.PIC").unwrap();
+        a.act(Action::ModelPaint);
+        assert!(a.model_paint);
+        assert!(!a.paint_lock);
+        a.brush = 213;
+        a.brush_radius = 0;
+        a.paint_at(first, 2, 3);
+        a.paint_at(second, 5, 6);
+        a.paint_at(first, 7, 8);
+        assert!(!a.doc.dirty());
+        assert_eq!(a.stroke_parked.len(), 1);
+        a.finish_stroke();
+        assert!(a.doc.dirty());
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        a.paint_at(first, 2, 3);
+        a.paint_at(second, 5, 6);
+        a.key(Key::Escape, false, false);
+        assert!(a.stroke_parked.is_empty());
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // Multiple new panel sheets and their shared SH stay one transaction.
+        a.doc.replace(0, model::demo_shape()).unwrap();
+        a.doc.mark_saved();
+        a.select_entry(0);
+        a.palette_loaded = true;
+        let original = a.doc.archive.bytes().unwrap();
+        let count = a.doc.archive.entries.len();
+        a.start_generated_stroke(0).unwrap();
+        let entry = a.stroke.as_ref().unwrap().entry;
+        a.paint_at(entry, 4, 4);
+        a.start_generated_stroke(1).unwrap();
+        let entry = a.stroke.as_ref().unwrap().entry;
+        a.paint_at(entry, 5, 5);
+        assert!(!a.doc.dirty());
+        a.finish_stroke();
+        assert_eq!(a.doc.archive.entries.len(), count + 2);
+        assert!(a.model.as_ref().unwrap().faces[..2]
+            .iter()
+            .all(|f| !f.texture.is_empty()));
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
     }
 }

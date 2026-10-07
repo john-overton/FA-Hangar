@@ -132,6 +132,8 @@ impl App {
         self.selected_face = library.selected_face;
         self.model_paint = false;
         self.mesh_edit = false;
+        self.animation_tool = false;
+        self.animation_state.clear();
         self.mesh_vertices.clear();
         self.envelope_selected = 0;
         self.envelope_scroll = 0;
@@ -240,7 +242,7 @@ impl App {
         if self.doc.dirty() {
             self.prompt = Some(Prompt {
                 kind: PromptKind::CloseLibrary,
-                title: "Close active LIB and discard its edits? Type DISCARD".into(),
+                title: "Close active LIB without saving?".into(),
                 value: String::new(),
                 axis: 0,
             });

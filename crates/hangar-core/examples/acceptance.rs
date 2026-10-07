@@ -184,10 +184,24 @@ fn run() -> Result<()> {
                 })
                 .unwrap() as u8
         };
-        let colors = [nearest([255, 0, 255]), nearest([255, 255, 0])];
+        let colors = [
+            nearest([255, 0, 255]),
+            nearest([255, 255, 0]),
+            nearest([0, 0, 0]),
+        ];
         let mut pic = Pic::parse(&panel.picture)?;
         let pixels = (0..4096)
-            .map(|i| colors[((i % 64 / 8) + (i / 64 / 8)) % 2])
+            .map(|i| {
+                let (x, y) = (i % 64, i / 64);
+                if ((8..14).contains(&x) && (8..56).contains(&y))
+                    || ((14..46).contains(&x) && (8..14).contains(&y))
+                    || ((14..36).contains(&x) && (28..34).contains(&y))
+                {
+                    colors[2]
+                } else {
+                    colors[((x / 8) + (y / 8)) % 2]
+                }
+            })
             .collect::<Vec<_>>();
         pic.patch_indices(&mut panel.picture, &pixels)?;
         write(&dir.join("PANEL-PREVIEW.png"), &pic.png(&palette))?;
@@ -245,7 +259,7 @@ fn run() -> Result<()> {
         } else {
             "No neutral C4 part; no part-placement candidate.".into()
         };
-        report.push_str(&format!("texture-{stem}: panel {} (source FC file {:X}), checker indices {:?}. Geometry/reopen/one-step undo PASS. CODE continuation retains original RVAs. Native-game texture/state/LOD/damage acceptance is PENDING. Independent OpenFA full-module parsing does not accept this appended-tail layout; static projection checks do not resolve that limitation.\n  {part_note}\n",face+1,model.faces[face].offset,colors));
+        report.push_str(&format!("texture-{stem}: panel {} (source FC file {:X}), asymmetric F/checker indices {:?}. Geometry/reopen/one-step undo PASS. CODE continuation retains original RVAs. Native-game texture/state/LOD/damage acceptance is PENDING. Independent OpenFA full-module parsing does not accept this appended-tail layout; static projection checks do not resolve that limitation.\n  {part_note}\n",face+1,model.faces[face].offset,colors));
         report.push_str(&format!("  Part-edit preview state: {part_state:?}\n"));
         let symbols = animation::symbols(&bytes)?;
         for addr in model.state_words {
@@ -261,7 +275,7 @@ fn run() -> Result<()> {
             "texture-{stem}\tPENDING\tPENDING\tPENDING\tPENDING\t\n"
         ));
     }
-    report.push_str("\nWINDOWS CHECK ORDER\n1. Open each baseline in Hangar; inspect definition, model, dependencies and stations. Then try it in FA with the other candidate LIBs disabled.\n2. Replace baseline with its edited counterpart. Select/place the same asset in a mission or loadout; test spawn, model/damage, weapon firing, reload and turret arcs. Confirm unchanged assets still behave normally.\n3. For textures, use baseline then generated-panel on the named HG18/HG10 aircraft. Locate the bright checker panel from several angles; test gear, flaps, hook, LOD distance and damage. Compare palette/transparency and watch for missing neighboring panels. Do not combine HG18 and HG10 checker packages (both use HGPNL.PIC).\n4. Test part-placement separately from generated-panel. Confirm the moved C4 part still switches/animates, and inspect clipping/visibility/collision. Native angle arithmetic has not been rewritten.\n5. Record exact game edition, load order, result, failure steps and screenshots in RESULTS.tsv. Baseline failures and edited-only failures are different findings. Remove candidate LIBs after testing.\n");
+    report.push_str("\nWINDOWS CHECK ORDER\n1. Open each baseline in Hangar; inspect definition, model, dependencies and stations. Then try it in FA with the other candidate LIBs disabled.\n2. Replace baseline with its edited counterpart. Select/place the same asset in a mission or loadout; test spawn, model/damage, weapon firing, reload and turret arcs. Confirm unchanged assets still behave normally.\n3. For textures, use baseline then generated-panel on the named HG18/HG10 aircraft. Locate the bright F/checker panel from several angles; test gear, flaps, hook, LOD distance and damage. Compare palette/transparency and watch for missing neighboring panels. Do not combine HG18 and HG10 checker packages (both use HGPNL.PIC).\n4. Test part-placement separately from generated-panel. Confirm the moved C4 part still switches/animates, and inspect clipping/visibility/collision. Native angle arithmetic has not been rewritten.\n5. Record exact game edition, load order, result, failure steps and screenshots in RESULTS.tsv. Baseline failures and edited-only failures are different findings. Remove candidate LIBs after testing.\n");
     write(&out.join("READ-ME.txt"), report.as_bytes())?;
     write(&out.join("RESULTS.tsv"), results.as_bytes())?;
     println!("Exported acceptance candidates to {}", out.display());

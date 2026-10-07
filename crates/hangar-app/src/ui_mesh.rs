@@ -39,6 +39,8 @@ impl App {
             .map(|n| format!("{stem}{n:02X}.PIC"))
             .find(|name| {
                 self.doc.archive.find(name).is_none()
+                    && self.stroke.as_ref().is_none_or(|s| s.name != *name)
+                    && !self.stroke_parked.iter().any(|s| s.name == *name)
                     && !self
                         .libraries
                         .iter()
@@ -49,8 +51,13 @@ impl App {
                         .any(|(_, names)| names.contains(name))
             })
             .ok_or("No free generated texture name; export under a new object ID")?;
-        let result =
-            shape_edit::texture_panel(&original.read()?, face, &name, 64, &self.base_palette)?;
+        let source = self
+            .panel_draft
+            .as_ref()
+            .filter(|p| p.entry == entry)
+            .map(|p| p.shape.clone())
+            .unwrap_or(original.read()?);
+        let result = shape_edit::texture_panel(&source, face, &name, 64, &self.base_palette)?;
         Ok(PanelPlan {
             entry,
             original,
@@ -84,18 +91,25 @@ impl App {
         Ok(())
     }
     pub(super) fn start_generated_stroke(&mut self, face: usize) -> Result<()> {
+        if self.stroke_parked.len() + usize::from(self.stroke.is_some()) >= 64 {
+            return Err("Stroke limit: release before generating more panel textures".into());
+        }
         let plan = self.panel_plan(face)?;
         let pic = Pic::parse(&plan.picture)?;
         self.preview = Some(Model::parse(&plan.shape)?);
         self.selected_face = Some(plan.face);
+        if let Some(s) = self.stroke.take() {
+            self.stroke_parked.push(s);
+        }
         self.stroke = Some(Stroke {
-            entry: self.doc.archive.entries.len(),
+            entry: self.doc.archive.entries.len() + self.stroke_parked.len(),
             name: plan.name.clone(),
             bytes: plan.picture.clone(),
             pic,
             last: None,
-            generated: Some(Box::new(plan)),
+            original: None,
         });
+        self.panel_draft = Some(Box::new(plan));
         self.painting = true;
         Ok(())
     }
@@ -408,7 +422,7 @@ impl App {
         a.mouse = [x, y];
         a.paint_model_hit(face, uv);
         assert!(a.painting, "{}", a.status);
-        assert!(a.stroke.as_ref().unwrap().generated.is_some());
+        assert!(a.panel_draft.is_some());
         assert!(!a.doc.dirty());
         a.draw();
         a.key(Key::Escape, false, false);

@@ -194,3 +194,46 @@ Core milestone 9c7280a passed both Windows CI jobs; the final UI is checked by
 its pushed workflow. Actual Windows 98/ME operation and original-game loading
 of generated panel textures remain manual acceptance checks. Full animated SH
 geometry and topology editing are not enabled by this milestone.
+
+## Version 0.8 object workflows, states and viewport fixes
+
+59 portable core tests pass. Additional cases cover NT station movement, slew
+edits, add/remove/store changes; byte-local C4 placement and no-op preservation;
+state-guard alternatives; bounded loaded-launcher selection; and F6 color/normal
+provenance. Shared UI smoke checks NT tools, part edit/undo, cancel/discard buttons
+for one LIB and the whole app, camera handedness/top depth, keyed versus opaque
+index 255, base-fill composition, backface exclusion, multi-PIC stroke commit/
+cancel, and two generated panel sheets restored with their SH in one undo.
+
+All seven real-data GUI export workflows passed ID/name entry, source resolution,
+review, export and reopen: AIM9M.JT, BLDG1.OT, TICON.NT, M1.NT, ZSU23.NT,
+SA2A.NT and CHAP.NT. The local acceptance example separately verifies unchanged
+numeric clone operands, controlled field edits, payload recovery and undo.
+All seven main shapes match the independent scenery reader's face counts,
+including the newly supported loaded SAM/Chaparral branches.
+
+The independent tore-formats reader checked every binary combination of the
+observed guards: 128 F-18 states and 8 A-10 states. Generated-panel geometry and
+normals match their baseline in every combination, with exactly one texture/UV
+change per pose. C4 placement differences are visible in 64 and 4 states,
+respectively. The patched static OpenFA tool round-trips both part-placement
+SHs byte-for-byte. It rejects the appended-tail generated-texture layout (the
+earlier unpadded stub also broke whole-module instruction boundaries). This
+external-tool limitation is recorded in the handoff rather than treated as a
+successful full-module validation.
+
+The user's Windows screenshots show opposite-wing, horizontally mirrored paint
+and interfering skin layers in 0.7. The camera transform had negative determinant,
+the top preset faced below the model, and the renderer lacked native keyed/base
+composition and front-normal selection. Fixes change editor projection and
+rendering only; the SH UVs and PIC pixels are retained. Stock A-10 preview was
+inspected locally after correction. Exact parity for the user's edited A10_V2
+package still requires their Windows retest; that file was not provided.
+
+Native Linux layouts were inspected at compact and normal sizes. Strict Clippy,
+Linux UI smoke, Windows cross-builds and PE audits are required for the final
+commit; the pushed workflow also runs the shared smoke on both Windows targets.
+Local handoff files contain user-owned game data and remain outside Git/CI.
+Original-game and Windows 98/ME acceptance remain pending user tests. Native
+continuous animation, visual turret editing, full topology and module relocation
+are not claimed by this milestone.

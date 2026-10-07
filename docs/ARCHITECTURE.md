@@ -307,3 +307,58 @@ The imported-art library stores only paths in an executable-adjacent sidecar.
 No image data, font runtime, GPU renderer, new platform APIs or runtime DLLs are
 introduced. Pending decal/station state is heap-backed where necessary to keep
 the custom Windows runtime's stack frames bounded.
+
+## NPC, animation inspection and rendering (0.8)
+
+NT recognition requires the exact Object + NPC root layout. The existing
+hardpoint annotator and structural station writer then support PT and NT through
+the same count/kind checks, reference preservation and undo. Ground/ship
+definitions enter the Ground objects category and link to their main SH.
+Heading, pitch and slew limits have a direct inspector view. These values do
+not imply that visual turret tracking or native launch-axis parity is solved.
+
+Model::with_state follows only the previously reviewed word-comparison and
+reentry patterns. State addresses are labelled using bounded import tables and
+exact CODE trampoline aliases; no resource code is executed. Reached C4 records
+retain source placement, raw rotation words and target provenance.
+animation::place_part patches only one signed placement word after validating
+the reached record. Source programs, rotations, relative targets and module
+layout remain intact. The CHAP/SA2 loaded-launcher envelope selects its reviewed
+loaded static branch, without running HARDNumLoaded.
+
+The camera now uses a right-handed basis: screen X is negative body X in front
+view; top view faces the upper surface. Wireframe, rasterizer, picking and
+station/vertex tools share forward/inverse transforms. Raster vertices retain
+1/16-pixel XY and fractional source depth. Stored normals exclude rear-facing
+artwork; coplanar textured faces take priority over a flat base. The software
+raster size is capped at 512 pixels wide.
+
+Native SH composition research in USNF-ATF Docs/formats/sh.md (2026-09-11)
+establishes keyed index-255 copying over a palette/Gouraud base, F6 slot colors,
+and G_TextureFlip at 0x48d020. Hangar retains native V inversion, captures F6
+colors, preserves the underlying fill for keyed ED/EE faces, and omits empty
+runtime-indexed texture-only overlays. Lighting and indexed mission artwork
+remain outside this preview's fidelity claim. No asset UVs or raster bytes are
+flipped to compensate for camera behavior.
+
+A free brush stroke stages up to 64 PICs and a cumulative generated-panel SH.
+Face transitions reset atlas interpolation; returning to a PIC reuses its staged
+pixels. Release checks source snapshots and commits a single document batch.
+Esc drops all staged resources. The viewport brush icon and optional panel lock
+share this path. The close confirmation has explicit Discard changes and Cancel
+buttons; its destructive action is scoped to the pending close dialog.
+
+### Remaining full-animation work
+
+1. Extend source-record provenance into a complete graph covering every LOD,
+   state branch, callback boundary and relocation with exact no-op serialization.
+2. Recover native angle laws, channel ranges, axes and pivots, including ground
+   turret/launcher consumers. Current state switches are not continuous animation.
+3. Add local-space geometry edits with all affected normals, visibility planes,
+   bounds and contact records updated; retain unsupported records explicitly.
+4. Replace the bounded texture continuation with a complete module layout writer
+   that keeps the SH terminator/import-trampoline conventions accepted by the
+   independent whole-module tool. The current continuation still needs native
+   game acceptance even though its bounded pose matrices pass.
+5. Reconcile the user's Windows results for each baseline/edited candidate,
+   including launch points, slew arcs, skin orientation, LOD and damage states.

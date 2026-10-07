@@ -16,8 +16,8 @@ pub(super) struct Drag {
     pub reference: [i32; 3],
 }
 impl App {
-    pub(super) fn aircraft_owner(&self) -> Option<usize> {
-        if self.name().ends_with(".PT") {
+    pub(super) fn station_owner(&self) -> Option<usize> {
+        if matches!(extension(self.name()), "PT" | "NT") {
             return Some(self.selected);
         }
         let shape = self.model_entry.or(self.context_entry)?;
@@ -25,7 +25,7 @@ impl App {
         let mut owners = self
             .dependencies
             .incoming(name)
-            .filter(|n| n.ends_with(".PT"))
+            .filter(|n| matches!(extension(n), "PT" | "NT"))
             .filter_map(|n| self.doc.archive.find(n));
         let owner = owners.next()?;
         if owners.next().is_some() {
@@ -35,15 +35,16 @@ impl App {
         }
     }
     pub(super) fn refresh_hardpoints(&mut self) {
-        self.hp_context = self.aircraft_owner().and_then(|entry| {
+        self.hp_context = self.station_owner().and_then(|entry| {
             let bytes = self.doc.archive.entries.get(entry)?.read().ok()?;
-            let brf = Brf::parse(&bytes, "PT").ok()?;
+            let ext = extension(&self.doc.archive.entries[entry].name);
+            let brf = Brf::parse(&bytes, ext).ok()?;
             let stations = hardpoints::read(&brf).ok()?;
             let saved = self
                 .doc
                 .saved_entry(&self.doc.archive.entries[entry].name)
                 .and_then(|e| e.read().ok())
-                .and_then(|b| Brf::parse(&b, "PT").ok());
+                .and_then(|b| Brf::parse(&b, ext).ok());
             Some(Box::new(Context {
                 entry,
                 stations,
@@ -84,8 +85,7 @@ impl App {
     }
     pub(super) fn hp_project(&self, p: [i32; 3]) -> Option<[i32; 2]> {
         let (center, span) = self.model_bounds()?;
-        let p = [p[0] - center[0], p[2] - center[2], p[1] - center[1]];
-        let p = model::rotate(model::rotate(p, 1, self.yaw), 0, self.pitch);
+        let p = self.camera_point(core::array::from_fn(|i| p[i] - center[i]));
         let (w, h) = (self.right() - self.left() - 2, self.dock_y() - 54);
         let denom = if self.perspective && !self.textured {
             (span as i64 * 4 - p[2] as i64).max(span as i64)
@@ -110,18 +110,13 @@ impl App {
             .model_bounds()
             .ok_or("No model for station placement")?;
         let (w, h) = (self.right() - self.left() - 2, self.dock_y() - 54);
-        let p = [
-            reference[0] - center[0],
-            reference[2] - center[2],
-            reference[1] - center[1],
-        ];
-        let mut p = model::rotate(model::rotate(p, 1, self.yaw), 0, self.pitch);
+        let mut p = self.camera_point(core::array::from_fn(|i| reference[i] - center[i]));
         let denom = w.min(h) as i64 * self.zoom as i64 * 3;
         p[0] =
             ((x - self.left() - 1 - w / 2 - self.pan[0]) as i64 * span as i64 * 400 / denom) as i32;
         p[1] = -((y - 54 - h / 2 - self.pan[1]) as i64 * span as i64 * 400 / denom) as i32;
-        let p = model::rotate(model::rotate(p, 0, -self.pitch), 1, -self.yaw);
-        let world = [p[0] + center[0], p[2] + center[1], p[1] + center[2]];
+        let p = self.camera_inverse(p);
+        let world = core::array::from_fn(|i| p[i] + center[i]);
         if world.iter().any(|v| !(-32768..=32767).contains(v)) {
             return Err("Station outside signed source-coordinate range".into());
         }
@@ -301,7 +296,12 @@ impl App {
                 .map_err(|_| "Enter a signed source coordinate")?;
             hardpoints::position(&old, self.hp_selected, xyz)?
         } else {
-            c.brf.edit(&old, station.fields[column], value, "PT")?
+            c.brf.edit(
+                &old,
+                station.fields[column],
+                value,
+                extension(&self.doc.archive.entries[entry].name),
+            )?
         };
         self.doc.replace(entry, bytes)?;
         self.refresh();
@@ -311,14 +311,14 @@ impl App {
     pub(super) fn hardpoint_inspector(&self, o: &mut Layout) {
         let (r, w, h) = (self.right(), self.width - self.right(), self.height);
         o.canvas
-            .label(r + 12, 44, "HARDPOINTS / source coordinates", c::INK);
+            .label(r + 12, 44, "STATIONS / source coordinates", c::INK);
         let Some(c) = &self.hp_context else {
             label_fit(
                 &mut o.canvas,
                 r + 12,
                 85,
                 w - 24,
-                "Select the owning aircraft PT.",
+                "Select an owning PT or NT object.",
                 c::INK_MUTED,
             );
             return;
@@ -363,12 +363,21 @@ impl App {
                     changed(k + 1) || self.hp_drag.is_some(),
                 );
             }
-            for (row, (column, label)) in [
-                (9, "Weight class"),
-                (10, "Max items"),
-                (11, "Location code"),
-                (0, "Flags"),
-            ]
+            for (row, (column, label)) in (if self.hp_slew {
+                [
+                    (4, "Heading"),
+                    (5, "Pitch"),
+                    (6, "Heading limit"),
+                    (7, "Pitch limit"),
+                ]
+            } else {
+                [
+                    (9, "Weight class"),
+                    (10, "Max items"),
+                    (11, "Location code"),
+                    (0, "Flags"),
+                ]
+            })
             .iter()
             .enumerate()
             {
@@ -386,20 +395,22 @@ impl App {
                 changed(8),
             );
         }
-        label_fit(
-            &mut o.canvas,
-            r + 12,
-            382,
-            w - 24,
-            "Drag diamond in orthographic view.",
-            c::INK_MUTED,
+        o.button(
+            [r + 12, 364, w - 24, 24],
+            if self.hp_slew {
+                "Slew angles / limits (stored values)"
+            } else {
+                "Loadout / station flags"
+            },
+            Action::StationSlew,
+            self.hp_slew,
         );
         label_fit(
             &mut o.canvas,
             r + 12,
             404,
             w - 24,
-            "H places a station at the cursor.",
+            "Click to switch loadout / slew fields.",
             c::INK_MUTED,
         );
         o.button(

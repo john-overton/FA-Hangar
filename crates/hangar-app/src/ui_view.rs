@@ -28,6 +28,12 @@ pub(super) enum Action {
     LibraryEntry(u64, usize),
     NewLibrary,
     CloseLibrary,
+    DiscardChanges,
+    Animation,
+    AnimationPart(i32),
+    PartPosition(usize),
+    AnimationState(usize),
+    AnimationReset,
     CopyResource,
     PasteResources,
     RenameResource(bool),
@@ -63,8 +69,10 @@ pub(super) enum Action {
     MeshMove,
     Textured,
     ModelPaint,
+    PaintLock,
     Isolate,
     Hardpoints,
+    StationSlew,
     HardpointVisibility,
     HardpointSelect(usize),
     HardpointStep(i32),
@@ -122,6 +130,7 @@ pub(super) enum Icon {
     Rotate,
     Scale,
     Frame,
+    Brush,
     Flight,
     Check,
     Warn,
@@ -144,7 +153,7 @@ pub(super) fn category_of(name: &str) -> usize {
         "SH" => 1,
         "PIC" => 2,
         "JT" => 3,
-        "OT" => 4,
+        "OT" | "NT" => 4,
         "PAL" => 5,
         "M" | "MM" => 6,
         "5K" | "11K" | "22K" | "WAV" => 7,
@@ -256,6 +265,10 @@ pub(super) fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
             &[(2, 14), (14, 2)],
             &[(9, 2), (14, 2), (14, 7)],
             &[(2, 9), (2, 14), (7, 14)],
+        ],
+        Icon::Brush => &[
+            &[(2, 13), (5, 10), (8, 13), (2, 13)],
+            &[(6, 9), (12, 2), (15, 5), (9, 11)],
         ],
         Icon::Frame => &[
             &[(2, 6), (2, 2), (6, 2)],
@@ -462,7 +475,18 @@ impl App {
                 self.textured = !self.textured;
                 self.perspective = false;
             }
+            Action::PaintLock => {
+                self.finish_stroke();
+                self.paint_lock = !self.paint_lock;
+            }
             Action::ModelPaint => {
+                self.finish_stroke();
+                self.animation_tool = false;
+                self.animation_state.clear();
+                self.preview = None;
+                self.mesh_edit = false;
+                self.hp_tool = false;
+                self.media_tab = 0;
                 self.model_paint = !self.model_paint;
                 self.perspective = false;
                 self.textured = true;
@@ -482,6 +506,8 @@ impl App {
             }
             Action::MeshMode => {
                 self.finish_stroke();
+                self.animation_tool = false;
+                self.animation_state.clear();
                 self.mesh_edit = !self.mesh_edit;
                 self.mesh_drag = None;
                 self.model_paint = false;
@@ -544,6 +570,11 @@ impl App {
             }
             Action::Menu(n) => self.menu = if self.menu == Some(n) { None } else { Some(n) },
             Action::Mode(m) => {
+                if self.animation_tool {
+                    self.animation_tool = false;
+                    self.animation_state.clear();
+                    self.preview = None;
+                }
                 if m == Mode::Model && self.model.is_none() {
                     if let Some(i) = self.context_entry {
                         let face = self.selected_face;
@@ -694,6 +725,48 @@ impl App {
                 }
                 self.result(result);
             }
+            Action::DiscardChanges => match self.prompt.as_ref().map(|p| &p.kind) {
+                Some(PromptKind::Discard) => {
+                    self.prompt = None;
+                    self.quit = true;
+                }
+                Some(PromptKind::CloseLibrary) => {
+                    self.prompt = None;
+                    self.discard_library();
+                }
+                _ => {}
+            },
+            Action::Animation => self.open_animation(),
+            Action::AnimationPart(step) => {
+                let n = self
+                    .preview
+                    .as_ref()
+                    .or(self.model.as_ref())
+                    .map_or(0, |m| m.parts.len());
+                if n > 0 {
+                    self.animation_part =
+                        (self.animation_part as i32 + step).rem_euclid(n as i32) as usize;
+                }
+            }
+            Action::PartPosition(axis) => self.part_position_prompt(axis),
+            Action::AnimationState(address) => {
+                self.prompt = Some(Prompt {
+                    kind: PromptKind::AnimationState(address),
+                    title: format!("Preview state {address:08X} / integer value; does not edit SH"),
+                    value: self
+                        .animation_state
+                        .get(&address)
+                        .copied()
+                        .unwrap_or(0)
+                        .to_string(),
+                    axis: 0,
+                });
+            }
+            Action::AnimationReset => {
+                self.animation_state.clear();
+                let result = self.animation_preview();
+                self.result(result);
+            }
             Action::CloseLibrary => {
                 let result = self.close_library();
                 self.result(result);
@@ -830,6 +903,9 @@ impl App {
                 self.result(result);
             }
             Action::Hardpoints => {
+                self.animation_tool = false;
+                self.animation_state.clear();
+                self.preview = None;
                 self.hp_tool = self.mode != Mode::Model || !self.hp_tool;
                 self.mode = Mode::Model;
                 self.hp_visible = true;
@@ -837,6 +913,7 @@ impl App {
                 self.decal_active = false;
                 self.decal_draft = None;
             }
+            Action::StationSlew => self.hp_slew = !self.hp_slew,
             Action::HardpointVisibility => self.hp_visible = !self.hp_visible,
             Action::HardpointSelect(i) => {
                 self.hp_selected = i;
@@ -906,6 +983,26 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "paint-model" {
+            self.mode = Mode::Model;
+            self.act(Action::ModelPaint);
+            return Ok(());
+        }
+        if name == "animation" {
+            self.open_animation();
+            return Ok(());
+        }
+        if name == "stations" {
+            self.act(Action::Hardpoints);
+            self.hp_slew = true;
+            return Ok(());
+        }
+        if name == "discard" {
+            self.doc.mark_unsaved();
+            self.close();
+            return Ok(());
+        }
+
         if name == "envelope" {
             self.select_entry(1);
             self.act(Action::Mode(Mode::Properties));
@@ -1264,7 +1361,9 @@ impl App {
             } else {
                 self.graft_layout(&mut out);
             }
-            if self.mode == Mode::Model && self.mesh_edit {
+            if self.mode == Mode::Model && self.animation_tool {
+                self.animation_inspector(&mut out);
+            } else if self.mode == Mode::Model && self.mesh_edit {
                 self.mesh_inspector(&mut out);
             } else if self.mode == Mode::Model && self.hp_tool {
                 self.hardpoint_inspector(&mut out);
@@ -1274,6 +1373,7 @@ impl App {
                 self.definition_inspector(&mut out);
             } else if self.mode == Mode::Media
                 || self.selected_face.is_some()
+                || (self.mode == Mode::Model && self.model_paint)
                 || (self.mode == Mode::Model && self.media_tab > 0)
             {
                 self.media_inspector(&mut out);
@@ -1589,7 +1689,13 @@ impl App {
             Action::Hardpoints,
             self.hp_tool,
         );
-        if width > 490 {
+        o.button(
+            [l + 235, 29, 78, 22],
+            "Parts",
+            Action::Animation,
+            self.animation_tool,
+        );
+        if width > 590 {
             o.button(
                 [r - 254, 29, 94, 22],
                 if self.textured {
@@ -1604,7 +1710,7 @@ impl App {
                 [r - 153, 29, 65, 22],
                 "Top",
                 Action::View(7),
-                self.pitch == -90,
+                self.pitch == 90,
             );
             o.button([r - 84, 29, 77, 22], "Frame", Action::View(0), false);
         }
@@ -1642,15 +1748,26 @@ impl App {
             (Icon::Rotate, Action::Transform('r'), writable),
             (Icon::Scale, Action::Transform('s'), writable),
             (Icon::Frame, Action::View(0), true),
+            (Icon::Brush, Action::ModelPaint, self.model.is_some()),
         ]
         .into_iter()
         .enumerate()
         {
-            o.tool([x, 64 + n as i32 * 31, 28, 28], i, a, enabled, n == 0);
+            o.tool(
+                [x, 64 + n as i32 * 31, 28, 28],
+                i,
+                a,
+                enabled,
+                if n == 5 {
+                    self.model_paint
+                } else {
+                    n == 0 && !self.model_paint
+                },
+            );
         }
         let label = if self.perspective {
             "Perspective"
-        } else if self.pitch == -90 {
+        } else if self.pitch == 90 {
             "Top / Orthographic"
         } else if self.yaw == 90 && self.pitch == 0 {
             "Side / Orthographic"
@@ -2115,7 +2232,7 @@ impl App {
                 x + 12,
                 top + 50,
                 w - 24,
-                "Select a PT / JT / OT definition to edit.",
+                "Select a PT / JT / NT / OT definition to edit.",
                 c::INK_FAINT,
             );
             return;
@@ -2339,6 +2456,7 @@ impl App {
                 ("Graft characteristics", Action::Mode(Mode::Graft)),
                 ("Preview / Paint media", Action::Mode(Mode::Media)),
                 ("Hardpoint tools", Action::Hardpoints),
+                ("Animation / parts", Action::Animation),
                 ("Decals / markings", Action::MediaTab(2)),
                 ("Base color", Action::BaseColor(false)),
                 ("Panel color", Action::BaseColor(true)),
@@ -2405,6 +2523,37 @@ impl App {
         d.rect(x + 1, y + 1, w - 2, 34, c::GM_700);
         icon(d, x + 12, y + 9, Icon::Lib, c::STEEL);
         label_fit(d, x + 38, y + 22, w - 54, &p.title, c::INK);
+        if matches!(p.kind, PromptKind::Discard | PromptKind::CloseLibrary) {
+            label_fit(
+                d,
+                x + 18,
+                y + 70,
+                w - 36,
+                "Unsaved edits will be discarded. Saved files are unchanged.",
+                c::INK_MUTED,
+            );
+            label_fit(
+                d,
+                x + 18,
+                y + 102,
+                w - 36,
+                "Cancel returns to the editor.",
+                c::INK_MUTED,
+            );
+            o.button(
+                [x + w - 300, y + 181, 110, 26],
+                "Cancel",
+                Action::Cancel,
+                true,
+            );
+            o.button(
+                [x + w - 176, y + 181, 158, 26],
+                "Discard changes",
+                Action::DiscardChanges,
+                false,
+            );
+            return;
+        }
         d.label(
             x + 18,
             y + 60,
@@ -2491,6 +2640,8 @@ impl App {
         self.smoke_graft();
         self.smoke_libraries();
         self.smoke_material_tools();
+        self.smoke_advanced_tools();
+        self.smoke_render_and_brush();
         self.smoke_object_tools();
         self.demo();
         self.width = 1280;

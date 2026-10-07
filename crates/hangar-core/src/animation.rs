@@ -194,4 +194,28 @@ mod tests {
         code[8] = 0xff;
         assert!(Model::parse(&module(&code)).is_err());
     }
+
+    #[test]
+    fn gouraud_faces_retain_slot_colors_and_stored_normals() {
+        let mut code = vec![0x82, 0, 3, 0, 0, 0];
+        for p in [[0i16, 0, 0], [10, 0, 0], [0, 10, 0]] {
+            for v in p {
+                code.extend(v.to_le_bytes());
+            }
+        }
+        for (slot, color) in [37, 88, 114].into_iter().enumerate() {
+            code.push(0xf6);
+            code.extend((slot as u16).to_le_bytes());
+            code.extend([color, 0, 0, 0]);
+        }
+        code.extend([0xfc, 0xee, 3, 32, 0]);
+        for n in [0i16, 32765, 0] {
+            code.extend(n.to_le_bytes());
+        }
+        code.extend([0, 0, 0, 3, 0, 1, 2, 0, 0, 63, 0, 0, 63, 0]);
+        let model = Model::parse(&module(&code)).unwrap();
+        assert_eq!(model.faces[0].colors, [37, 88, 114]);
+        assert_eq!(model.faces[0].normal, Some([0, 0, 32765]));
+        assert!(!model.writable);
+    }
 }

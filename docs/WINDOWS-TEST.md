@@ -17,7 +17,7 @@ The EXE is portable; the other files are documentation and licensing.
 5. Ctrl+S, save as `MYMOD.LIB`, then edit and save again to the same path.
    Confirm the new edits reopen and `MYMOD.LIB.bak` contains the previous
    version. A third save should keep `.bak` and add `.bak.1`.
-6. Close with unsaved edits. Esc should return; typing DISCARD should close.
+6. Close with unsaved edits. Esc should return; clicking Discard changes should close.
 
 The synthetic demo is only an editor test; do not install it in the game.
 
@@ -162,7 +162,7 @@ separately. No retail data is included in the test package.
    and use Panel color to change that face alone. Fully textured models should
    direct you to Materials. Verify loaded game palettes, not grayscale fallback.
 3. On a private aircraft copy with its palette loaded, select a supported
-   untextured panel and enable Paint panel / auto-create texture. Brush on it:
+   untextured panel and enable Paint model / auto-create texture. Brush on it:
    the new mapping should preview immediately. Esc must discard the sheet and
    stroke; release must add the PIC and SH edit together. One undo must restore
    the original SH and remove the sheet. Save/reopen and inspect the mapping.
@@ -181,6 +181,29 @@ separately. No retail data is included in the test package.
 7. Load the generated panel package in original Fighters Anthology. Verify
    visibility, materials, damage variants and camera angles independently of
    editor preview; record original-game acceptance separately.
+
+## Viewport brush, NPC stations and states (0.8)
+
+1. Click the brush icon below Frame before selecting a panel. Verify the palette
+   and Panel lock switch appear. Paint across adjacent faces on the same and
+   different PICs, and across two supported flat panels. Release once; one undo
+   must restore every PIC and the SH, removing any generated sheets. Repeat
+   with Esc cancellation. Panel lock must constrain the stroke.
+2. Reopen the user's painted A-10. Compare the same wing and letter orientation
+   with FA, with the nose pointing the same way. Confirm the editor has not
+   altered existing UV/pixel data merely by opening or changing views. Check
+   front/side/top, orbiting, skin cutouts and overlapping layers.
+3. Use Hardpoints on a ship, tank, AAA and launcher NT. Toggle Loadout/station
+   flags to slew fields. Test position, heading/pitch, limits, stores and undo.
+4. Open Parts on an aircraft. Set _PLgearDown to 1, select a revealed part,
+   change one placement coordinate and undo. Preview-state changes must not dirty
+   the LIB. Unsupported programs must report their limits. Angles remain read-only.
+5. Test close active LIB and close application with unsaved edits. Cancel must
+   preserve all edits; clicking Discard changes must complete the requested
+   close without typed confirmation. Other open LIBs retain their own changes.
+6. Follow the generated handoff READ-ME.txt and fill in RESULTS.tsv on the actual
+   game installation. Test baseline and edited folders separately. Package/parser
+   success does not substitute for these original-game results.
 
 ## Please report
 

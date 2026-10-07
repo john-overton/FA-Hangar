@@ -44,7 +44,7 @@ impl App {
             return Err("The loaded display palette is not a saved resource; select/import a PAL to edit it".into());
         }
         let mut names = Vec::new();
-        if let Some(owner) = self.aircraft_owner() {
+        if let Some(owner) = self.station_owner() {
             names.push(format!(
                 "{}.PAL",
                 self.doc.archive.entries[owner]
@@ -158,7 +158,8 @@ impl App {
     }
     pub(super) fn family_texture(&mut self, name: &str) -> Result<()> {
         let owner = self
-            .aircraft_owner()
+            .station_owner()
+            .filter(|i| self.doc.archive.entries[*i].name.ends_with(".PT"))
             .ok_or("Select the owning aircraft PT; shared shapes need an explicit owner")?;
         let picture = self
             .texture_target()

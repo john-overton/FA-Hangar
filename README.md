@@ -16,6 +16,9 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
+Version 0.8 adds ship/ground-vehicle NT fields and station tools, SH state-switch
+preview and part placement, a viewport brush that crosses panels, corrected
+camera handedness and skin composition, and clickable discard controls.
 Version 0.7 adds an editable envelope table, automatic textures for supported
 flat-color panels, visible base-color controls, export of weapons and other
 objects with their resources, and initial SH vertex edit mode.
@@ -60,7 +63,7 @@ read-only, history still works for the current session.
 - Save a new or existing custom LIB with the required EOF sentinel. Untouched entry payloads
   keep their original compression and bytes. An unedited archive round-trips
   byte-for-byte, including padding. Modified entries are stored uncompressed.
-- Edit PT/JT/OT/SEE/ECM textual BRF operands. Recognized schemas get named
+- Edit PT/NT/JT/OT/SEE/ECM textual BRF operands. Recognized schemas get named
   fields; other blocks retain their indexed labels. Comments, whitespace,
   line endings, labels, scaling markers and untouched values survive edits.
 - Export the selected object into a separate LIB with a new ID/display name.
@@ -285,8 +288,8 @@ faces using that index. **Panel color** changes only the selected untextured
 face. Both are one undo step. Textured surfaces get their color from their PIC;
 the UI points to Materials when no flat-color faces are present.
 
-For a supported panel without a texture, enable **Paint panel / auto-create
-texture** and brush on the model. Hangar stages a private 64x64 PIC filled with
+For a supported panel without a texture, click the viewport **brush icon** or
+enable **Paint model / auto-create texture**. Hangar stages a private 64x64 PIC filled with
 the panel's original color and maps the polygon onto it. Release commits the
 sheet, SH mapping and first stroke together; Esc cancels, and Ctrl+Z removes
 the entire change. The base palette must be loaded. **Create paintable panel
@@ -307,9 +310,12 @@ retain their material and UVs. This is planar panel mapping, not full UV unwrap.
    atlas. Choose a palette swatch and **Brush**. The lower **3D preview** updates
    during the stroke. Wheel zooms the atlas; middle-drag pans it. Middle-drag
    and wheel over the model preview orbit and zoom the model.
-5. Alternatively, stay in Model and enable **Paint selected panel on model**.
-   Mouse hits map back to texture coordinates. Dragging remains on the selected
-   face; release commits the stroke. Ctrl+Z undoes it; Esc cancels a live stroke.
+5. Alternatively, click the **brush icon** below Frame in the viewport toolbar.
+   No panel selection is required. **Panel lock: off** lets a stroke cross visible
+   faces and PICs; enable it to constrain a stroke. UV interpolation restarts at
+   panel boundaries so distant atlas islands are not joined by paint streaks.
+   Release commits all touched PICs and generated mappings as one undo step;
+   Esc cancels the whole stroke. A stroke can touch up to 64 texture entries.
 6. Use **Export PNG** for an external image, or **Package LIB** to save the
    edited PIC in game format. Reopen the new LIB, inspect and test it in FA.
 
@@ -408,12 +414,42 @@ those effects. PNG parsing follows the [PNG format specification](https://www.w3
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |
 | Cancel transform or dialog | Esc or right mouse button |
-| Close with unsaved edits | Close window; type DISCARD or Esc to return |
+| Close with unsaved edits | Click Discard changes, or Cancel/Esc to return |
 
 Scale currently acts on the selected axis in percent; rotation is in degrees,
 translation in integer source coordinates. The file browser has directory
 rows, drive roots, recent LIBs and an editable path. It does not create missing directories. A packaging error leaves edits
 in memory and displays its cause. The app writes only when explicitly asked.
+
+## Ship, ground and animation tools
+
+NT definitions now expose the reviewed Object + NPC fields and linked stations.
+Select a ship, tank, AAA or launcher, then use **Hardpoints** for source positions
+and stores. The **Loadout / station flags** button switches to heading, pitch and
+slew limits. These are stored values, not invented degree or distance conversions.
+The Properties groups also expose movement acceleration and engagement/firing
+parameters. Shape animation and weapon launch behavior are separate contracts.
+
+**Parts** in the Model toolbar opens animation inspection. Named imported state
+inputs select reviewed branches without changing the file. Set a state such as
+gear-down to reveal its C4 parts; edit a part's X/Y/Z placement with one-step undo.
+Existing rotations, code addresses and other bytes remain intact. Stored angles
+are shown for inspection. Native angle arithmetic, smooth animation, turret
+tracking and arbitrary animated geometry are not yet editable.
+
+The local developer command below creates baseline/edited weapon, building,
+ship, tank, AAA, SAM and mobile-launcher packages, plus F-18/A-10 texture and
+part-placement cases. Supply your own game LIBs and a new output directory:
+
+```sh
+cargo run --locked -p hangar-core --example acceptance -- FA_2.LIB FA_1.LIB NEW_TEST_FOLDER
+```
+
+The folder contains READ-ME.txt and a pending results sheet. Test one candidate
+folder at a time. The generated texture continuation is experimental: independent
+static poses pass, but the OpenFA whole-module reader rejects its appended-tail
+layout. Original-game acceptance remains required. Part-placement candidates
+retain the original module layout and pass exact independent round trips.
 
 ## Scope still ahead
 
