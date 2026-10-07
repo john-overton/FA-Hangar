@@ -185,30 +185,17 @@ pub(crate) fn jump(from: usize, to: usize) -> Result<[u8; 4]> {
     Ok([0x48, 0, b[0], b[1]])
 }
 fn raw_picture(size: [u32; 2], color: u8, palette: &[[u8; 3]; 256]) -> Result<Vec<u8>> {
-    let n = size[0] as usize * size[1] as usize;
-    raw_sheet(size, &vec![color; n], palette)
-}
-/// A raw kind-0 sheet as generated panels use it: header, `pixels` (row 0
-/// at the top) and a full 6-bit palette from 8-bit `palette`, nothing else.
-pub(crate) fn raw_sheet(
-    size: [u32; 2],
-    pixels: &[u8],
-    palette: &[[u8; 3]; 256],
-) -> Result<Vec<u8>> {
     let (w, h) = (size[0] as usize, size[1] as usize);
     let limits = PANEL_MIN as usize..=PANEL_MAX as usize;
     if !limits.contains(&w) || !limits.contains(&h) {
         return Err(invalid("Texture sheet sides must be 8 to 256 pixels"));
     }
     let n = w * h;
-    if pixels.len() != n {
-        return Err(invalid("Texture sheet pixels do not match its size"));
-    }
     let mut out = vec![0; 64 + n + 768];
     for (at, v) in [(2, w), (6, h), (10, 64), (14, n), (18, 64 + n), (22, 768)] {
         put32(&mut out, at, v)?;
     }
-    out[64..64 + n].copy_from_slice(pixels);
+    out[64..64 + n].fill(color);
     for (i, rgb) in palette.iter().enumerate() {
         for c in 0..3 {
             out[64 + n + i * 3 + c] = ((rgb[c] as u16 * 63 + 127) / 255) as u8;

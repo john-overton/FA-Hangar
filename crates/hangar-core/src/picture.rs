@@ -170,6 +170,26 @@ impl Pic {
 mod tests {
     use super::*;
     #[test]
+    fn retail_texture_matches_the_retail_sh_layout() {
+        let pixels: Vec<u8> = (0..256 * 3).map(|i| i as u8).collect();
+        let b = retail_texture(3, &pixels).unwrap();
+        // The header retail _F18.PIC and _A10.PIC carry, for 3 rows.
+        let fields: Vec<usize> = (0..11).map(|k| u32_at(&b, 2 + 4 * k).unwrap()).collect();
+        assert_eq!(
+            fields,
+            [256, 3, 64, 768, 0, 0, 0, 40, 64 + 768, 12, 0],
+            "width, rows, raster, palette none, null spans, row table"
+        );
+        assert_eq!(b.len(), 64 + 768 + 12);
+        assert!(is_retail_texture(&b));
+        let p = Pic::parse(&b).unwrap();
+        assert!(p.paintable && p.palette.is_empty());
+        assert_eq!(p.pixels, pixels);
+        assert!(retail_texture(1281, &vec![0; 256 * 1281]).is_err());
+        assert!(retail_texture(2, &pixels).is_err());
+        assert!(!is_retail_texture(&demo()));
+    }
+    #[test]
     fn span_mask_preserves_opaque_zero_and_rejects_out_of_bounds() {
         let mut data = vec![0; 85];
         data[0] = 1;
@@ -344,6 +364,71 @@ impl Pic {
         chunk(&mut out, b"IEND", &[]);
         out
     }
+}
+/// Width of every texture retail SH shapes draw from.
+pub const TEXTURE_WIDTH: usize = 256;
+/// Rows FA's texture setup accepts (its row-pointer bound, 0x500).
+pub const TEXTURE_MAX_ROWS: usize = 1280;
+/// A texture in the layout every retail SH texture uses (all 1,070 across
+/// the retail LIBs): kind 0, 256 wide, raster at 64, no embedded palette
+/// (pixels are game-palette indices), the unused span capacity
+/// `10 * (rows + 1)` with a null span pointer, then a row table of
+/// `64 + row * 256`. FA.EXE indexes that table while setting up textured
+/// polygons, so SH textures without it crash the game.
+pub fn retail_texture(height: usize, pixels: &[u8]) -> Result<Vec<u8>> {
+    if !(1..=TEXTURE_MAX_ROWS).contains(&height) {
+        return Err(invalid("SH textures are 1 to 1,280 rows tall"));
+    }
+    let n = TEXTURE_WIDTH * height;
+    if pixels.len() != n {
+        return Err(invalid("Texture pixels do not match 256 x rows"));
+    }
+    let mut out = vec![0; 64 + n + 4 * height];
+    let put = |b: &mut [u8], at: usize, v: usize| {
+        b[at..at + 4].copy_from_slice(&(v as u32).to_le_bytes())
+    };
+    for (at, v) in [
+        (2, TEXTURE_WIDTH),
+        (6, height),
+        (10, 64),
+        (14, n),
+        (30, 10 * (height + 1)),
+        (34, 64 + n),
+        (38, 4 * height),
+    ] {
+        put(&mut out, at, v);
+    }
+    out[64..64 + n].copy_from_slice(pixels);
+    for row in 0..height {
+        put(&mut out, 64 + n + 4 * row, 64 + row * TEXTURE_WIDTH);
+    }
+    Ok(out)
+}
+/// Whether `bytes` has the retail SH texture layout `retail_texture` writes.
+pub fn is_retail_texture(bytes: &[u8]) -> bool {
+    let field = |at| u32_at(bytes, at).ok();
+    let (Some(w), Some(h)) = (field(2), field(6)) else {
+        return false;
+    };
+    let n = w * h;
+    u16_at(bytes, 0) == Ok(0)
+        && w == TEXTURE_WIDTH
+        && (1..=TEXTURE_MAX_ROWS).contains(&h)
+        && bytes.len() == 64 + n + 4 * h
+        && [
+            (10, 64),
+            (14, n),
+            (18, 0),
+            (22, 0),
+            (26, 0),
+            (34, 64 + n),
+            (38, 4 * h),
+            (42, 0),
+        ]
+        .iter()
+        .all(|(at, v)| field(*at) == Some(*v))
+        && (0..h).all(|r| field(64 + n + 4 * r) == Some(64 + r * w))
+        && Pic::parse(bytes).is_ok_and(|p| p.paintable && p.palette.is_empty())
 }
 pub fn palette(bytes: &[u8]) -> Result<[[u8; 3]; 256]> {
     if bytes.len() != 768 || bytes.iter().any(|b| *b > 63) {

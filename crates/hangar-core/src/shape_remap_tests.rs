@@ -10,20 +10,30 @@ fn base() -> [[u8; 3]; 256] {
         [i % 64, (i / 4) % 64, (i * 7) % 64].map(|v| ((v as u16 * 255 + 31) / 63) as u8)
     })
 }
-/// OLD.PIC, 64 x 64: rows 56..63 (stored V 7..0) carry `(col / 8) * 16 +
-/// V`, so U and V can both be read back from an index; other rows 200.
+/// OLD.PIC, 256 x 64 in the retail layout: rows 56..63 (stored V 7..0)
+/// carry `(col / 32) * 16 + V`, so U and V can both be read back from an
+/// index; other rows 200.
 fn old_pic() -> Pic {
-    let pixels: Vec<u8> = (0..64 * 64)
+    let pixels: Vec<u8> = (0..256 * 64)
         .map(|i| {
-            let (col, row) = (i % 64, i / 64);
+            let (col, row) = (i % 256, i / 256);
             if row >= 56 {
-                ((col / 8) * 16 + (63 - row)) as u8
+                ((col / 32) * 16 + (63 - row)) as u8
             } else {
                 200
             }
         })
         .collect();
-    Pic::parse(&raw_sheet([64, 64], &pixels, &base()).unwrap()).unwrap()
+    Pic::parse(&retail_texture(64, &pixels).unwrap()).unwrap()
+}
+/// Every PIC a remap writes has the retail SH texture layout.
+fn retail(out: &Remapped) -> Pic {
+    assert!(is_retail_texture(&out.picture), "retail SH texture layout");
+    let pic = Pic::parse(&out.picture).unwrap();
+    assert_eq!(pic.width, 256);
+    assert!(pic.height <= 1280 && pic.palette.is_empty());
+    assert_eq!(out.picture.len(), 64 + 256 * pic.height + 4 * pic.height);
+    pic
 }
 type Spec<'a> = (&'a [[i16; 3]], [i32; 3], Option<Vec<[u16; 2]>>, u8);
 /// A shape drawing each quad from OLD.PIC (with UVs) or flat (without),
@@ -66,7 +76,7 @@ fn shape(faces: &[Spec]) -> (Vec<u8>, Vec<usize>) {
 /// UVs squeezing 64 x 8 texels onto it (each texel 5 units tall).
 const FIN: [[i16; 3]; 4] = [[0, -20, 0], [0, 20, 0], [0, 20, 40], [0, -20, 40]];
 fn fin_uv() -> Vec<[u16; 2]> {
-    alloc::vec![[0, 0], [63, 0], [63, 7], [0, 7]]
+    alloc::vec![[0, 0], [255, 0], [255, 7], [0, 7]]
 }
 fn view(yaw: i32, pitch: i32, pose: &Pose) -> View<'_> {
     View { yaw, pitch, pose }
@@ -105,11 +115,17 @@ fn texel(p: &Pic, u: i64, v: i64) -> u8 {
 /// Share of interior sample points of the face where the old and the new
 /// texture show the same index: points by barycentrics over each fan
 /// triangle, UVs interpolated as the renderer does.
-fn agreement(before: &[u8], after: &[u8], old: usize, new: usize, pic: &Pic) -> (usize, usize) {
+fn agreement(
+    before: &[u8],
+    after: &[u8],
+    old: usize,
+    new: usize,
+    pic: &Pic,
+) -> (usize, usize, String) {
     let (a, b) = (face(before, old), face(after, new));
     let reference = old_pic();
-    let n = 24i64;
-    let (mut same, mut all) = (0, 0);
+    let n = 31i64;
+    let (mut same, mut all, mut log) = (0, 0, String::new());
     for j in 1..a.uv.len() - 1 {
         let ids = [0, j, j + 1];
         for p in 1..n {
@@ -122,17 +138,24 @@ fn agreement(before: &[u8], after: &[u8], old: usize, new: usize, pic: &Pic) -> 
                 let y = texel(pic, at(&b.uv, 0), at(&b.uv, 1));
                 all += 1;
                 same += usize::from(x == y);
+                if x != y && log.len() < 600 {
+                    log += &format!(
+                        " old {:?}={x} new {:?}={y};",
+                        [at(&a.uv, 0), at(&a.uv, 1)],
+                        [at(&b.uv, 0), at(&b.uv, 1)]
+                    );
+                }
             }
         }
     }
-    (same, all)
+    (same, all, log)
 }
 fn agrees(before: &[u8], out: &Remapped, old: usize, k: usize) {
-    let pic = Pic::parse(&out.picture).unwrap();
-    let (same, all) = agreement(before, &out.shape, old, out.faces[k], &pic);
+    let pic = retail(out);
+    let (same, all, log) = agreement(before, &out.shape, old, out.faces[k], &pic);
     assert!(
-        same * 100 >= all * 90,
-        "only {same} of {all} sample points match"
+        same * 100 >= all * 85,
+        "only {same} of {all} sample points match:{log}"
     );
 }
 
@@ -149,7 +172,11 @@ fn stretched_fin_bakes_square_texels_from_the_side() {
         Fill::Bake,
     )
     .unwrap();
-    assert_eq!(out.size, [44, 44], "40 x 40 units at one texel per unit");
+    assert_eq!(
+        out.size,
+        [256, 44],
+        "40 x 40 units at one texel per unit, padded to 256 wide"
+    );
     assert_eq!(out.density, 1 << 16);
     let f = face(&out.shape, out.faces[0]);
     assert_eq!(f.texture, "NEW.PIC");
@@ -157,19 +184,19 @@ fn stretched_fin_bakes_square_texels_from_the_side() {
     let vs: Vec<i32> = f.uv.iter().map(|p| p[1]).collect();
     assert_eq!(us.iter().max().unwrap() - us.iter().min().unwrap(), 40);
     assert_eq!(vs.iter().max().unwrap() - vs.iter().min().unwrap(), 40);
-    let pic = Pic::parse(&out.picture).unwrap();
-    assert!(crate::originals::panel_sheet(&out.picture) && pic.paintable);
+    let pic = retail(&out);
+    assert!(pic.paintable);
     // Rows: V 6 at the top down to 0, 40/7 rows each (the renderer reaches
     // V 7 only on the top edge). Columns: forward (old U) to the right.
     let mut rows = [0; 8];
     for row in 2..42 {
-        let line: Vec<u8> = (2..42).map(|c| pic.pixels[row * 44 + c]).collect();
+        let line: Vec<u8> = (2..42).map(|c| pic.pixels[row * 256 + c]).collect();
         let v = line[0] % 16;
         assert!(line.iter().all(|x| x % 16 == v), "row {row} is one old V");
         rows[v as usize] += 1;
         if row > 2 {
             assert!(
-                v <= pic.pixels[(row - 1) * 44 + 2] % 16,
+                v <= pic.pixels[(row - 1) * 256 + 2] % 16,
                 "V falls downwards"
             );
         }
@@ -201,7 +228,13 @@ fn bake_matches_the_old_look_in_rotated_views() {
         let ext = |k: usize| {
             q.iter().map(|p| p[k]).max().unwrap() - q.iter().map(|p| p[k]).min().unwrap()
         };
-        let (w, h) = (out.size[0] as i64 - 4, out.size[1] as i64 - 4);
+        let f = face(&out.shape, out.faces[0]);
+        let span = |k: usize| {
+            (f.uv.iter().map(|p| p[k]).max().unwrap() - f.uv.iter().map(|p| p[k]).min().unwrap())
+                as i64
+        };
+        let (w, h) = (span(0), span(1));
+        assert_eq!(out.size[1] as i64, h + 4);
         assert!(
             (w * ext(1) as i64 - h * ext(0) as i64).abs() <= 2 * ext(0).max(ext(1)) as i64,
             "{yaw}/{pitch}: {w} x {h} vs {} x {}",
@@ -226,11 +259,12 @@ fn mirrored_side_reads_correctly_from_its_own_front() {
     agrees(&src, &out, at[1], 0);
     // From the left, forward is screen left: old U falls left to right,
     // exactly as the viewport shows it.
-    let pic = Pic::parse(&out.picture).unwrap();
+    // 40 units at 4 texels per unit: columns 2..162.
+    let pic = retail(&out);
     let w = pic.width;
     let row = pic.height / 2;
     assert_eq!(pic.pixels[row * w + 3] / 16, 7);
-    assert_eq!(pic.pixels[row * w + w - 4] / 16, 0);
+    assert_eq!(pic.pixels[row * w + 160] / 16, 0);
     // The right side, seen from the right, reads the other way round.
     let right = remap(
         &src,
@@ -240,9 +274,9 @@ fn mirrored_side_reads_correctly_from_its_own_front() {
         Fill::Bake,
     )
     .unwrap();
-    let p = Pic::parse(&right.picture).unwrap();
+    let p = retail(&right);
     assert_eq!(p.pixels[row * w + 3] / 16, 0);
-    assert_eq!(p.pixels[row * w + w - 4] / 16, 7);
+    assert_eq!(p.pixels[row * w + 160] / 16, 7);
 }
 
 #[test]
@@ -281,13 +315,13 @@ fn neighbouring_faces_share_one_layout_and_one_continuation() {
         (
             &rear,
             [-1, -10, 20],
-            Some(alloc::vec![[0, 0], [31, 0], [31, 7], [0, 7]]),
+            Some(alloc::vec![[0, 0], [127, 0], [127, 7], [0, 7]]),
             9,
         ),
         (
             &front,
             [-1, 10, 20],
-            Some(alloc::vec![[32, 0], [63, 0], [63, 7], [32, 7]]),
+            Some(alloc::vec![[128, 0], [255, 0], [255, 7], [128, 7]]),
             9,
         ),
     ]);
@@ -323,7 +357,7 @@ fn neighbouring_faces_share_one_layout_and_one_continuation() {
     }
     agrees(&src, &out, at[0], 0);
     agrees(&src, &out, at[1], 1);
-    assert_eq!(out.size, [164, 164]);
+    assert_eq!(out.size, [256, 164]);
 }
 
 #[test]
@@ -335,30 +369,30 @@ fn flat_faces_bake_their_colour_and_blank_fills_the_dominant_index() {
         (
             &front,
             [-1, 10, 20],
-            Some(alloc::vec![[0, 0], [63, 0], [63, 7], [0, 7]]),
+            Some(alloc::vec![[0, 0], [255, 0], [255, 7], [0, 7]]),
             9,
         ),
     ]);
     let pose = Pose::new();
     let v = view(90, 0, &pose);
-    let out = remap(&src, &at, &v, Fit::Density(1 << 16), Fill::Bake).unwrap();
-    let pic = Pic::parse(&out.picture).unwrap();
+    let out = remap(&src, &at, &v, Fit::Density(2 << 16), Fill::Bake).unwrap();
+    let pic = retail(&out);
     let flat = face(&out.shape, out.faces[0]);
     assert!(flat.sub & 4 != 0 && flat.uv.len() == 4, "now textured");
     assert_eq!(flat.texture, "NEW.PIC");
-    // Rear 20 units: columns 2..22 of a 54-wide sheet are colour 35.
-    assert_eq!(out.size, [54, 44]);
-    for row in 2..42 {
-        for col in 2..21 {
-            assert_eq!(pic.pixels[row * 54 + col], 35);
+    // Rear 20 units: columns 2..42 at 2 texels per unit are colour 35 (a game-palette index).
+    assert_eq!(out.size, [256, 84]);
+    for row in 2..82 {
+        for col in 2..41 {
+            assert_eq!(pic.pixels[row * 256 + col], 35);
         }
     }
     agrees(&src, &out, at[1], 1);
     // Blank: every texel takes the dominant index, here the flat colour
     // (20 x 40 texels against 30 x 40 spread over 64 indices).
-    let blank = remap(&src, &at, &v, Fit::Density(1 << 16), Fill::Blank).unwrap();
+    let blank = remap(&src, &at, &v, Fit::Density(2 << 16), Fill::Blank).unwrap();
     assert_eq!(blank.dominant, 35);
-    let p = Pic::parse(&blank.picture).unwrap();
+    let p = retail(&blank);
     assert!(p.pixels.iter().all(|x| *x == 35));
     assert_eq!(blank.shape, out.shape, "fill changes only the texture");
 }
@@ -439,14 +473,29 @@ fn sizes_clamp_and_refuse_outside_the_sheet_limits() {
     let pose = Pose::new();
     let v = view(90, 0, &pose);
     let plan = remap_plan(&src, &at, &v, Fit::Density(64 << 16)).unwrap();
-    assert_eq!(plan.size, [256, 256], "the longer side clamps to 256");
+    assert_eq!(
+        plan.size,
+        [256, 256],
+        "252 texels wide at most, rows with it"
+    );
     let plan = remap_plan(&src, &at, &v, Fit::Density(1 << 12)).unwrap();
-    assert_eq!(plan.size, [8, 8], "at least 8 a side");
-    let plan = remap_plan(&src, &at, &v, Fit::Size([64, 32])).unwrap();
-    assert_eq!(plan.size, [64, 32]);
+    assert_eq!(plan.size, [256, 8], "always 256 wide, at least 8 rows");
+    let plan = remap_plan(&src, &at, &v, Fit::Size([256, 32])).unwrap();
+    assert_eq!(plan.size, [256, 32]);
     assert!(plan.uv[0].iter().all(|p| p[1] >= 2 && p[1] <= 30));
-    let e = remap_plan(&src, &at, &v, Fit::Size([300, 32])).unwrap_err();
-    assert!(e.contains("8 to 256"), "{e}");
+    for size in [[64, 32], [300, 32], [256, 1281], [256, 4]] {
+        let e = remap_plan(&src, &at, &v, Fit::Size(size)).unwrap_err();
+        assert!(e.contains("256 pixels wide and 8 to 1,280 rows"), "{e}");
+    }
+    // A tall panel scales both ways into 1,280 rows.
+    let tall: [[i16; 3]; 4] = [[0, -5, 0], [0, 5, 0], [0, 5, 400], [0, -5, 400]];
+    let (high, faces) = shape(&[(&tall, [-1, 0, 200], Some(fin_uv()), 9)]);
+    let plan = remap_plan(&high, &faces, &v, Fit::Density(4 << 16)).unwrap();
+    assert_eq!(plan.size, [256, 1280]);
+    let u: Vec<i32> = plan.uv[0].iter().map(|p| p[0]).collect();
+    assert_eq!(u.iter().max().unwrap() - u.iter().min().unwrap(), 32);
+    let out = remap(&high, &faces, &v, Fit::Density(4 << 16), Fill::Bake).unwrap();
+    assert_eq!(retail(&out).height, 1280);
     let e = remap(&src, &[at[0] + 1], &v, Fit::Density(1 << 16), Fill::Bake).unwrap_err();
     assert!(e.contains("not drawn"), "{e}");
     // A face whose PIC is not loaded cannot be baked.

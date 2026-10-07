@@ -1,9 +1,14 @@
-//! Remap from view: give the selected faces a new raw PIC laid out as the
+//! Remap from view: give the selected faces a new PIC laid out as the
 //! viewport shows them. The faces' corners go through the viewport camera
 //! (`model::view_point`, orthographic), so the new texture is the screen
 //! image of the panels: screen right is U, screen up is V (stored V runs up,
 //! so PIC row 0 is the top of the view). Texels are square at the shape's
 //! texel density, which undoes UVs that stretch a panel in space.
+//!
+//! The PIC has the retail SH texture layout (`picture::retail_texture`):
+//! 256 wide with a row table and no palette, at most 1,280 rows. The
+//! panels sit at the left of the sheet inside a margin; the rest of each
+//! row is padding.
 //!
 //! **Bake** fills each texel the faces cover from what they draw now: the
 //! texel centre is located in the face's new UV triangle (the same fan the
@@ -19,9 +24,8 @@
 use crate::{
     invalid,
     model::{view_point, Model, Pose},
-    picture::Pic,
-    shape_edit::raw_sheet,
-    shape_texture::{assign_texture_uvs, Fit, PANEL_MAX, PANEL_MIN},
+    picture::{is_retail_texture, retail_texture, Pic, TEXTURE_MAX_ROWS, TEXTURE_WIDTH},
+    shape_texture::{assign_texture_uvs, Fit},
     Result,
 };
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
@@ -50,6 +54,8 @@ pub struct Sources<'a> {
 }
 /// Pixels kept clear around the panels on each side.
 pub const MARGIN: u32 = 2;
+/// Fewest rows a remapped texture gets.
+pub const MIN_ROWS: u32 = 8;
 /// A face's projected area must be at least 1/EDGE_ON of its true area
 /// (it faces the view within about 75 degrees).
 pub const EDGE_ON: i128 = 4;
@@ -85,7 +91,7 @@ pub struct Plan {
 #[derive(Clone, Debug)]
 pub struct Remapped {
     pub shape: Vec<u8>,
-    /// The new PIC (raw kind 0, full palette).
+    /// The new PIC, in the retail SH texture layout.
     pub picture: Vec<u8>,
     /// New file offsets of `Plan::faces`, in order.
     pub faces: Vec<usize>,
@@ -142,8 +148,9 @@ fn area2(points: &[[i64; 2]]) -> i128 {
 }
 /// Plan a remap: project the faces as the view shows them, refuse faces
 /// seen edge-on or from behind, and fit the layout into a PIC with square
-/// texels (`Fit::Density`, clamped to 8..256 per side with a margin, or a
-/// given `Fit::Size`).
+/// texels: `Fit::Density` scales the panels into 252 x 1,276 texels at
+/// most (both sides together) inside a 2-pixel margin of a 256-wide sheet
+/// of 8 to 1,280 rows; `Fit::Size` must be 256 wide.
 pub fn remap_plan(source: &[u8], faces: &[usize], view: &View, fit: Fit) -> Result<Plan> {
     if faces.is_empty() {
         return Err(invalid("Select panels to remap"));
@@ -235,24 +242,27 @@ pub fn remap_plan(source: &[u8], faces: &[usize], view: &View, fit: Fit) -> Resu
         return Err(invalid("The panels have no extent in this view"));
     }
     let m = MARGIN as i128;
-    let (min, max) = (PANEL_MIN as i128, PANEL_MAX as i128);
+    let (width, rows) = (TEXTURE_WIDTH as i128, TEXTURE_MAX_ROWS as i128);
     let (size, content) = match fit {
         Fit::Density(d) => {
             let d = d.max(1) as i128;
             // Proj units are 1/256 unit; density is Q16: 2^24 in all.
             let mut c = e.map(|x| ((x * d + (1 << 24) - 1) >> 24).max(1));
-            let big = c[0].max(c[1]);
-            let inner = max - 2 * m;
-            if big > inner {
-                c = c.map(|x| ((x * inner + big / 2) / big).max(1));
+            // Both sides scale together into 252 x 1,276 inside the margin.
+            let room = [width - 2 * m, rows - 2 * m];
+            if c[0] * room[1] >= c[1] * room[0] && c[0] > room[0] {
+                c = [room[0], ((c[1] * room[0] + c[0] / 2) / c[0]).max(1)];
+            } else if c[1] > room[1] {
+                c = [((c[0] * room[1] + c[1] / 2) / c[1]).max(1), room[1]];
             }
-            let size = c.map(|x| (x + 2 * m).clamp(min, max) as u32);
-            (size, c)
+            let h = (c[1] + 2 * m).clamp(MIN_ROWS as i128, rows) as u32;
+            ([TEXTURE_WIDTH as u32, h], c)
         }
         Fit::Size(s) => {
-            if s.iter().any(|v| !(PANEL_MIN..=PANEL_MAX).contains(v)) {
+            if s[0] != TEXTURE_WIDTH as u32 || !(MIN_ROWS..=TEXTURE_MAX_ROWS as u32).contains(&s[1])
+            {
                 return Err(format!(
-                    "Remapped textures are {PANEL_MIN} to {PANEL_MAX} pixels a side"
+                    "SH textures are {TEXTURE_WIDTH} pixels wide and {MIN_ROWS} to 1,280 rows"
                 ));
             }
             (s, s.map(|v| v as i128 - 2 * m))
@@ -265,7 +275,9 @@ pub fn remap_plan(source: &[u8], faces: &[usize], view: &View, fit: Fit) -> Resu
         (content[1], e[1])
     };
     let map = |x: i128| -> i128 { (2 * x * num + den) / (2 * den) };
-    let off = [0, 1].map(|k| m + (content[k] - map(e[k])).max(0) / 2);
+    // Left-aligned in the 256-wide sheet (the rest is padding), centred
+    // vertically.
+    let off = [m, m + (content[1] - map(e[1])).max(0) / 2];
     let density = ((num << 24) / den).clamp(1, u32::MAX as i128) as u32;
     let uv: Vec<Vec<[i32; 2]>> = projected
         .iter()
@@ -309,40 +321,37 @@ fn nearest(palette: &[[u8; 3]; 256], rgb: [u8; 3]) -> u8 {
         })
         .unwrap_or(0) as u8
 }
-/// Index map from `from` colours into `to`: identity where they agree.
-fn translate(from: &[[u8; 3]; 256], to: &[[u8; 3]; 256]) -> [u8; 256] {
-    core::array::from_fn(|i| {
-        if from[i] == to[i] {
-            i as u8
-        } else {
-            nearest(to, from[i])
-        }
-    })
+/// Index map from `pic`'s colours (its palette over `base`) into `base`:
+/// identity where they agree. On the heap: the CRT-free x86_64 build has
+/// no stack probes.
+fn translate(pic: &Pic, base: &[[u8; 3]; 256]) -> Vec<u8> {
+    (0..256)
+        .map(|i| match pic.palette.get(i) {
+            Some(c) if *c != base[i] => nearest(base, *c),
+            _ => i as u8,
+        })
+        .collect()
 }
-/// The baked raster (row 0 at the top), its palette and coverage counts.
+/// The baked raster (row 0 at the top) in game-palette indices, and its
+/// coverage counts.
 struct Baked {
     pixels: Vec<u8>,
-    palette: [[u8; 3]; 256],
     covered: usize,
     shared: usize,
     dominant: u8,
 }
+#[inline(never)]
 fn bake(plan: &Plan, fill: Fill, sources: &Sources) -> Result<Baked> {
+    // SH textures carry no palette: pixels are game-palette indices. A PIC
+    // with its own palette is translated to the nearest base colours
+    // (identity where they agree); flat colours are base indices already.
     let base = sources.palette;
     let pic = |name: &str| -> Result<&Pic> {
         sources.textures.get(name).ok_or_else(|| {
             format!("{name} is not loaded; open the LIB that holds it to remap its faces")
         })
     };
-    // The palette of the first textured face's PIC, else the base palette.
-    let palette = match plan.old.iter().find_map(|o| match o {
-        Old::Texture { name, .. } => Some(name),
-        Old::Flat(_) => None,
-    }) {
-        Some(name) => pic(name)?.colors(base),
-        None => *base,
-    };
-    let flat = translate(base, &palette);
+    let flat: Vec<u8> = (0..=255).collect();
     let [w, h] = plan.size.map(|v| v as usize);
     let mut out = alloc::vec![0u8; w * h];
     let mut depth = alloc::vec![i64::MIN; w * h];
@@ -355,9 +364,9 @@ fn bake(plan: &Plan, fill: Fill, sources: &Sources) -> Result<Baked> {
         let (src, table) = match old {
             Old::Texture { name, .. } => {
                 let p = pic(name)?;
-                (Some(p), translate(&p.colors(base), &palette))
+                (Some(p), translate(p, base))
             }
-            Old::Flat(_) => (None, flat),
+            Old::Flat(_) => (None, flat.clone()),
         };
         let uv = &plan.uv[k];
         let z = &plan.depth[k];
@@ -437,7 +446,7 @@ fn bake(plan: &Plan, fill: Fill, sources: &Sources) -> Result<Baked> {
         return Err(invalid("The panels cover no texel of the new texture"));
     }
     let shared = seen.iter().filter(|s| s.1 >= 2).count();
-    let mut counts = [0usize; 256];
+    let mut counts = alloc::vec![0usize; 256];
     for i in 0..w * h {
         if owner[i] != usize::MAX {
             counts[out[i] as usize] += 1;
@@ -485,7 +494,6 @@ fn bake(plan: &Plan, fill: Fill, sources: &Sources) -> Result<Baked> {
     }
     Ok(Baked {
         pixels: out,
-        palette,
         covered,
         shared,
         dominant,
@@ -507,7 +515,7 @@ pub fn remap_from_view(
 ) -> Result<Remapped> {
     let plan = remap_plan(source, faces, view, fit)?;
     let baked = bake(&plan, fill, sources)?;
-    let picture = raw_sheet(plan.size, &baked.pixels, &baked.palette)?;
+    let picture = retail_texture(plan.size[1] as usize, &baked.pixels)?;
     let assigned = assign_texture_uvs(source, &plan.faces, name, &plan.uv)?;
     let key = texture_key(name);
     let model = Model::with_pose(&assigned.shape, view.pose)?;
@@ -524,9 +532,9 @@ pub fn remap_from_view(
         }
     }
     let pic = Pic::parse(&picture)?;
-    if [pic.width as u32, pic.height as u32] != plan.size || !pic.paintable {
+    if [pic.width as u32, pic.height as u32] != plan.size || !is_retail_texture(&picture) {
         return Err(invalid(
-            "The new texture did not re-parse as a paintable PIC",
+            "The new texture did not re-parse in the retail SH texture layout",
         ));
     }
     Ok(Remapped {
