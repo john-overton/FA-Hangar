@@ -1731,6 +1731,68 @@ impl App {
         let path = format!("{out}/FIN.LIB");
         crate::platform::write_new(&path, &fin_lib)?;
         report += &format!("  wrote {path}; reopened, {org} intact\n");
+        // 3. The 3D Replace brush on a tail face, then the eraser over it.
+        self.act(Action::Undo);
+        if self.doc.changed_count() != 0 {
+            return Err("Undo did not return to the opened LIB".into());
+        }
+        if self.mesh_edit {
+            self.act(Action::MeshMode);
+        }
+        self.act(Action::ModelPaint);
+        self.act(Action::ReplaceTool);
+        let face = m
+            .faces
+            .iter()
+            .position(|f| f.offset == fins[0])
+            .ok_or("Tail face lost")?;
+        let uv = m.faces[face].uv.clone();
+        let n = uv.len().max(1) as i32;
+        let point = [
+            uv.iter().map(|q| q[0]).sum::<i32>() / n,
+            p0.height as i32 - 1 - uv.iter().map(|q| q[1]).sum::<i32>() / n,
+        ];
+        let from = p0.pixels[point[1] as usize * p0.width + point[0] as usize];
+        self.replace.from = Some(from);
+        self.replace.tolerance = 0;
+        self.brush = vivid(from);
+        self.brush_radius = 7;
+        self.selected_face = Some(face);
+        self.paint_model_hit(face, point);
+        if !self.painting {
+            return Err(self.status.clone());
+        }
+        self.finish_stroke();
+        let status = self.status.clone();
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let brushed = self.doc.archive.entries[at].read()?;
+        let set = matching(&colors, from, 0);
+        let (a, b) = (Pic::parse(&original)?, Pic::parse(&brushed)?);
+        let mut dab = 0;
+        for i in 0..a.pixels.len() {
+            if a.pixels[i] != b.pixels[i] {
+                if !set[a.pixels[i] as usize] || b.pixels[i] != self.brush {
+                    return Err(format!("3D Replace changed pixel {i} outside the match"));
+                }
+                dab += 1;
+            }
+        }
+        self.eraser = true;
+        self.replace.on = false;
+        self.selected_face = Some(face);
+        self.paint_model_hit(face, point);
+        self.finish_stroke();
+        self.eraser = false;
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let erased = self.doc.archive.entries[at].read()? == original
+            && self.doc.archive.find(&org).is_none()
+            && self.doc.changed_count() == 0;
+        report += &format!(
+            "  3D Replace brush (15 px) on a tail face: {dab} pixels of index {from}, only matching pixels\n  status: {status}\n  Eraser over the same dab returned the saved bytes and dropped {org}: {erased}\n"
+        );
+        if dab == 0 || !erased {
+            return Err(format!("3D Replace or eraser failed\n{report}"));
+        }
         Ok(report)
     }
 }
