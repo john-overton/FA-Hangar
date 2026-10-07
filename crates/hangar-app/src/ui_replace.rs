@@ -1418,3 +1418,319 @@ fn smoke_replace_scopes() {
     assert_eq!(a.doc.archive.bytes().unwrap(), cloned);
     assert!(a.prompt.is_none());
 }
+
+// ---------------------------------------------------------------- real-data check
+
+#[cfg(not(windows))]
+impl App {
+    /// Manual real-data check (`--replace-check`): on the shape's main PIC,
+    /// Replace color in the whole texture and then in the UV footprint of
+    /// the vertical tail's faces (Selected panels, tolerance 4). Each apply
+    /// must change only matching pixels (raster bytes only), keep X.ORG byte
+    /// for byte, undo and redo exactly, and Restore texture must return the
+    /// saved bytes. Writes before/after PNGs and two create-new LIBs to `out`.
+    pub fn check_real_replace(&mut self, shape: &str, out: &str) -> Result<String> {
+        let mut report = String::new();
+        let sh = self.doc.archive.find(shape).ok_or("SH not found")?;
+        self.select_entry(sh);
+        let model = self.model.clone().ok_or("Not a decodable SH")?;
+        let mut uses: Vec<(String, usize)> = Vec::new();
+        for f in model
+            .faces
+            .iter()
+            .filter(|f| f.sub & 4 != 0 && !f.texture.is_empty())
+        {
+            let n = texture_ui::full(&f.texture);
+            match uses.iter_mut().find(|(x, _)| *x == n) {
+                Some((_, k)) => *k += 1,
+                None => uses.push((n, 1)),
+            }
+        }
+        uses.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        let name = uses.first().ok_or("No textured faces")?.0.clone();
+        let org = originals::companion(&name).ok_or("Not a PIC")?;
+        if self.doc.archive.find(&org).is_some() {
+            return Err(format!(
+                "{org} already exists; use a LIB without stored originals"
+            ));
+        }
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let saved = self.doc.archive.entries[at].clone();
+        let original = saved.read()?;
+        let p0 = Pic::parse(&original)?;
+        let colors = p0.colors(&self.base_palette);
+        let png = |app: &App, file: &str| -> Result<String> {
+            let at = app.doc.archive.find(&name).ok_or("Texture missing")?;
+            let pic = Pic::parse(&app.doc.archive.entries[at].read()?)?;
+            let path = format!("{out}/{file}");
+            crate::platform::write_new(&path, &pic.png(&app.base_palette))?;
+            Ok(path)
+        };
+        report += &format!(
+            "{name}: {} x {}, {}, palette {}; {} of {} faces of {shape} draw from it\n",
+            p0.width,
+            p0.height,
+            if p0.mask.iter().all(|m| *m) {
+                "raw"
+            } else {
+                "span-coded"
+            },
+            if self.palette_loaded {
+                "PALETTE.PAL"
+            } else {
+                "missing"
+            },
+            uses[0].1,
+            model.faces.len()
+        );
+        report += &format!("  before: {}\n", png(self, "before.png")?);
+        // The farthest color from `from`, so the change is visible.
+        let vivid = |from: u8| -> u8 {
+            let d = |i: usize| -> i32 {
+                (0..3)
+                    .map(|k| (colors[i][k] as i32 - colors[from as usize][k] as i32).pow(2))
+                    .sum()
+            };
+            (0..256).max_by_key(|i| d(*i)).unwrap_or(0) as u8
+        };
+        // Only raster bytes change, each from a matching index to `to`.
+        let verify = |before: &[u8],
+                      after: &[u8],
+                      set: &IndexSet,
+                      to: u8,
+                      region: Option<&[bool]>|
+         -> Result<usize> {
+            let (a, b) = (Pic::parse(before)?, Pic::parse(after)?);
+            if before.len() != after.len() || before[..64] != after[..64] || a.mask != b.mask {
+                return Err("Header, size or transparency changed".into());
+            }
+            let mut pixels = 0;
+            for i in 0..a.pixels.len() {
+                if a.pixels[i] != b.pixels[i] {
+                    if !set[a.pixels[i] as usize]
+                        || b.pixels[i] != to
+                        || region.is_some_and(|r| !r[i])
+                    {
+                        return Err(format!("Pixel {i} changed outside the match"));
+                    }
+                    pixels += 1;
+                } else if set[a.pixels[i] as usize]
+                    && a.mask[i]
+                    && region.is_none_or(|r| r[i])
+                    && a.pixels[i] != to
+                {
+                    return Err(format!("Matching pixel {i} was left"));
+                }
+            }
+            let bytes = before.iter().zip(after).filter(|(x, y)| x != y).count();
+            if bytes != pixels {
+                return Err(format!("{bytes} bytes changed for {pixels} pixels"));
+            }
+            Ok(pixels)
+        };
+        let plan_total = |app: &App| -> usize {
+            match app.replace.dialog.as_ref().and_then(|d| d.plan.as_ref()) {
+                Some(Ok(list)) => list.iter().map(|(_, n)| n).sum(),
+                _ => 0,
+            }
+        };
+        // 1. Whole texture, tolerance 0: the most used opaque index.
+        let mut counts = [0usize; 256];
+        for (v, m) in p0.pixels.iter().zip(&p0.mask) {
+            if *m {
+                counts[*v as usize] += 1;
+            }
+        }
+        let from = (0..256).max_by_key(|i| counts[*i]).unwrap_or(0) as u8;
+        let to = vivid(from);
+        self.select_entry(at);
+        self.replace.tolerance = 0;
+        self.act(Action::ReplaceDialog);
+        if self.replace.dialog.is_none() {
+            return Err(self.status.clone());
+        }
+        self.act(Action::ReplaceSlot(0));
+        self.act(Action::ReplaceSwatch(from));
+        self.act(Action::ReplaceSlot(1));
+        self.act(Action::ReplaceSwatch(to));
+        let planned = plan_total(self);
+        self.key(Key::Enter, false, false);
+        if !self.status.starts_with("Replaced") {
+            return Err(self.status.clone());
+        }
+        let status = self.status.clone();
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let whole = self.doc.archive.entries[at].read()?;
+        let set = matching(&colors, from, 0);
+        let changed = verify(&original, &whole, &set, to, None)?;
+        let kept = originals::backup(&self.doc.archive, &name)
+            .ok_or("No stored original kept")?
+            .clone();
+        let org_exact =
+            kept.read()? == original && kept.same_payload(&saved) && kept.flag() == saved.flag();
+        report += &format!(
+            "  whole texture: index {from} -> {to}, tolerance 0: {changed} pixels ({} counted in the dialog, {} of that index); raster bytes only\n  status: {status}\n  {org}: byte-identical to the saved {name} (flag {}, {} B stored): {org_exact}\n",
+            planned,
+            counts[from as usize],
+            kept.flag(),
+            kept.stored_len()
+        );
+        if changed != planned || changed != counts[from as usize] || !org_exact {
+            return Err(format!("Whole-texture replace failed\n{report}"));
+        }
+        report += &format!("  after: {}\n", png(self, "whole.png")?);
+        let whole_lib = self.doc.archive.bytes()?;
+        self.act(Action::Undo);
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let undone = self.doc.archive.entries[at].read()? == original
+            && self.doc.archive.find(&org).is_none()
+            && self.doc.changed_count() == 0;
+        self.act(Action::Redo);
+        let redone = self.doc.archive.bytes()? == whole_lib;
+        self.select_entry(self.doc.archive.find(&name).ok_or("Texture missing")?);
+        self.act(Action::RestoreTexture);
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let restored = self.doc.archive.entries[at].same_storage(&saved)
+            && self.doc.archive.find(&org).is_none()
+            && self.doc.changed_count() == 0;
+        let restore_status = self.status.clone();
+        self.act(Action::Undo);
+        let reapplied = self.doc.archive.bytes()? == whole_lib;
+        report += &format!(
+            "  undo exact and {org} removed: {undone}; redo exact: {redone}; Restore texture ({restore_status}) exact and clean: {restored}; its undo exact: {reapplied}\n"
+        );
+        if !undone || !redone || !restored || !reapplied {
+            return Err(format!("Undo or Restore failed\n{report}"));
+        }
+        let path = format!("{out}/WHOLE.LIB");
+        crate::platform::write_new(&path, &whole_lib)?;
+        report += &format!("  wrote {path}\n");
+        self.act(Action::Undo);
+        if self.doc.changed_count() != 0 {
+            return Err("Undo did not return to the opened LIB".into());
+        }
+        // 2. Selected panels: the vertical tail's faces, tolerance 4.
+        let sh = self.doc.archive.find(shape).ok_or("SH not found")?;
+        self.select_entry(sh);
+        self.mode = Mode::Model;
+        self.textured = true;
+        if !self.mesh_edit {
+            self.act(Action::MeshMode);
+        }
+        self.select_mode(true);
+        let m = self.model.clone().ok_or("No model")?;
+        let (aft, fore) = m.vertices.iter().fold((i32::MAX, i32::MIN), |(a, b), v| {
+            (a.min(v.point[1]), b.max(v.point[1]))
+        });
+        let tail = aft + (fore - aft) * 3 / 10;
+        let centre = |f: &model::Face, k: usize| -> i32 {
+            f.indices
+                .iter()
+                .map(|i| m.vertices[*i].point[k])
+                .sum::<i32>()
+                / f.indices.len().max(1) as i32
+        };
+        let top = |f: &model::Face| -> i32 {
+            f.indices
+                .iter()
+                .map(|i| m.vertices[*i].point[2])
+                .max()
+                .unwrap_or(0)
+        };
+        // Tail: side-facing faces in the rear 30%, the eight reaching highest.
+        let mut ranked: Vec<(i32, usize)> = m
+            .faces
+            .iter()
+            .filter(|f| f.sub & 4 != 0 && texture_ui::full(&f.texture) == name)
+            .filter(|f| f.uv.len() == f.indices.len())
+            .filter(|f| f.normal.is_some_and(|n| n[0].abs() >= 30000))
+            .filter(|f| centre(f, 1) <= tail)
+            .map(|f| (top(f), f.offset))
+            .collect();
+        ranked.sort_unstable_by(|a, b| b.cmp(a));
+        let fins: Vec<usize> = ranked.iter().take(8).map(|(_, o)| *o).collect();
+        if fins.is_empty() {
+            return Err("No side-facing textured tail faces".into());
+        }
+        self.ed.mesh_faces = fins.clone();
+        self.sync_face_vertices();
+        let polys: Vec<&[[i32; 2]]> = m
+            .faces
+            .iter()
+            .filter(|f| fins.contains(&f.offset))
+            .map(|f| f.uv.as_slice())
+            .collect();
+        let region = footprint(p0.width, p0.height, &polys)?;
+        let mut inside = [0usize; 256];
+        for i in 0..region.len() {
+            if region[i] && p0.mask[i] {
+                inside[p0.pixels[i] as usize] += 1;
+            }
+        }
+        let from = (0..256).max_by_key(|i| inside[*i]).unwrap_or(0) as u8;
+        let to = vivid(from);
+        let tolerance = 4;
+        let set = matching(&colors, from, tolerance);
+        let similar = (0..256).filter(|i| set[*i]).count();
+        let covered = region.iter().filter(|r| **r).count();
+        self.replace.tolerance = tolerance;
+        self.act(Action::ReplaceDialog);
+        if self.replace.dialog.as_ref().map(|d| d.scope) != Some(SCOPE_PANELS) {
+            return Err(format!(
+                "Dialog did not open on the selected panels: {}",
+                self.status
+            ));
+        }
+        self.act(Action::ReplaceSlot(0));
+        self.act(Action::ReplaceSwatch(from));
+        self.act(Action::ReplaceSlot(1));
+        self.act(Action::ReplaceSwatch(to));
+        let planned = plan_total(self);
+        self.key(Key::Enter, false, false);
+        if !self.status.starts_with("Replaced") {
+            return Err(self.status.clone());
+        }
+        let status = self.status.clone();
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let fin = self.doc.archive.entries[at].read()?;
+        let changed = verify(&original, &fin, &set, to, Some(&region))?;
+        let outside = (0..region.len())
+            .filter(|i| !region[*i] && set[p0.pixels[*i] as usize] && p0.mask[*i])
+            .count();
+        let kept = originals::backup(&self.doc.archive, &name)
+            .ok_or("No stored original kept")?
+            .clone();
+        let org_exact = kept.read()? == original && kept.flag() == saved.flag();
+        report += &format!(
+            "  tail panels: {} faces, footprint {covered} pixels; index {from} -> {to}, tolerance {tolerance} ({similar} indices): {changed} pixels ({planned} counted), {outside} matching pixels outside the footprint untouched\n  status: {status}\n  {org} byte-identical: {org_exact}\n",
+            fins.len()
+        );
+        if changed != planned || changed == 0 || !org_exact {
+            return Err(format!("Panel replace failed\n{report}"));
+        }
+        report += &format!("  after: {}\n", png(self, "fin.png")?);
+        let fin_lib = self.doc.archive.bytes()?;
+        self.act(Action::Undo);
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let undone = self.doc.archive.entries[at].read()? == original
+            && self.doc.archive.find(&org).is_none()
+            && self.doc.changed_count() == 0;
+        self.act(Action::Redo);
+        let redone = self.doc.archive.bytes()? == fin_lib;
+        report += &format!("  undo exact: {undone}; redo exact: {redone}\n");
+        if !undone || !redone {
+            return Err(format!("Panel undo failed\n{report}"));
+        }
+        let reopened = Archive::parse(fin_lib.clone())?;
+        let r = reopened
+            .find(&org)
+            .ok_or("Stored original lost on repack")?;
+        if reopened.entries[r].read()? != original {
+            return Err("Stored original changed on repack".into());
+        }
+        let path = format!("{out}/FIN.LIB");
+        crate::platform::write_new(&path, &fin_lib)?;
+        report += &format!("  wrote {path}; reopened, {org} intact\n");
+        Ok(report)
+    }
+}
