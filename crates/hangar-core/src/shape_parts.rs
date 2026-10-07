@@ -4,9 +4,10 @@
 //! authors stub code: it finds the parameter fields of stubs the inventory's
 //! evaluator fully understands (`Stub::unrecognised` is `None`) for reviewed
 //! aircraft variables, and changes one field at the same size. Allowed values
-//! come from the FA_2.LIB stub census; anything without a same-size encoding
-//! in that census is reported read-only with its reason. Every edit re-parses
-//! the inventory and checks that the binding now reports the new value.
+//! come from the FA_2.LIB stub census. Gear laws additionally take a small set
+//! of same-size encodings of their shift and NEG slot that the census does
+//! not contain; those carry `retail: false`. Every edit re-parses the
+//! inventory and checks that the binding now reports the new value.
 use crate::{
     invalid,
     model::Model,
@@ -16,7 +17,7 @@ use crate::{
     },
     slice, u16_at, Result,
 };
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::BTreeSet, string::String, vec::Vec};
 
 /// Rotation word written by an xform store, by its offset from C4+2.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -57,8 +58,8 @@ pub enum Setting {
     Branch { index: usize, equal: bool },
     /// Amount of the stub's `index`-th arithmetic right shift.
     Shift { index: usize, amount: u8 },
-    /// Whether the law negates its value; never editable in place.
-    Direction { negated: bool },
+    /// Whether the `index`-th store's law ends in a NEG.
+    Direction { index: usize, negated: bool },
     /// Rotation word of the stub's `index`-th store.
     Axis { index: usize, axis: Axis },
     /// C4/C6 translation in model order (right, forward, up).
@@ -69,7 +70,7 @@ pub enum Setting {
 pub enum Allowed {
     /// Any of these values (compare immediates, shift amounts).
     Values(Vec<i32>),
-    /// Either branch sense.
+    /// Either branch sense, or either direction.
     Either,
     Axes(Vec<Axis>),
     /// Each component within this inclusive range.
@@ -85,6 +86,25 @@ pub struct Control {
     pub allowed: Allowed,
     /// File offset of the field.
     pub at: usize,
+    /// The current encoding occurs in the FA_2.LIB stub census. False for
+    /// Hangar's same-size forms, which the stub evaluator proves but which
+    /// are not yet verified in the game.
+    pub retail: bool,
+    /// Allowed values whose encoding the census does not contain: shift
+    /// amounts, 0/1 for a direction (negated), axis numbers 0..2.
+    pub unseen: Vec<i32>,
+}
+impl Control {
+    fn new(label: &str, setting: Setting, allowed: Allowed, at: usize) -> Self {
+        Self {
+            label: label.into(),
+            setting,
+            allowed,
+            at,
+            retail: true,
+            unseen: Vec::new(),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Role {
@@ -133,6 +153,13 @@ pub struct PartInfo {
     /// Why the stub's fields cannot be edited at all, if they cannot.
     pub locked: Option<String>,
 }
+impl PartInfo {
+    /// False when some control currently uses an encoding the retail
+    /// census does not contain.
+    pub fn retail(&self) -> bool {
+        self.controls.iter().all(|c| c.retail)
+    }
+}
 /// Compare immediates observed per variable in the FA_2.LIB stub census.
 const COMPARES: &[(&str, &[i32])] = &[
     ("_PLgearDown", &[0, 1, 4]),
@@ -146,16 +173,19 @@ const COMPARES: &[(&str, &[i32])] = &[
     ("_PLvtOn", &[0]),
     ("_PLslats", &[0]),
 ];
-/// Variables whose xform laws drive aircraft parts.
-const LAWS: &[&str] = &[
-    "_PLgearPos",
-    "_PLswingWing",
-    "_PLcanardPos",
-    "_PLbayDoorPos",
-    "_PLvtAngle",
+/// Variables whose xform laws drive aircraft parts, with the C1 shift
+/// amounts and rotation words (Axis order) the census shows for them.
+type LawCensus = (&'static str, &'static [u8], &'static [usize]);
+const LAWS: &[LawCensus] = &[
+    ("_PLgearPos", &[2, 3], &[0, 1, 2]),
+    ("_PLswingWing", &[2, 5], &[0]),
+    ("_PLcanardPos", &[], &[1]),
+    ("_PLbayDoorPos", &[], &[2]),
+    ("_PLvtAngle", &[], &[1]),
 ];
+const GEAR_LAW: &str = "_PLgearPos";
 fn reviewed(variable: &str) -> bool {
-    COMPARES.iter().any(|(v, _)| *v == variable) || LAWS.contains(&variable)
+    COMPARES.iter().any(|(v, _)| *v == variable) || LAWS.iter().any(|(v, ..)| *v == variable)
 }
 fn insns(code: &[u8], blocks: &[(usize, usize)]) -> Result<Vec<Insn>> {
     let mut out = Vec::new();
@@ -173,12 +203,248 @@ fn insns(code: &[u8], blocks: &[(usize, usize)]) -> Result<Vec<Insn>> {
     out.sort_unstable_by_key(|i| i.at);
     Ok(out)
 }
+
+// ---------------------------------------------------------------- gear law slots
+
+/// A gear law slot: the `sar ax` right before a C4 word store plus the NEG
+/// or no-op that may follow it. Its size never changes; within it Hangar
+/// writes one of the forms of `slot_bytes`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Slot {
+    /// CODE offset of the sar.
+    at: usize,
+    size: usize,
+    shift: u8,
+    neg: bool,
+    /// Index of the sar among the stub's shifts and of the store among its stores.
+    shift_index: usize,
+    store_index: usize,
+    /// C4 word the store writes (3 + axis).
+    word: usize,
+}
+const NEG_AX: [u8; 3] = [0x66, 0xf7, 0xd8];
+/// `mov ax, ax`: the 3-byte no-op that takes NEG's place.
+const MOV_AX: [u8; 3] = [0x66, 0x89, 0xc0];
+/// `xchg ax, ax`: the 2-byte filler after a 4-byte C1 shift in a 6-byte slot.
+const NOP_AX: [u8; 2] = [0x66, 0x90];
+/// The bytes of a `size`-byte gear law slot for `sar ax, n` and an optional
+/// NEG, or `None` when that combination does not fit. Shift 1 keeps the
+/// 3-byte D1 form where it can, so a census slot returns to its exact bytes.
+///
+/// | size | census form         | reachable                                       |
+/// |------|---------------------|-------------------------------------------------|
+/// | 3    | `D1 F8`             | sar 1                                           |
+/// | 4    | `C1 F8 n`           | sar 1..3                                        |
+/// | 6    | `D1 F8`, NEG        | sar 1 with NEG or `mov ax,ax`; sar 2..3, `66 90` |
+/// | 7    | `C1 F8 n`, NEG      | sar 1..3 with NEG or `mov ax,ax`                |
+fn slot_bytes(size: usize, n: u8, neg: bool) -> Option<Vec<u8>> {
+    if !(1..=3).contains(&n) {
+        return None;
+    }
+    let tail: &[u8] = if neg { &NEG_AX } else { &MOV_AX };
+    let c1 = [0x66, 0xc1, 0xf8, n];
+    let d1 = [0x66, 0xd1, 0xf8];
+    match size {
+        3 => (n == 1 && !neg).then(|| d1.to_vec()),
+        4 => (!neg).then(|| c1.to_vec()),
+        6 if n == 1 => Some([&d1[..], tail].concat()),
+        6 => (!neg).then(|| [&c1[..], &NOP_AX[..]].concat()),
+        7 => Some([&c1[..], tail].concat()),
+        _ => None,
+    }
+}
+/// Whether that form occurs in the FA_2.LIB gear census.
+fn slot_retail(size: usize, n: u8, neg: bool) -> bool {
+    match size {
+        3 => true,
+        4 => n >= 2,
+        6 => n == 1 && neg,
+        7 => n >= 2 && neg,
+        _ => false,
+    }
+}
+fn is_sar(i: &Insn) -> bool {
+    matches!((i.op, i.ext, i.rm), (0xc1 | 0xd1, 7, Some(Rm::Reg(_))))
+}
+/// A C4 word store `mov [ebx+d], r16`; returns d (from C4+2).
+fn store_disp(i: &Insn) -> Option<i32> {
+    match (i.op, i.rm) {
+        (
+            0x89,
+            Some(Rm::Mem(Mem::Reg {
+                base: Some(3),
+                index: None,
+                disp,
+            })),
+        ) if i.word => Some(disp),
+        _ => None,
+    }
+}
+/// The gear law slots among a stub's instructions (sorted by address).
+fn law_slots(list: &[Insn]) -> Vec<Slot> {
+    let mut out = Vec::new();
+    let mut stores = 0;
+    // The instruction before `list[j]`, when it ends exactly where that starts.
+    let before = |j: usize| {
+        j.checked_sub(1)
+            .map(|p| &list[p])
+            .filter(|p| p.end() == list[j].at)
+    };
+    for (k, i) in list.iter().enumerate() {
+        let Some(disp) = store_disp(i) else { continue };
+        let store_index = stores;
+        stores += 1;
+        let (Some(axis), 0) = (Axis::of(disp), i.reg) else {
+            continue;
+        };
+        let Some(p) = before(k) else { continue };
+        let tail = match (p.op, p.ext, p.rm, p.len, p.word) {
+            (0xf7, 3, Some(Rm::Reg(0)), 3, true) => Some(true),
+            (0x89, _, Some(Rm::Reg(0)), 3, true) if p.reg == 0 => Some(false),
+            (0x90, _, None, 2, true) => Some(false),
+            _ => None,
+        };
+        let sar_k = if tail.is_some() { k - 1 } else { k };
+        let Some(sar) = before(sar_k) else { continue };
+        let shift = match (sar.op, sar.ext, sar.rm, sar.len, sar.word) {
+            (0xd1, 7, Some(Rm::Reg(0)), 3, true) => 1,
+            (0xc1, 7, Some(Rm::Reg(0)), 4, true) => sar.imm.unwrap_or(0).clamp(0, 31) as u8,
+            _ => continue,
+        };
+        if p.op == 0x90 && sar.op != 0xc1 {
+            continue;
+        }
+        // A branch into the slot would split a rewritten instruction.
+        if list
+            .iter()
+            .any(|j| j.rel.is_some_and(|t| t > sar.at as i64 && t < i.at as i64))
+        {
+            continue;
+        }
+        out.push(Slot {
+            at: sar.at,
+            size: i.at - sar.at,
+            shift,
+            neg: tail == Some(true),
+            shift_index: list[..sar_k - 1].iter().filter(|x| is_sar(x)).count(),
+            store_index,
+            word: 3 + axis as usize,
+        });
+    }
+    out
+}
+fn shift_fixed(slot: &Slot) -> String {
+    match slot.size {
+        3 => "Shift 1 uses the 3-byte D1 form; 2 or 3 need the 4-byte C1 form and this law has no NEG slot to give up".into(),
+        6 => "Shift 2 or 3 with NEG needs 7 bytes and this law slot has 6; reverse the direction first".into(),
+        n => format!("No other shift fits this {n}-byte law slot"),
+    }
+}
+fn direction_fixed(slot: &Slot) -> String {
+    match slot.size {
+        6 => format!(
+            "NEG with shift {} needs 7 bytes and this law slot has 6; set shift 1 first",
+            slot.shift
+        ),
+        n => format!("Reversing needs a 3-byte NEG and this law slot has only its {n}-byte shift"),
+    }
+}
+/// Shift and direction controls of a gear law slot.
+fn slot_controls(slot: &Slot, cs: usize) -> [Control; 2] {
+    let fits: Vec<i32> = (1..=3)
+        .filter(|n| slot_bytes(slot.size, *n as u8, slot.neg).is_some())
+        .collect();
+    let retail = slot_retail(slot.size, slot.shift, slot.neg);
+    let mut shift = Control::new(
+        "Shift",
+        Setting::Shift {
+            index: slot.shift_index,
+            amount: slot.shift,
+        },
+        if fits.len() > 1 {
+            Allowed::Values(fits.clone())
+        } else {
+            Allowed::Fixed(shift_fixed(slot))
+        },
+        cs + slot.at,
+    );
+    shift.retail = retail;
+    shift.unseen = fits
+        .into_iter()
+        .filter(|n| !slot_retail(slot.size, *n as u8, slot.neg))
+        .collect();
+    let flip = slot_bytes(slot.size, slot.shift, !slot.neg).is_some();
+    let mut direction = Control::new(
+        "Direction",
+        Setting::Direction {
+            index: slot.store_index,
+            negated: slot.neg,
+        },
+        if flip {
+            Allowed::Either
+        } else {
+            Allowed::Fixed(direction_fixed(slot))
+        },
+        cs + slot.at,
+    );
+    direction.retail = retail;
+    direction.unseen = [false, true]
+        .into_iter()
+        .filter(|neg| {
+            slot_bytes(slot.size, slot.shift, *neg).is_some()
+                && !slot_retail(slot.size, slot.shift, *neg)
+        })
+        .map(i32::from)
+        .collect();
+    [shift, direction]
+}
+/// The first variable an xform binding's laws read.
+fn law_variable(b: &Binding) -> Option<&str> {
+    match &b.kind {
+        BindingKind::Xform { writes } => writes.iter().flat_map(|(_, l)| l).find_map(|o| match o {
+            LawOp::Var(v) => Some(v.as_str()),
+            _ => None,
+        }),
+        BindingKind::Toggle => None,
+    }
+}
+/// The bindings of one stub resuming at one target.
+fn group_of(inv: &Inventory, stub: usize, target: usize) -> Vec<&Binding> {
+    inv.bindings
+        .iter()
+        .filter(|b| b.stub == stub && b.target == target)
+        .collect()
+}
+/// The binding whose law reads a variable, else the first.
+fn representative<'a>(group: &[&'a Binding]) -> Option<&'a Binding> {
+    group
+        .iter()
+        .find(|b| law_variable(b).is_some())
+        .or(group.first())
+        .copied()
+}
+/// Gear law slots of the stub behind binding `b`.
+fn binding_slots(b: &Binding, list: &[Insn]) -> Vec<Slot> {
+    if law_variable(b) == Some(GEAR_LAW) && matches!(b.target_op, 0xc4 | 0xc6) {
+        law_slots(list)
+    } else {
+        Vec::new()
+    }
+}
 struct Fields {
     controls: Vec<Control>,
     locked: Option<String>,
 }
+const DIRECTION_GEAR_ONLY: &str =
+    "Reversing needs a NEG added or removed; same-size forms are reviewed for gear laws only";
 /// Controls of one stub for the binding resuming at `target` (CODE offsets).
-fn fields(inv: &Inventory, code: &[u8], stub: usize, b: &Binding) -> Result<Fields> {
+fn fields(
+    inv: &Inventory,
+    code: &[u8],
+    stub: usize,
+    b: &Binding,
+    vars: &BTreeSet<String>,
+) -> Result<Fields> {
     let cs = inv.code_start;
     let s = inv
         .stubs
@@ -194,25 +460,29 @@ fn fields(inv: &Inventory, code: &[u8], stub: usize, b: &Binding) -> Result<Fiel
             )),
         });
     }
-    let vars = b.variables();
     if let Some(v) = vars.iter().find(|v| !reviewed(v)) {
         return Ok(Fields {
             controls,
             locked: Some(format!("{v} is not a reviewed aircraft part variable")),
         });
     }
-    let law_var = match &b.kind {
-        BindingKind::Xform { writes } => writes.iter().flat_map(|(_, l)| l).find_map(|o| match o {
-            LawOp::Var(v) => Some(v.clone()),
-            _ => None,
-        }),
-        BindingKind::Toggle => None,
-    };
-    let two_term = law_var.as_deref() == Some("_PLswingWing");
+    let law_var = law_variable(b);
+    let census = LAWS.iter().find(|(v, ..)| Some(*v) == law_var);
+    let two_term = law_var == Some("_PLswingWing");
     let list = insns(code, &s.blocks)?;
+    let slots = binding_slots(b, &list);
+    let xform_target = matches!(b.target_op, 0xc4 | 0xc6);
     let (mut compares, mut shifts, mut stores) = (0, 0, 0);
     for (k, i) in list.iter().enumerate() {
         let last = cs + i.end() - 1;
+        if let Some(slot) = slots.iter().find(|x| (x.at..x.at + x.size).contains(&i.at)) {
+            // A gear law slot: shift and direction, once, at its sar.
+            if slot.at == i.at {
+                controls.extend(slot_controls(slot, cs));
+                shifts += 1;
+            }
+            continue;
+        }
         match (i.op, i.ext, i.rm) {
             (0x83, 7, Some(Rm::Mem(Mem::Abs(va)))) if i.word => {
                 let Some(name) = inv.alias_name(va as usize) else {
@@ -226,116 +496,113 @@ fn fields(inv: &Inventory, code: &[u8], stub: usize, b: &Binding) -> Result<Fiel
                     Some(_) => Allowed::Fixed(format!("The census shows only {value} for {name}")),
                     None => Allowed::Fixed(format!("{name} compares are not reviewed")),
                 };
-                controls.push(Control {
-                    label: format!("{name} compare"),
-                    setting: Setting::Compare { index, value },
+                controls.push(Control::new(
+                    &format!("{name} compare"),
+                    Setting::Compare { index, value },
                     allowed,
-                    at: last,
-                });
+                    last,
+                ));
                 if let Some(j) = list.get(k + 1).filter(|j| j.at == i.end()) {
                     let op = slice(code, j.at, 1)?[0];
-                    controls.push(Control {
-                        label: format!("{name} branch"),
-                        setting: Setting::Branch {
+                    controls.push(Control::new(
+                        &format!("{name} branch"),
+                        Setting::Branch {
                             index,
                             equal: op == 0x74,
                         },
-                        allowed: if matches!(op, 0x74 | 0x75) {
+                        if matches!(op, 0x74 | 0x75) {
                             Allowed::Either
                         } else {
                             Allowed::Fixed(
                                 "A ranged branch (<, >, >=); only = and != swap in place".into(),
                             )
                         },
-                        at: cs + j.at,
-                    });
+                        cs + j.at,
+                    ));
                 }
             }
             (0xc1, 7, Some(Rm::Reg(_))) => {
                 let amount = i.imm.unwrap_or(0) as u8;
-                let range: Vec<i32> = if two_term { (1..=7).collect() } else { (1..=3).collect() };
-                controls.push(Control {
-                    label: "Shift".into(),
-                    setting: Setting::Shift {
+                let range: Vec<i32> = if two_term {
+                    (1..=7).collect()
+                } else {
+                    (1..=3).collect()
+                };
+                let seen = census.map_or(&[][..], |(_, s, _)| *s);
+                let mut c = Control::new(
+                    "Shift",
+                    Setting::Shift {
                         index: shifts,
                         amount,
                     },
-                    allowed: Allowed::Values(range),
-                    at: last,
-                });
+                    Allowed::Values(range.clone()),
+                    last,
+                );
+                c.retail = seen.contains(&amount);
+                c.unseen = range
+                    .into_iter()
+                    .filter(|n| !seen.contains(&(*n as u8)))
+                    .collect();
+                controls.push(c);
                 shifts += 1;
             }
             (0xd1, 7, Some(Rm::Reg(_))) => {
-                controls.push(Control {
-                    label: "Shift".into(),
-                    setting: Setting::Shift {
+                controls.push(Control::new(
+                    "Shift",
+                    Setting::Shift {
                         index: shifts,
                         amount: 1,
                     },
-                    allowed: Allowed::Fixed(
+                    Allowed::Fixed(
                         "Shift 1 uses the 3-byte D1 form; 2 or 3 need the 4-byte C1 form".into(),
                     ),
-                    at: cs + i.at,
-                });
+                    cs + i.at,
+                ));
                 shifts += 1;
-            }
-            (0xf7, 3, Some(Rm::Reg(_))) => controls.push(Control {
-                label: "Direction".into(),
-                setting: Setting::Direction { negated: true },
-                allowed: Allowed::Fixed(
-                    "Reversing needs a 3-byte NEG added or removed; no same-size form is in the census".into(),
-                ),
-                at: cs + i.at,
-            }),
-            (
-                0x89,
-                _,
-                Some(Rm::Mem(Mem::Reg {
-                    base: Some(3),
-                    index: None,
-                    disp,
-                })),
-            ) if i.word && matches!(b.target_op, 0xc4 | 0xc6) => {
-                let index = stores;
-                stores += 1;
-                let Some(axis) = Axis::of(disp) else {
-                    controls.push(Control {
-                        label: "Store".into(),
-                        setting: Setting::Axis {
-                            index,
-                            axis: Axis::Yaw,
-                        },
-                        allowed: Allowed::Fixed("The law writes a translation word".into()),
-                        at: last,
-                    });
-                    continue;
-                };
-                controls.push(Control {
-                    label: "Rotation axis".into(),
-                    setting: Setting::Axis { index, axis },
-                    allowed: Allowed::Axes(Axis::ALL.to_vec()),
-                    at: last,
-                });
             }
             _ => {}
         }
+        let Some(disp) = store_disp(i).filter(|_| xform_target) else {
+            continue;
+        };
+        let index = stores;
+        stores += 1;
+        if !slots.iter().any(|x| x.store_index == index) {
+            let negated = k
+                .checked_sub(1)
+                .map(|p| &list[p])
+                .is_some_and(|p| p.end() == i.at && (p.op, p.ext) == (0xf7, 3));
+            controls.push(Control::new(
+                "Direction",
+                Setting::Direction { index, negated },
+                Allowed::Fixed(DIRECTION_GEAR_ONLY.into()),
+                cs + i.at,
+            ));
+        }
+        let Some(axis) = Axis::of(disp) else {
+            controls.push(Control::new(
+                "Store",
+                Setting::Axis {
+                    index,
+                    axis: Axis::Yaw,
+                },
+                Allowed::Fixed("The law writes a translation word".into()),
+                last,
+            ));
+            continue;
+        };
+        let seen = census.map_or(&[][..], |(_, _, a)| *a);
+        let mut c = Control::new(
+            "Rotation axis",
+            Setting::Axis { index, axis },
+            Allowed::Axes(Axis::ALL.to_vec()),
+            last,
+        );
+        c.retail = seen.contains(&(axis as usize));
+        c.unseen = (0..3).filter(|a| !seen.contains(&(*a as usize))).collect();
+        controls.push(c);
     }
-    if matches!(b.kind, BindingKind::Xform { .. })
-        && !controls
-            .iter()
-            .any(|c| matches!(c.setting, Setting::Direction { .. }))
-    {
-        controls.push(Control {
-            label: "Direction".into(),
-            setting: Setting::Direction { negated: false },
-            allowed: Allowed::Fixed(
-                "Reversing needs a 3-byte NEG added or removed; no same-size form is in the census"
-                    .into(),
-            ),
-            at: cs + stub,
-        });
-    }
-    if let (Some(p), true) = (b.pivot, matches!(b.target_op, 0xc4 | 0xc6)) {
+    if let (Some(p), true) = (b.pivot, xform_target) {
         let t = b.target;
         // Only recognised stores may write the C4 words; anything else that
         // addresses them (an unrecognised stub's self-offset) locks the pivot.
@@ -361,16 +628,16 @@ fn fields(inv: &Inventory, code: &[u8], stub: usize, b: &Binding) -> Result<Fiel
             .flat_map(|s| &s.outcomes)
             .flat_map(|o| &o.stores)
             .any(|st| st.at < t + 8 && st.at + 2 > t + 2);
-        controls.push(Control {
-            label: "Pivot".into(),
-            setting: Setting::Pivot(p),
-            allowed: if foreign || stored {
+        controls.push(Control::new(
+            "Pivot",
+            Setting::Pivot(p),
+            if foreign || stored {
                 Allowed::Fixed("Native code writes this part's translation".into())
             } else {
                 Allowed::Range(-32768, 32767)
             },
-            at: cs + t + 2,
-        });
+            cs + t + 2,
+        ));
     }
     Ok(Fields {
         controls,
@@ -439,22 +706,33 @@ pub fn parts(source: &[u8]) -> Result<Vec<PartInfo>> {
     let code = slice(source, inv.code_start, inv.code_len)?;
     let cs = inv.code_start;
     let mut out = Vec::new();
-    for b in &inv.bindings {
-        let xform = matches!(b.kind, BindingKind::Xform { .. });
+    for (k, first) in inv.bindings.iter().enumerate() {
+        // One part per stub and target: paths with different laws (a ranged
+        // gear stub that stores 0 below a threshold) are one part.
+        if inv.bindings[..k]
+            .iter()
+            .any(|x| x.stub == first.stub && x.target == first.target)
+        {
+            continue;
+        }
+        let group = group_of(&inv, first.stub, first.target);
+        let b = representative(&group).unwrap_or(first);
+        let xform = group
+            .iter()
+            .any(|b| matches!(b.kind, BindingKind::Xform { .. }));
         if !xform && !matches!(b.target_op, 0x12 | 0x6e | 0xc4 | 0xc6) {
             continue;
         }
-        let f = fields(&inv, code, b.stub, b)?;
-        let variables: Vec<String> = b.variables().into_iter().collect();
-        let law = match &b.kind {
-            BindingKind::Xform { writes } => {
-                writes.iter().flat_map(|(_, l)| l).find_map(|o| match o {
-                    LawOp::Var(v) => Some(v.as_str()),
-                    _ => None,
-                })
+        let vars: BTreeSet<String> = group.iter().flat_map(|b| b.variables()).collect();
+        let mut when = Vec::new();
+        for c in group.iter().flat_map(|b| &b.when) {
+            if !when.contains(c) {
+                when.push(c.clone());
             }
-            BindingKind::Toggle => None,
-        };
+        }
+        let f = fields(&inv, code, b.stub, b, &vars)?;
+        let variables: Vec<String> = vars.into_iter().collect();
+        let law = law_variable(b);
         let role = role_of(&variables, law);
         let side = if variables.iter().any(|v| v == "_PLleftFlap") {
             Some(Side::Left)
@@ -488,7 +766,7 @@ pub fn parts(source: &[u8]) -> Result<Vec<PartInfo>> {
             side,
             xform,
             variables,
-            when: b.when.clone(),
+            when,
             pivot: b.pivot,
             block: b.block.map(|t| cs + t),
             controls: f.controls,
@@ -548,15 +826,18 @@ pub fn parts(source: &[u8]) -> Result<Vec<PartInfo>> {
     }
     Ok(out)
 }
-fn decode_shape(inv: &Inventory, code: &[u8], stub: usize) -> Result<Vec<(usize, u16, u8)>> {
+fn stub_insns(inv: &Inventory, code: &[u8], stub: usize) -> Result<Vec<Insn>> {
     let s = inv
         .stubs
         .iter()
         .find(|s| s.offset == stub)
         .ok_or("Stub lost")?;
-    Ok(insns(code, &s.blocks)?
-        .into_iter()
-        // Same instruction boundaries and kinds; a jcc keeps its class.
+    insns(code, &s.blocks)
+}
+/// Instruction boundaries and kinds outside `skip`; a jcc keeps its class.
+fn decode_shape(list: &[Insn], skip: (usize, usize)) -> Vec<(usize, u16, u8)> {
+    list.iter()
+        .filter(|i| !(skip.0..skip.1).contains(&i.at))
         .map(|i| {
             let op = if (0x70..=0x7f).contains(&i.op) {
                 0x70
@@ -565,7 +846,23 @@ fn decode_shape(inv: &Inventory, code: &[u8], stub: usize) -> Result<Vec<(usize,
             };
             (i.at, op, i.ext)
         })
-        .collect())
+        .collect()
+}
+fn xform_law(b: &Binding, word: usize) -> Option<&Vec<LawOp>> {
+    match &b.kind {
+        BindingKind::Xform { writes } => writes.iter().find(|(w, _)| *w == word).map(|(_, l)| l),
+        BindingKind::Toggle => None,
+    }
+}
+/// What the re-parsed binding must report after an edit.
+enum Expect {
+    Setting,
+    /// A gear law slot rewritten to (shift, neg): the slot re-parses so and
+    /// the law stored into `word` is exactly `law`.
+    Slot {
+        slot: Slot,
+        laws: Vec<Option<Vec<LawOp>>>,
+    },
 }
 /// Change one part control in place and verify the binding reports it.
 pub fn apply_part_setting(source: &[u8], part: PartId, setting: &Setting) -> Result<Vec<u8>> {
@@ -581,9 +878,9 @@ pub fn apply_part_setting(source: &[u8], part: PartId, setting: &Setting) -> Res
         (Setting::Compare { index: a, .. }, Setting::Compare { index: b, .. })
         | (Setting::Branch { index: a, .. }, Setting::Branch { index: b, .. })
         | (Setting::Shift { index: a, .. }, Setting::Shift { index: b, .. })
+        | (Setting::Direction { index: a, .. }, Setting::Direction { index: b, .. })
         | (Setting::Axis { index: a, .. }, Setting::Axis { index: b, .. }) => a == b,
-        (Setting::Direction { .. }, Setting::Direction { .. })
-        | (Setting::Pivot(_), Setting::Pivot(_)) => true,
+        (Setting::Pivot(_), Setting::Pivot(_)) => true,
         _ => false,
     };
     let c = p
@@ -594,6 +891,22 @@ pub fn apply_part_setting(source: &[u8], part: PartId, setting: &Setting) -> Res
     if c.setting == *setting {
         return Ok(source.to_vec());
     }
+    if let Allowed::Fixed(why) = &c.allowed {
+        return Err(why.clone());
+    }
+    let before = Inventory::parse(source)?;
+    let cs = before.code_start;
+    let (stub, target) = (part.stub - cs, part.target - cs);
+    let code = slice(source, cs, before.code_len)?;
+    let group = group_of(&before, stub, target);
+    let binding = representative(&group).ok_or("No such part in this shape")?;
+    let old_list = stub_insns(&before, code, stub)?;
+    let slots = binding_slots(binding, &old_list);
+    let slot = slots.iter().find(|x| match setting {
+        Setting::Shift { index, .. } => x.shift_index == *index,
+        Setting::Direction { index, .. } => x.store_index == *index,
+        _ => false,
+    });
     let mut out = source.to_vec();
     let mut put = |at: usize, bytes: &[u8]| -> Result<()> {
         out.get_mut(at..at + bytes.len())
@@ -601,49 +914,107 @@ pub fn apply_part_setting(source: &[u8], part: PartId, setting: &Setting) -> Res
             .copy_from_slice(bytes);
         Ok(())
     };
-    match (&c.allowed, setting) {
-        (Allowed::Fixed(why), _) => return Err(why.clone()),
-        (Allowed::Values(v), Setting::Compare { value, .. }) if v.contains(value) => {
-            put(c.at, &[*value as i8 as u8])?
-        }
-        (Allowed::Values(v), Setting::Shift { amount, .. }) if v.contains(&(*amount as i32)) => {
-            put(c.at, &[*amount])?
-        }
-        (Allowed::Either, Setting::Branch { equal, .. }) => {
-            put(c.at, &[if *equal { 0x74 } else { 0x75 }])?
-        }
-        (Allowed::Axes(a), Setting::Axis { axis, .. }) if a.contains(axis) => {
-            let taken = p.controls.iter().any(|o| {
-                matches!((&o.setting, setting), (Setting::Axis { index: i, axis: x }, Setting::Axis { index: j, .. }) if i != j && x == axis)
+    let mut skip = (0, 0);
+    let expect = if let Some(slot) = slot {
+        let (shift, neg) = match setting {
+            Setting::Shift { amount, .. } => (*amount, slot.neg),
+            Setting::Direction { negated, .. } => (slot.shift, *negated),
+            _ => (slot.shift, slot.neg),
+        };
+        let bytes = slot_bytes(slot.size, shift, neg).ok_or_else(|| {
+            if let Setting::Shift { .. } = setting {
+                if (1..=3).contains(&shift) {
+                    shift_fixed(slot)
+                } else {
+                    invalid("Gear shifts are 1 to 3")
+                }
+            } else {
+                direction_fixed(slot)
+            }
+        })?;
+        put(cs + slot.at, &bytes)?;
+        skip = (slot.at, slot.at + slot.size);
+        // Expected laws, one per path: each old law with its trailing NEG
+        // and last shift replaced.
+        let mut laws = Vec::new();
+        for b in &group {
+            let Some(old) = xform_law(b, slot.word) else {
+                laws.push(None);
+                continue;
+            };
+            let mut law = old.clone();
+            if slot.neg && law.pop() != Some(LawOp::Neg { w16: true }) {
+                return Err(invalid("The gear law does not end in its NEG"));
+            }
+            if law.pop()
+                != Some(LawOp::Sar {
+                    n: slot.shift,
+                    w16: true,
+                })
+            {
+                return Err(invalid("The gear law does not end in its shift"));
+            }
+            law.push(LawOp::Sar {
+                n: shift,
+                w16: true,
             });
-            if taken {
+            if neg {
+                law.push(LawOp::Neg { w16: true });
+            }
+            laws.push(Some(law));
+        }
+        Expect::Slot {
+            slot: Slot {
+                shift,
+                neg,
+                ..*slot
+            },
+            laws,
+        }
+    } else {
+        match (&c.allowed, setting) {
+            (Allowed::Values(v), Setting::Compare { value, .. }) if v.contains(value) => {
+                put(c.at, &[*value as i8 as u8])?
+            }
+            (Allowed::Values(v), Setting::Shift { amount, .. })
+                if v.contains(&(*amount as i32)) =>
+            {
+                put(c.at, &[*amount])?
+            }
+            (Allowed::Either, Setting::Branch { equal, .. }) => {
+                put(c.at, &[if *equal { 0x74 } else { 0x75 }])?
+            }
+            (Allowed::Axes(a), Setting::Axis { axis, .. }) if a.contains(axis) => {
+                let taken = p.controls.iter().any(|o| {
+                    matches!((&o.setting, setting), (Setting::Axis { index: i, axis: x }, Setting::Axis { index: j, .. }) if i != j && x == axis)
+                });
+                if taken {
+                    return Err(invalid(
+                        "Another store of this stub already writes that axis",
+                    ));
+                }
+                put(c.at, &[axis.disp()])?
+            }
+            (Allowed::Range(lo, hi), Setting::Pivot(v))
+                if v.iter().all(|x| (*lo..=*hi).contains(x)) =>
+            {
+                for (k, axis) in [0, 2, 1].into_iter().enumerate() {
+                    put(c.at + 2 * k, &(v[axis] as i16).to_le_bytes())?;
+                }
+            }
+            _ => {
                 return Err(invalid(
-                    "Another store of this stub already writes that axis",
-                ));
-            }
-            put(c.at, &[axis.disp()])?
-        }
-        (Allowed::Range(lo, hi), Setting::Pivot(v))
-            if v.iter().all(|x| (*lo..=*hi).contains(x)) =>
-        {
-            for (k, axis) in [0, 2, 1].into_iter().enumerate() {
-                put(c.at + 2 * k, &(v[axis] as i16).to_le_bytes())?;
+                    "Value outside the census-backed range for this control",
+                ))
             }
         }
-        _ => {
-            return Err(invalid(
-                "Value outside the census-backed range for this control",
-            ))
-        }
-    }
+        Expect::Setting
+    };
     // Verify from scratch.
-    let before = Inventory::parse(source)?;
     let after = Inventory::parse(&out)?;
     if !after.contiguous() || after.opaque_bytes() != before.opaque_bytes() {
         return Err(invalid("The edit changed how much of CODE is explained"));
     }
-    let cs = after.code_start;
-    let (stub, target) = (part.stub - cs, part.target - cs);
     let s = after
         .stubs
         .iter()
@@ -652,41 +1023,36 @@ pub fn apply_part_setting(source: &[u8], part: PartId, setting: &Setting) -> Res
     if s.unrecognised.is_some() || after.stubs.len() != before.stubs.len() {
         return Err(invalid("The edited stub is no longer recognised"));
     }
-    let shape_before = decode_shape(&before, slice(source, cs, before.code_len)?, stub)?;
-    let shape_after = decode_shape(&after, slice(&out, cs, after.code_len)?, stub)?;
-    if shape_before != shape_after {
+    let new_list = stub_insns(&after, slice(&out, cs, after.code_len)?, stub)?;
+    if decode_shape(&old_list, skip) != decode_shape(&new_list, skip) {
         return Err(invalid("The edit changed the stub's instructions"));
     }
-    let b = after
-        .bindings
-        .iter()
-        .find(|b| b.stub == stub && b.target == target)
-        .ok_or("The edited part no longer resumes at its target")?;
-    let conditions = || b.when.iter().flatten();
-    let reported = match setting {
-        Setting::Compare { value, .. } => conditions().any(|c| c.value == *value),
-        Setting::Branch { .. } => {
-            let old = before
-                .bindings
-                .iter()
-                .find(|x| x.stub == stub && x.target == target)
-                .map(|x| x.when.clone())
-                .unwrap_or_default();
-            b.when != old
+    let new_group = group_of(&after, stub, target);
+    let b = representative(&new_group).ok_or("The edited part no longer resumes at its target")?;
+    let conditions = || new_group.iter().flat_map(|b| b.when.iter().flatten());
+    let reported = match (&expect, setting) {
+        (Expect::Slot { slot, laws }, _) => {
+            binding_slots(b, &new_list).contains(slot)
+                && new_group.len() == group.len()
+                && new_group.iter().zip(&group).zip(laws).all(|((a, o), law)| {
+                    a.when == o.when && xform_law(a, slot.word) == law.as_ref()
+                })
         }
-        Setting::Shift { amount, .. } => match &b.kind {
+        (_, Setting::Compare { value, .. }) => conditions().any(|c| c.value == *value),
+        (_, Setting::Branch { .. }) => b.when != binding.when,
+        (_, Setting::Shift { amount, .. }) => match &b.kind {
             BindingKind::Xform { writes } => writes
                 .iter()
                 .flat_map(|(_, l)| l)
                 .any(|o| matches!(o, LawOp::Sar { n, .. } if n == amount)),
             BindingKind::Toggle => false,
         },
-        Setting::Axis { axis, .. } => match &b.kind {
+        (_, Setting::Axis { axis, .. }) => match &b.kind {
             BindingKind::Xform { writes } => writes.iter().any(|(w, _)| *w == 3 + *axis as usize),
             BindingKind::Toggle => false,
         },
-        Setting::Pivot(v) => b.pivot == Some(*v),
-        Setting::Direction { .. } => false,
+        (_, Setting::Pivot(v)) => b.pivot == Some(*v),
+        (_, Setting::Direction { .. }) => false,
     };
     if !reported {
         return Err(invalid("The binding does not report the new value"));
@@ -827,7 +1193,9 @@ mod tests {
             ]
         );
         assert_eq!(gear.controls[2].allowed, Allowed::Values(vec![1, 2, 3]));
-        assert!(matches!(gear.controls[3].allowed, Allowed::Fixed(_)));
+        // A 7-byte C1 + NEG slot reverses in place.
+        assert_eq!(gear.controls[3].allowed, Allowed::Either);
+        assert!(gear.controls.iter().all(|c| c.retail));
         // The D1 form keeps shift 1 read-only.
         let right = find(&parts, "Gear right");
         assert!(right.controls.iter().any(|c| c.setting
@@ -836,10 +1204,12 @@ mod tests {
                 amount: 1
             }
             && matches!(c.allowed, Allowed::Fixed(_))));
-        assert!(right
-            .controls
-            .iter()
-            .any(|c| c.setting == Setting::Direction { negated: false }));
+        assert!(right.controls.iter().any(|c| c.setting
+            == Setting::Direction {
+                index: 0,
+                negated: false
+            }
+            && matches!(c.allowed, Allowed::Fixed(_))));
         let wing = find(&parts, "Swing wing left");
         assert!(wing
             .controls
@@ -954,11 +1324,16 @@ mod tests {
         )
         .is_err());
         assert!(apply_part_setting(&b, gear.id, &Setting::Compare { index: 0, value: 2 }).is_err());
-        assert!(
-            apply_part_setting(&b, gear.id, &Setting::Direction { negated: false })
-                .unwrap_err()
-                .contains("NEG")
-        );
+        assert!(apply_part_setting(
+            &b,
+            find(&list, "Gear right").id,
+            &Setting::Direction {
+                index: 0,
+                negated: true
+            }
+        )
+        .unwrap_err()
+        .contains("NEG"));
         let right = find(&list, "Gear right").id;
         assert!(apply_part_setting(
             &b,
@@ -1009,6 +1384,219 @@ mod tests {
             .all(|p| p.role != Role::SwingWing || p.locked.is_some()));
         for n in 0..b.len() {
             let _ = parts(&b[..n]);
+        }
+    }
+    /// (shift, negated) of the Gear left law in a shape.
+    fn gear_state(bytes: &[u8]) -> (u8, bool, bool) {
+        let gear = find(&parts(bytes).unwrap(), "Gear left").clone();
+        let shift = gear
+            .controls
+            .iter()
+            .find_map(|c| match c.setting {
+                Setting::Shift { amount, .. } => Some((amount, c.retail)),
+                _ => None,
+            })
+            .unwrap();
+        let neg = gear
+            .controls
+            .iter()
+            .find_map(|c| match c.setting {
+                Setting::Direction { negated, .. } => Some(negated),
+                _ => None,
+            })
+            .unwrap();
+        (shift.0, neg, shift.1)
+    }
+    #[test]
+    fn gear_law_slots_reach_exactly_the_forms_that_fit() {
+        use alloc::collections::{BTreeMap, BTreeSet};
+        // Every census gear signature: D1, D1+NEG, C1 2/3, C1 2/3 + NEG.
+        type Case = (Shift, bool, &'static [(u8, bool)]);
+        let cases: [Case; 6] = [
+            (Shift::One, false, &[(1, false)]),
+            (
+                Shift::One,
+                true,
+                &[(1, false), (1, true), (2, false), (3, false)],
+            ),
+            (Shift::Imm(2), false, &[(1, false), (2, false), (3, false)]),
+            (Shift::Imm(3), false, &[(1, false), (2, false), (3, false)]),
+            (
+                Shift::Imm(2),
+                true,
+                &[
+                    (1, false),
+                    (1, true),
+                    (2, false),
+                    (2, true),
+                    (3, false),
+                    (3, true),
+                ],
+            ),
+            (
+                Shift::Imm(3),
+                true,
+                &[
+                    (1, false),
+                    (1, true),
+                    (2, false),
+                    (2, true),
+                    (3, false),
+                    (3, true),
+                ],
+            ),
+        ];
+        for (shift, neg, reachable) in cases {
+            let size = match (&shift, neg) {
+                (Shift::One, false) => 3,
+                (Shift::One, true) => 6,
+                (Shift::Imm(_), false) => 4,
+                (Shift::Imm(_), true) => 7,
+            };
+            let original = shape(shift, neg);
+            let start = gear_state(&original);
+            assert!(start.2, "census form reads as retail");
+            let id = find(&parts(&original).unwrap(), "Gear left").id;
+            // Breadth-first over every allowed shift and direction change.
+            let mut seen = BTreeMap::<(u8, bool), Vec<u8>>::new();
+            let mut work = alloc::vec![original.clone()];
+            seen.insert((start.0, start.1), original.clone());
+            while let Some(bytes) = work.pop() {
+                let gear = find(&parts(&bytes).unwrap(), "Gear left").clone();
+                for c in &gear.controls {
+                    let next: Vec<Setting> = match (&c.allowed, &c.setting) {
+                        (Allowed::Values(v), Setting::Shift { index, .. }) => v
+                            .iter()
+                            .map(|n| Setting::Shift {
+                                index: *index,
+                                amount: *n as u8,
+                            })
+                            .collect(),
+                        (Allowed::Either, Setting::Direction { index, negated }) => {
+                            alloc::vec![Setting::Direction {
+                                index: *index,
+                                negated: !negated
+                            }]
+                        }
+                        _ => Vec::new(),
+                    };
+                    for setting in next {
+                        let out = apply_part_setting(&bytes, id, &setting).unwrap();
+                        // Same size, only the slot's bytes change.
+                        assert_eq!(out.len(), bytes.len());
+                        let diff: Vec<_> =
+                            (0..out.len()).filter(|i| out[*i] != bytes[*i]).collect();
+                        assert!(diff.iter().all(|i| (c.at..c.at + 7).contains(i)));
+                        let state = gear_state(&out);
+                        let key = (state.0, state.1);
+                        // Each state has one canonical encoding.
+                        match seen.get(&key) {
+                            Some(known) => assert_eq!(known, &out, "{key:?}"),
+                            None => {
+                                seen.insert(key, out.clone());
+                                work.push(out);
+                            }
+                        }
+                    }
+                    // No-op identity.
+                    assert_eq!(apply_part_setting(&bytes, id, &c.setting).unwrap(), bytes);
+                }
+            }
+            let got: BTreeSet<_> = seen.keys().copied().collect();
+            let want: BTreeSet<_> = reachable.iter().copied().collect();
+            assert_eq!(got, want, "{:?}", (start.0, neg));
+            // The census state is the original bytes, reached back from every
+            // other state; every other state is flagged as not seen in retail.
+            assert_eq!(seen[&(start.0, start.1)], original);
+            for (key, bytes) in &seen {
+                let (n, negated, retail) = gear_state(bytes);
+                assert_eq!((n, negated), *key);
+                let census = slot_retail(size, n, negated);
+                assert_eq!(retail, census, "{key:?}");
+                // The evaluator proves the law: the preview turns by
+                // -(gearPos >> n), negated when the NEG is present.
+                let pose = Pose::from([("_PLgearDown".into(), 1), ("_PLgearPos".into(), -8192)]);
+                let m = Model::with_pose(bytes, &pose).unwrap();
+                let part = m.parts.iter().find(|p| p.offset == id.target).unwrap();
+                let turn = (-8192i32 >> n) * if negated { -1 } else { 1 };
+                assert_eq!(part.posed_rotation, [0, 0, turn], "{key:?}");
+                // Every other part is untouched.
+                let others: Vec<_> = parts(bytes)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|p| p.id != id)
+                    .collect();
+                let base: Vec<_> = parts(&original)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|p| p.id != id)
+                    .collect();
+                assert_eq!(others, base);
+            }
+        }
+    }
+    #[test]
+    fn gear_law_slots_refuse_forms_that_do_not_fit() {
+        let gear = |b: &[u8]| find(&parts(b).unwrap(), "Gear left").clone();
+        let shift = |n| Setting::Shift {
+            index: 0,
+            amount: n,
+        };
+        let dir = |negated| Setting::Direction { index: 0, negated };
+        // D1 only: neither a NEG nor a C1 shift fits.
+        let d1 = shape(Shift::One, false);
+        let id = gear(&d1).id;
+        assert!(apply_part_setting(&d1, id, &dir(true))
+            .unwrap_err()
+            .contains("3-byte shift"));
+        assert!(apply_part_setting(&d1, id, &shift(2))
+            .unwrap_err()
+            .contains("D1"));
+        // C1 only: no NEG.
+        let c1 = shape(Shift::Imm(3), false);
+        let id = gear(&c1).id;
+        assert!(apply_part_setting(&c1, id, &dir(true))
+            .unwrap_err()
+            .contains("4-byte shift"));
+        assert!(apply_part_setting(&c1, id, &shift(4)).is_err());
+        // D1 + NEG: shift 2 or 3 only without the NEG.
+        let d1n = shape(Shift::One, true);
+        let g = gear(&d1n);
+        let id = g.id;
+        assert!(g
+            .controls
+            .iter()
+            .any(|c| c.label == "Shift" && matches!(c.allowed, Allowed::Fixed(_))));
+        assert!(apply_part_setting(&d1n, id, &shift(2))
+            .unwrap_err()
+            .contains("reverse the direction first"));
+        let flipped = apply_part_setting(&d1n, id, &dir(false)).unwrap();
+        let g = gear(&flipped);
+        let direction = g.controls.iter().find(|c| c.label == "Direction").unwrap();
+        assert!(!direction.retail);
+        assert_eq!(direction.unseen, alloc::vec![0]);
+        let wide = apply_part_setting(&flipped, id, &shift(3)).unwrap();
+        let at = direction.at;
+        assert_eq!(&wide[at..at + 6], &[0x66, 0xc1, 0xf8, 3, 0x66, 0x90]);
+        assert!(apply_part_setting(&wide, id, &dir(true))
+            .unwrap_err()
+            .contains("set shift 1 first"));
+        // Shift 1 returns to the D1 form, then the NEG restores the census bytes.
+        let back = apply_part_setting(&wide, id, &shift(1)).unwrap();
+        assert_eq!(&back[at..at + 6], &[0x66, 0xd1, 0xf8, 0x66, 0x89, 0xc0]);
+        assert_eq!(apply_part_setting(&back, id, &dir(true)).unwrap(), d1n);
+        // A swing wing's direction stays read-only.
+        let wing = find(&parts(&d1n).unwrap(), "Swing wing left").clone();
+        let d = wing
+            .controls
+            .iter()
+            .find(|c| c.label == "Direction")
+            .unwrap();
+        assert!(matches!(&d.allowed, Allowed::Fixed(r) if r.contains("gear laws only")));
+        assert!(apply_part_setting(&d1n, wing.id, &dir(true)).is_err());
+        // Truncations never panic.
+        for n in (0..flipped.len()).step_by(7) {
+            let _ = parts(&flipped[..n]);
         }
     }
 }

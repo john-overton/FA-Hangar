@@ -57,7 +57,7 @@ fn form(op: u16, ext: u8) -> Option<Form> {
         (0x39 | 0x3a | 0x3b | 0x88 | 0x89 | 0x8a | 0x8b | 0x8d, _) => ModRm,
         (0x05 | 0x0d | 0x25 | 0x2d | 0x3d | 0x68, _) => ImmV,
         (0xb8..=0xbf, _) => ImmV,
-        (0x07 | 0x16 | 0x60 | 0x61 | 0x99 | 0xa4 | 0xc3 | 0xcc | 0xfc, _) => None,
+        (0x07 | 0x16 | 0x60 | 0x61 | 0x90 | 0x99 | 0xa4 | 0xc3 | 0xcc | 0xfc, _) => None,
         (0x40..=0x5f, _) => None,
         (0x3c, _) => Imm8,
         (0x6b, _) => ModRmImm8,
@@ -551,7 +551,7 @@ fn full(v: &Val) -> bool {
 }
 /// Symbolically walk every path of an F0 stub. Supported: word/dword compares of
 /// imported variables against immediates, jcc/jmp, `call $+5; pop`, constant
-/// adds, loads of imported words, sar/shl/shr/neg/add/sub/imul, register moves
+/// adds, loads of imported words, sar/shl/shr/neg/add/sub/imul, register moves, nop
 /// and word stores through a register holding a CODE address.
 pub fn analyze(cx: &Context, entry: usize) -> Analysis {
     let mut out = Analysis::default();
@@ -652,6 +652,8 @@ fn step(cx: &Context, s: &mut Path) -> core::result::Result<Step, String> {
     let var = variable(cx, &i.rm);
     match (i.op, i.ext) {
         (0x68, _) if !w => s.stack.push(Val::Const(i.imm.unwrap_or(0) as u32 as i64)),
+        // `nop` / `xchg ax, ax`: Hangar's 2-byte filler in a resized law slot.
+        (0x90, _) => {}
         (0xc3, _) => {
             let n = s.stack.len();
             let pushed = |k: usize| match s.stack.get(n.wrapping_sub(1 + k)) {

@@ -868,6 +868,12 @@ fn part_check(out: &mut String, bytes: &[u8], name: &str, out_dir: &str) -> Resu
                     index: *index,
                     equal: !equal,
                 }),
+                (Allowed::Either, Setting::Direction { index, negated }) => {
+                    Some(Setting::Direction {
+                        index: *index,
+                        negated: !negated,
+                    })
+                }
                 (Allowed::Axes(_), Setting::Axis { index, axis }) => Some(Setting::Axis {
                     index: *index,
                     axis: if *axis == Axis::Roll {
@@ -908,6 +914,121 @@ fn part_check(out: &mut String, bytes: &[u8], name: &str, out_dir: &str) -> Resu
             };
             let _ = writeln!(out, "  setting {} / {}: {line}", p.name, c.label);
         }
+    }
+    failed += gear_forms(out, bytes, name, out_dir)?;
+    Ok(failed)
+}
+/// Every same-size gear law form reachable from each gear part: each state
+/// re-parses with the expected law, previews, and the census bytes return.
+fn gear_forms(out: &mut String, bytes: &[u8], name: &str, out_dir: &str) -> Result<usize> {
+    use hangar_core::{
+        model::{Model, Pose},
+        shape_parts::{self as parts, Allowed, Role, Setting},
+    };
+    let mut failed = 0;
+    let state = |b: &[u8], id| -> Result<(u8, bool, bool)> {
+        let list = parts::parts(b)?;
+        let p = list.iter().find(|p| p.id == id).ok_or("part lost")?;
+        let mut s = (0, false, p.retail());
+        for c in &p.controls {
+            match c.setting {
+                Setting::Shift { amount, .. } => s.0 = amount,
+                Setting::Direction { negated, .. } => s.1 = negated,
+                _ => {}
+            }
+        }
+        Ok(s)
+    };
+    let list = parts::parts(bytes)?;
+    let base = Inventory::parse(bytes)?;
+    let stem = name.trim_end_matches(".SH");
+    for p in list
+        .iter()
+        .filter(|p| p.role == Role::Gear && p.locked.is_none())
+    {
+        let result = (|| -> Result<String> {
+            let start = state(bytes, p.id)?;
+            let mut seen = BTreeMap::<(u8, bool), Vec<u8>>::new();
+            seen.insert((start.0, start.1), bytes.to_vec());
+            let mut work = vec![bytes.to_vec()];
+            let mut unseen = 0;
+            while let Some(b) = work.pop() {
+                let now = parts::parts(&b)?;
+                let part = now.iter().find(|x| x.id == p.id).ok_or("part lost")?;
+                for c in &part.controls {
+                    let next: Vec<Setting> = match (&c.allowed, &c.setting) {
+                        (Allowed::Values(v), Setting::Shift { index, .. }) => v
+                            .iter()
+                            .map(|n| Setting::Shift {
+                                index: *index,
+                                amount: *n as u8,
+                            })
+                            .collect(),
+                        (Allowed::Either, Setting::Direction { index, negated }) => {
+                            vec![Setting::Direction {
+                                index: *index,
+                                negated: !negated,
+                            }]
+                        }
+                        _ => Vec::new(),
+                    };
+                    for s in next {
+                        let shape = parts::apply_part_setting(&b, p.id, &s)?;
+                        let after = Inventory::parse(&shape)?;
+                        if !after.contiguous()
+                            || after.opaque_bytes() != base.opaque_bytes()
+                            || shape.len() != bytes.len()
+                        {
+                            return Err("inventory changed".into());
+                        }
+                        let (n, neg, retail) = state(&shape, p.id)?;
+                        // Preview: the part turns by the evaluated law.
+                        let pose =
+                            Pose::from([("_PLgearDown".into(), 1), ("_PLgearPos".into(), -8192)]);
+                        if Model::parse(bytes).is_ok() {
+                            Model::with_pose(&shape, &pose)?;
+                        }
+                        if let Some(known) = seen.get(&(n, neg)) {
+                            // Includes a step back to the census state that
+                            // does not reproduce the original bytes.
+                            if *known != shape {
+                                return Err(format!("two encodings for sar {n} neg {neg}"));
+                            }
+                        } else {
+                            if !retail {
+                                unseen += 1;
+                                let label =
+                                    format!("{}-sar{n}{}", p.name, if neg { "-neg" } else { "" })
+                                        .replace([' ', '(', ')'], "_");
+                                crate::platform::write_new(
+                                    &format!("{out_dir}/{stem}-form-{label}.SH"),
+                                    &shape,
+                                )?;
+                            }
+                            seen.insert((n, neg), shape.clone());
+                            work.push(shape);
+                        }
+                    }
+                }
+            }
+            let states: Vec<String> = seen
+                .keys()
+                .map(|(n, neg)| format!("sar{n}{}", if *neg { "+neg" } else { "" }))
+                .collect();
+            Ok(format!(
+                "{} states [{}], {unseen} not seen in retail, census bytes restored",
+                seen.len(),
+                states.join(" ")
+            ))
+        })();
+        let line = match result {
+            Ok(s) => format!("PASS {s}"),
+            Err(e) => {
+                failed += 1;
+                format!("FAIL {e}")
+            }
+        };
+        let _ = writeln!(out, "  gear forms {}: {line}", p.name);
     }
     Ok(failed)
 }
