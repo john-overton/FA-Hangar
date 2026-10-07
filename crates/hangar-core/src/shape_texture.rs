@@ -965,7 +965,7 @@ fn assign(source: &[u8], faces: &[usize], name: &str, uvs: Uvs) -> Result<Assign
             Origin::Body(i) => {
                 let site = g.span(i);
                 let at = g.material(i).map_err(|e| {
-                    format!("Face at {offset:X}: its texture state cannot be proved: {e}")
+                    format!("Face at {offset:X}: Hangar cannot prove which texture draws it: {e}")
                 })?;
                 let restore = g.selector(at).to_vec();
                 let record = g.code[site.0..site.1].to_vec();

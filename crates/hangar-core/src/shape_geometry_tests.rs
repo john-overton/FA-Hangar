@@ -768,3 +768,239 @@ fn truncated_and_corrupted_shapes_never_panic() {
         }
     }
 }
+
+const TRI: [[i16; 3]; 3] = [[0, 0, 0], [10, 0, 0], [0, 10, 0]];
+/// E2 selector naming `name`.
+fn select(a: &mut Asm, name: &str) {
+    let mut field = [0u8; 14];
+    field[..name.len()].copy_from_slice(name.as_bytes());
+    a.b(&[0xe2, 0]).b(&field);
+}
+/// A textured triangle over slots 0..3, labelled.
+fn tri(a: &mut Asm, label: &str, color: u8) {
+    a.label(label).face(
+        0x28,
+        color,
+        lit(&TRI),
+        &[0, 1, 2],
+        &[[0, 0], [63, 0], [0, 63]],
+    );
+}
+/// Header, F2, `BASE.PIC` and the vertices, then `body`, then the end object.
+fn shape(body: impl FnOnce(&mut Asm)) -> (Vec<u8>, Asm) {
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x40, 0]);
+    a.b(&[0xf2, 0]).rel16("end", 2);
+    select(&mut a, "BASE.PIC");
+    a.verts(0, &TRI);
+    body(&mut a);
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    let mut labels = Asm::default();
+    for (k, v) in ["F1", "F2", "F3", "F4", "S1", "S2"]
+        .iter()
+        .filter_map(|k| a.try_at(k).map(|v| (k, v)))
+    {
+        labels.mark(k, v);
+    }
+    (a.finish(), labels)
+}
+/// Texture name each face is proved to draw with, or the refusal.
+fn textures(b: &[u8], l: &Asm, names: &[&str]) -> Vec<core::result::Result<String, String>> {
+    let g = Geometry::parse(b).unwrap();
+    names
+        .iter()
+        .map(|n| {
+            let f = g.face_at(face(l, n)).unwrap();
+            let s = g.material(f)?;
+            let bytes = g.selector(s);
+            Ok(bytes[2..]
+                .iter()
+                .take_while(|c| **c != 0)
+                .map(|c| *c as char)
+                .collect())
+        })
+        .collect()
+}
+fn ok(s: &str) -> core::result::Result<String, String> {
+    Ok(s.into())
+}
+
+#[test]
+fn a_backward_jump_around_a_call_is_proved() {
+    let (b, l) = shape(|a| {
+        tri(a.label("top"), "F1", 1);
+        a.call(0x12, "blk");
+        a.call(0xac, "top");
+        tri(a, "F2", 2);
+        a.jump("end");
+        tri(a.label("blk"), "F3", 3);
+        a.b(&[0x1e]);
+    });
+    assert_eq!(
+        textures(&b, &l, &["F1", "F2", "F3"]),
+        [ok("BASE.PIC"), ok("BASE.PIC"), ok("BASE.PIC")]
+    );
+    let g = Geometry::parse(&b).unwrap();
+    for f in 0..g.faces.len() {
+        for s in &g.faces[f].slots {
+            assert_eq!(g.writer(f, *s), Ok(0));
+        }
+    }
+}
+
+#[test]
+fn a_call_inside_a_loop_leaves_the_callee_texture() {
+    let (b, l) = shape(|a| {
+        a.label("top").call(0x12, "blk");
+        tri(a, "F1", 1);
+        a.call(0xac, "top");
+        a.jump("end");
+        a.label("blk");
+        select(a, "OTHER.PIC");
+        tri(a, "F3", 3);
+        a.b(&[0x1e]);
+    });
+    assert_eq!(
+        textures(&b, &l, &["F1", "F3"]),
+        [ok("OTHER.PIC"), ok("OTHER.PIC")]
+    );
+}
+
+#[test]
+fn a_loop_that_changes_the_texture_is_not_proved() {
+    let (b, l) = shape(|a| {
+        tri(a.label("top"), "F1", 1);
+        select(a, "OTHER.PIC");
+        tri(a, "F2", 2);
+        a.call(0xac, "top");
+    });
+    let got = textures(&b, &l, &["F1", "F2"]);
+    let e = got[0].clone().unwrap_err();
+    assert!(
+        e.contains("different textures reach it")
+            && e.contains("BASE.PIC")
+            && e.contains("OTHER.PIC"),
+        "{e}"
+    );
+    assert_eq!(got[1], ok("OTHER.PIC"));
+    // Assign texture refuses it with the reason, naming the face once.
+    let g = Geometry::parse(&b).unwrap();
+    let f1 = face(&l, "F1");
+    let err = crate::shape_texture::assign_texture(
+        &b,
+        &[f1],
+        "NEW.PIC",
+        crate::shape_texture::UvMode::Keep,
+    )
+    .unwrap_err();
+    assert!(err.starts_with(&format!("Face at {f1:X}: ")), "{err}");
+    assert_eq!(err.matches("CODE+").count(), 2, "{err}");
+    let _ = g;
+}
+
+#[test]
+fn a_loop_that_keeps_the_texture_is_proved() {
+    let (b, l) = shape(|a| {
+        tri(a.label("top"), "F1", 1);
+        a.call(0x12, "blk");
+        // The same selector bytes again count as the same state.
+        select(a, "BASE.PIC");
+        tri(a, "F2", 2);
+        a.call(0xac, "top");
+        a.jump("end");
+        tri(a.label("blk"), "F3", 3);
+        a.b(&[0x1e]);
+    });
+    assert_eq!(
+        textures(&b, &l, &["F1", "F2", "F3"]),
+        [ok("BASE.PIC"), ok("BASE.PIC"), ok("BASE.PIC")]
+    );
+}
+
+#[test]
+fn unrelated_call_sites_do_not_merge() {
+    // The block reselects BASE.PIC on one path and keeps the caller's state on
+    // the other: after the first call only BASE.PIC can hold, after the
+    // second either. Its own face is drawn under both.
+    let (b, l) = shape(|a| {
+        a.label("S1").call(0x12, "blk");
+        tri(a, "F1", 1);
+        select(a, "OTHER.PIC");
+        a.label("S2").call(0x12, "blk");
+        tri(a, "F2", 2);
+        a.jump("end");
+        tri(a.label("blk"), "F3", 3);
+        a.call(0xac, "skip");
+        select(a, "BASE.PIC");
+        a.label("skip").b(&[0x1e]);
+    });
+    let got = textures(&b, &l, &["F1", "F2", "F3"]);
+    assert_eq!(got[0], ok("BASE.PIC"));
+    assert!(got[1].is_err() && got[2].is_err(), "{got:?}");
+}
+
+#[test]
+fn a_block_called_and_then_entered_under_a_scope_is_proved() {
+    // The retail F-5 idiom: 12 calls the block right after a 38 scope, so
+    // the block runs once called (its first 1E returns) and once entered
+    // under the scope (that 1E is padding). A nested call in the block made
+    // the old backward proof re-enter itself and give up.
+    let (b, l) = shape(|a| {
+        a.call(0x12, "B");
+        a.b(&[0x38]).rel16("S", 2);
+        tri(a.label("B"), "F1", 1);
+        a.call(0x12, "C");
+        a.b(&[0x1e]);
+        tri(a.label("S"), "F2", 2);
+        select(a, "OTHER.PIC");
+        tri(a, "F3", 3);
+        a.b(&[0x1e]);
+        tri(a.label("C"), "F4", 4);
+        a.b(&[0x1e]);
+    });
+    assert_eq!(
+        textures(&b, &l, &["F1", "F2", "F3", "F4"]),
+        [
+            ok("BASE.PIC"),
+            ok("BASE.PIC"),
+            ok("OTHER.PIC"),
+            ok("BASE.PIC")
+        ]
+    );
+}
+
+#[test]
+fn loop_proofs_survive_truncation_and_corruption() {
+    let (b, _) = shape(|a| {
+        tri(a.label("top"), "F1", 1);
+        a.call(0x12, "blk");
+        select(a, "OTHER.PIC");
+        a.call(0xac, "top");
+        a.jump("end");
+        tri(a.label("blk"), "F3", 3);
+        a.call(0x12, "blk");
+        a.b(&[0x1e]);
+    });
+    let probe = |m: &[u8]| {
+        if let Ok(g) = Geometry::parse(m) {
+            for f in 0..g.faces.len() {
+                let _ = g.material(f);
+                for s in g.faces[f].slots.clone() {
+                    let _ = g.writer(f, s);
+                }
+            }
+            let _ = g.vertex_report();
+        }
+    };
+    for n in 0..b.len() {
+        probe(&b[..n]);
+    }
+    for at in CS..b.len().min(CS + 0x100) {
+        for v in [0x00, 0x12, 0x1e, 0x38, 0x48, 0xac, 0xe2, 0xff] {
+            let mut m = b.clone();
+            m[at] = v;
+            probe(&m);
+        }
+    }
+}

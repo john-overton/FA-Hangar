@@ -46,6 +46,9 @@ impl Asm {
     pub fn at(&self, name: &str) -> usize {
         self.labels[name]
     }
+    pub fn try_at(&self, name: &str) -> Option<usize> {
+        self.labels.get(name).copied()
+    }
     /// A label at an explicit CODE offset (for pointers into a record).
     pub fn mark(&mut self, name: &str, at: usize) -> &mut Self {
         self.labels.insert(name.into(), at);

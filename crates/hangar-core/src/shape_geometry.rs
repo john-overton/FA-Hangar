@@ -11,12 +11,12 @@
 //!   end marker, reached by detouring an existing face of the same frame, so
 //!   they inherit its frame, material and slot state.
 //!
-//! Slot liveness is proved, never assumed: a slot used at a record resolves to
-//! one 82 buffer only when, walking back, nothing rewrites it (no other
-//! writer, no call whose block writes it) and every pointer entering that span
-//! from outside resolves to the same buffer. Faces with pointer or relocation
-//! fields, pointer targets, self-offsets or x86 stores inside their bytes are
-//! never rewritten. Each result is re-parsed and checked before it is returned.
+//! Slot liveness and the texture state are proved, never assumed: a forward
+//! dataflow over the whole control-flow graph (`shape_flow`) finds every 82
+//! buffer (or E2/E0 selector) that may hold at a face, through branches,
+//! loops, x86 resumes and calls, and a proof needs exactly one. Faces with
+//! pointer or relocation fields, pointer targets, self-offsets or x86 stores
+//! inside their bytes are never rewritten. Each result is re-parsed and checked before it is returned.
 //! Coordinates are stored units in model order (right, forward, up); vertices
 //! in a part are local to its pivot frame.
 use crate::{
@@ -32,6 +32,8 @@ use alloc::{
     vec::Vec,
 };
 use core::cell::RefCell;
+#[path = "shape_flow.rs"]
+pub(crate) mod flow;
 
 /// Highest vertex-slot count of any retail FA_2.LIB shape (CITY2.SH, 640).
 /// New slots stay below it, so no shape asks the engine's vertex table for
@@ -106,18 +108,17 @@ pub struct VertexStatus {
     pub refusal: Option<String>,
 }
 type Resolved = core::result::Result<usize, String>;
-/// Effects of a called block, through nested calls, until each path returns.
-#[derive(Clone, Debug, Default)]
-struct Called {
-    /// Slots any reachable 82 record writes.
-    slots: BTreeSet<usize>,
-    /// Reachable E2/E0 texture selectors (CODE offsets).
-    selectors: Vec<usize>,
-    /// Records that end a path of the block (CODE offsets).
-    returns: Vec<usize>,
-}
-/// `resolve` key for the texture state instead of a vertex slot.
+/// Proof key for the texture state instead of a vertex slot.
 const MATERIAL: usize = usize::MAX;
+/// Proved states whose per-face results are kept.
+const KEEP: usize = 64;
+/// The control-flow graph, built on first use, and the reaching sets of the
+/// most recently proved states (texture or slot), one per face.
+#[derive(Clone, Debug, Default)]
+struct Proofs {
+    graph: Option<core::result::Result<flow::Graph, String>>,
+    sets: Vec<(usize, core::result::Result<Vec<flow::Set>, String>)>,
+}
 /// Bytes and analysis of one shape.
 #[derive(Clone, Debug)]
 pub struct Geometry {
@@ -143,10 +144,11 @@ pub struct Geometry {
     pub(crate) data: Vec<(usize, usize)>,
     /// Pointer fields as (CODE offset, width).
     pub(crate) fields: Vec<(usize, usize)>,
-    /// What everything reachable from each call target does.
-    called: BTreeMap<usize, core::result::Result<Called, String>>,
-    /// (slot, CODE position) -> writer buffer; `None` while in progress.
-    memo: RefCell<BTreeMap<(usize, usize), Option<Resolved>>>,
+    /// Inventory record of each face.
+    face_recs: Vec<u32>,
+    /// E2/E0 record -> first record with the same bytes.
+    selectors: BTreeMap<u32, u32>,
+    proofs: RefCell<Proofs>,
 }
 enum Flow {
     Stop,
@@ -261,8 +263,9 @@ impl Geometry {
             targets: Vec::new(),
             data: Vec::new(),
             fields: Vec::new(),
-            called: BTreeMap::new(),
-            memo: RefCell::new(BTreeMap::new()),
+            face_recs: Vec::new(),
+            selectors: BTreeMap::new(),
+            proofs: RefCell::new(Proofs::default()),
             inventory,
         };
         for r in &g.inventory.records {
@@ -294,16 +297,7 @@ impl Geometry {
         g.data.sort_unstable();
         g.fields.sort_unstable();
         g.frames = g.walk_frames();
-        let mut calls = BTreeSet::new();
-        for i in 0..g.inventory.records.len() {
-            if let Flow::Go { call: Some(t), .. } = g.flow(i) {
-                calls.insert(t);
-            }
-        }
-        for t in calls {
-            let slots = g.reach_slots(t);
-            g.called.insert(t, slots);
-        }
+        let mut first: BTreeMap<Vec<u8>, u32> = BTreeMap::new();
         for i in 0..g.inventory.records.len() {
             let r = &g.inventory.records[i];
             let frame = g.frames[i];
@@ -342,6 +336,13 @@ impl Geometry {
                         }
                     }
                     g.faces.push(f);
+                    g.face_recs.push(i as u32);
+                }
+                Kind::Sh(0xe2 | 0xe0) => {
+                    let canon = *first
+                        .entry(g.selector(r.offset).to_vec())
+                        .or_insert(i as u32);
+                    g.selectors.insert(i as u32, canon);
                 }
                 _ => {}
             }
@@ -532,207 +533,217 @@ impl Geometry {
             .map(|f| f.unwrap_or(Frame::Unreached))
             .collect()
     }
-    /// Slots written by any 82 record reachable from a call target, through
-    /// nested calls, until each path returns; the E2/E0 texture selectors
-    /// reachable there and the records that return.
-    fn reach_slots(&self, target: usize) -> core::result::Result<Called, String> {
+    /// Record index of a CODE offset: the record starting there, else the
+    /// one containing it.
+    fn record_of(&self, at: usize) -> Option<u32> {
         let inv = &self.inventory;
-        let mut seen = BTreeSet::new();
-        let mut work = alloc::vec![target];
-        let mut out = Called::default();
-        while let Some(at) = work.pop() {
-            let Some(i) = inv.starting_at(at) else {
-                return Err(format!(
-                    "a called path lands inside a record at CODE+{at:X}"
-                ));
-            };
-            if !seen.insert(i) {
-                continue;
-            }
-            let r = &inv.records[i];
-            if r.kind == Kind::Sh(0x82) {
-                let (s, n) = slots_of(&self.code, r.offset)?;
-                out.slots.extend(s..s + n);
-            }
-            if matches!(r.kind, Kind::Sh(0xe2 | 0xe0)) {
-                out.selectors.push(r.offset);
-            }
-            match self.flow(i) {
-                Flow::Stop => out.returns.push(r.offset),
-                Flow::Unexplained => {
-                    return Err(format!(
-                        "a called path reaches unexplained bytes at CODE+{:X}",
-                        r.offset
-                    ))
-                }
-                Flow::Go { next, call } => {
-                    work.extend(next);
-                    work.extend(call);
+        inv.starting_at(at)
+            .or_else(|| inv.record_index(at))
+            .map(|i| i as u32)
+    }
+    /// How record `i` moves control, for the dataflow graph. As `flow`, but
+    /// a 1E is padding or a return by the 38 scope in force (as in `Model`),
+    /// unexplained bytes lead on with an unknown state, and the x86 of a stub
+    /// the evaluator does not recognise may also resume at its self-offsets.
+    fn step(&self, i: usize) -> flow::Step {
+        use flow::Step;
+        let inv = &self.inventory;
+        let r = &inv.records[i];
+        let next = self.record_of(r.end()).filter(|n| *n as usize > i);
+        match r.kind {
+            Kind::Pad => Step::Pad { next },
+            Kind::EndObject => Step::Return,
+            Kind::Sh(0x38) => {
+                let end = word(&self.code, r.offset + 1)
+                    .ok()
+                    .map(|d| r.end() as i64 + d as i64)
+                    .filter(|e| *e > r.offset as i64 && *e <= self.code.len() as i64);
+                match end {
+                    Some(end) => Step::Scope {
+                        end: end as u32,
+                        next,
+                    },
+                    None => Step::Go(next.into_iter().collect()),
                 }
             }
+            Kind::Opaque | Kind::X86Data | Kind::EndShape | Kind::Trampoline => {
+                let mut to: Vec<u32> = next.into_iter().collect();
+                for p in &r.pointers {
+                    if let (Target::Code(t), false) = (
+                        p.target,
+                        matches!(p.kind, PointerKind::SelfOffset | PointerKind::Off16),
+                    ) {
+                        to.extend(self.record_of(t));
+                    }
+                }
+                to.sort_unstable();
+                to.dedup();
+                Step::Unexplained(to)
+            }
+            _ => match self.flow(i) {
+                Flow::Go {
+                    next: to,
+                    call: Some(t),
+                } => Step::Call {
+                    callee: inv.starting_at(t).map(|c| c as u32),
+                    ret: to.first().and_then(|e| self.record_of(*e)),
+                },
+                Flow::Go {
+                    next: to,
+                    call: None,
+                } => {
+                    let mut to: Vec<u32> = to.iter().filter_map(|t| self.record_of(*t)).collect();
+                    if matches!(r.kind, Kind::X86 { .. }) && self.unrecognised_stub(r.offset) {
+                        for p in &r.pointers {
+                            if let (PointerKind::SelfOffset, Target::Code(t)) = (p.kind, p.target) {
+                                to.extend(self.record_of(t));
+                            }
+                        }
+                    }
+                    to.sort_unstable();
+                    to.dedup();
+                    Step::Go(to)
+                }
+                Flow::Stop | Flow::Unexplained => Step::Return,
+            },
         }
-        Ok(out)
     }
-    /// Walking back, a record lets the path continue from the one before it.
-    /// Every 1E counts as falling through: whichever reading holds (return or
-    /// padding), this only adds paths to check.
-    fn continues(&self, i: usize) -> bool {
-        let r = &self.inventory.records[i];
-        r.kind == Kind::Pad
-            || matches!(self.flow(i), Flow::Go { next, .. } if next.contains(&r.end()))
+    /// Whether x86 at this CODE offset belongs to a stub the evaluator does
+    /// not recognise.
+    fn unrecognised_stub(&self, at: usize) -> bool {
+        self.inventory.stubs.iter().any(|s| {
+            s.unrecognised.is_some()
+                && (s.offset == at || s.blocks.iter().any(|b| b.0 <= at + 2 && at < b.1))
+        })
     }
-    /// The 82 buffer whose vertex `slot` holds on every path reaching the
-    /// record at CODE offset `x`. Walking back from `x`, no record may rewrite
-    /// the slot (directly or in a called block) before the writer or a
-    /// barrier, and every pointer entering that span from outside it must
-    /// resolve to the same writer.
-    ///
-    /// Recursion is capped at 128 entries deep. Measured over all 1,275
-    /// FA_2.LIB shapes (x86_64 release): the deepest proof is 48 levels and
-    /// uses 21 KiB, about 450 bytes a level, so the cap bounds it near
-    /// 57 KiB, far inside Win98's 1 MiB default main-thread stack. It stays
-    /// recursive for that reason.
-    fn resolve(&self, slot: usize, x: usize, depth: usize) -> Resolved {
-        if let Some(known) = self.memo.borrow().get(&(slot, x)) {
-            return known
-                .clone()
-                .unwrap_or_else(|| Err("its control flow loops".into()));
+    fn graph(&self) -> core::result::Result<flow::Graph, String> {
+        let n = self.inventory.records.len();
+        let steps: Vec<flow::Step> = (0..n).map(|i| self.step(i)).collect();
+        let offsets: Vec<u32> = self
+            .inventory
+            .records
+            .iter()
+            .map(|r| r.offset as u32)
+            .collect();
+        flow::Graph::build(&steps, &offsets)
+    }
+    /// The value record `rec` leaves for a proof key, if it writes the state.
+    fn gen(&self, key: usize, rec: u32) -> Option<u32> {
+        if key == MATERIAL {
+            return self.selectors.get(&rec).map(|c| flow::written(*c));
         }
-        if depth > 128 {
-            return Err("its control flow is too deep to prove".into());
+        let r = self.inventory.records.get(rec as usize)?;
+        if r.kind != Kind::Sh(0x82) {
+            return None;
         }
-        self.memo.borrow_mut().insert((slot, x), None);
-        let r = self.resolve_span(slot, x, depth);
-        self.memo.borrow_mut().insert((slot, x), Some(r.clone()));
-        r
+        let (s, n) = slots_of(&self.code, r.offset).ok()?;
+        (s..s + n).contains(&key).then(|| flow::written(rec))
     }
-    fn resolve_span(&self, slot: usize, x: usize, depth: usize) -> Resolved {
-        let inv = &self.inventory;
-        let material = slot == MATERIAL;
-        let what = || {
-            if material {
-                String::from("the texture state")
-            } else {
-                format!("slot {slot}")
+    /// Everything that may hold for a proof key on entry to a face.
+    fn reaching(&self, key: usize, face: usize) -> core::result::Result<flow::Set, String> {
+        let mut proofs = self.proofs.borrow_mut();
+        let Proofs { graph, sets } = &mut *proofs;
+        let at = match sets.iter().position(|(k, _)| *k == key) {
+            Some(at) => at,
+            None => {
+                let graph = graph.get_or_insert_with(|| self.graph());
+                let solved = match graph {
+                    Ok(g) => g.solve(&|rec| self.gen(key, rec), &self.face_recs),
+                    Err(e) => Err(e.clone()),
+                };
+                if sets.len() >= KEEP {
+                    let _ = sets.remove(0);
+                }
+                sets.push((key, solved));
+                sets.len() - 1
             }
         };
-        let mut found = None;
-        let mut start = 0;
-        for j in (0..inv.records.partition_point(|r| r.offset < x)).rev() {
-            let r = &inv.records[j];
-            match r.kind {
-                Kind::Sh(0xe2 | 0xe0) if material => {
-                    found = Some(r.offset);
-                    start = r.end();
-                    break;
-                }
-                Kind::Sh(0x82) if !material => {
-                    let (s, n) = slots_of(&self.code, r.offset)?;
-                    if (s..s + n).contains(&slot) {
-                        found = self
-                            .buffers
-                            .binary_search_by_key(&(inv.code_start + r.offset), |b| b.offset)
-                            .ok();
-                        start = r.end();
-                        break;
-                    }
-                }
-                Kind::Sh(0x12 | 0x6e | 0xc4 | 0xc6) => {
-                    let t = r.pointers.iter().find_map(|p| match p.target {
-                        Target::Code(t) => Some(t),
-                        _ => None,
-                    });
-                    match t.and_then(|t| self.called.get(&t)) {
-                        Some(Ok(c)) if material && c.selectors.is_empty() => {}
-                        Some(Ok(c)) if material => {
-                            // The block selects textures: the state after it
-                            // is the one every return of the block leaves.
-                            let mut exit = None;
-                            for ret in &c.returns {
-                                let w = self.resolve(MATERIAL, *ret, depth + 1).map_err(|e| {
-                                    format!("the block called at CODE+{:X} {e}", r.offset)
-                                })?;
-                                match exit {
-                                    None => exit = Some(w),
-                                    Some(x) if self.selector(x) == self.selector(w) => {}
-                                    Some(_) => {
-                                        return Err(format!(
-                                            "the block called at CODE+{:X} returns with different texture states",
-                                            r.offset
-                                        ))
-                                    }
-                                }
-                            }
-                            found = Some(exit.ok_or_else(|| {
-                                format!("the block called at CODE+{:X} never returns", r.offset)
-                            })?);
-                            start = r.end();
-                            break;
-                        }
-                        Some(Ok(c)) if !material && !c.slots.contains(&slot) => {}
-                        Some(Ok(_)) => {
-                            return Err(format!(
-                                "the block called at CODE+{:X} rewrites {}",
-                                r.offset,
-                                what()
-                            ))
-                        }
-                        Some(Err(e)) => return Err(e.clone()),
-                        None => {
-                            return Err(format!("the call at CODE+{:X} is unresolved", r.offset))
-                        }
-                    }
-                }
-                Kind::Opaque | Kind::X86Data | Kind::EndShape | Kind::Trampoline => {
-                    return Err(format!(
-                        "unexplained bytes at CODE+{:X} precede it",
-                        r.offset
-                    ))
-                }
-                _ => {}
-            }
-            if !self.continues(j) {
-                start = r.end();
-                break;
-            }
+        match &sets[at].1 {
+            Ok(v) => Ok(v.get(face).copied().unwrap_or(flow::Set::BOTTOM)),
+            Err(e) => Err(e.clone()),
         }
-        if found.is_none() && start == 0 {
+    }
+    /// How a writer record is named in a refusal.
+    fn describe(&self, material: bool, rec: u32) -> String {
+        let r = &self.inventory.records[rec as usize];
+        if !material {
+            return format!("the 82 at CODE+{:X}", r.offset);
+        }
+        let s = self.selector(r.offset);
+        if s.first() == Some(&0xe2) {
+            let name: String = s[2..]
+                .iter()
+                .take_while(|b| **b != 0)
+                .map(|b| *b as char)
+                .collect();
+            format!("{name} (E2 at CODE+{:X})", r.offset)
+        } else {
+            format!("the E0 record at CODE+{:X}", r.offset)
+        }
+    }
+    /// The one writer record that holds for a proof key at a face, or why
+    /// there is not exactly one.
+    fn prove(&self, key: usize, face: usize) -> Resolved {
+        let material = key == MATERIAL;
+        let set = self.reaching(key, face)?;
+        if set.is_top() {
             return Err(if material {
-                "no texture record precedes it on the path from the shape start".into()
+                "more than four different texture states reach it".into()
             } else {
-                format!("slot {slot} is not written on the path from the shape start")
+                format!("slot {key} may show more than four different vertices there")
             });
         }
-        let first = self.entries.partition_point(|(t, _)| *t < start);
-        let mut sources = BTreeSet::new();
-        for (_, f) in self.entries[first..].iter().take_while(|(t, _)| *t <= x) {
-            if !(start..x).contains(f) {
-                if let Some(i) = inv.record_index(*f) {
-                    sources.insert(inv.records[i].offset);
-                }
+        let values = set.values();
+        if let [v] = values {
+            if let Some(Ok(rec)) = flow::origin(*v) {
+                return Ok(rec as usize);
             }
         }
-        for source in sources {
-            let w = self.resolve(slot, source, depth + 1).map_err(|e| {
-                // Name only the outermost entry; the innermost reason follows.
-                if depth == 0 {
-                    format!("CODE+{source:X} enters before CODE+{x:X} and {e}")
+        if values.is_empty() {
+            return Err("no path from the shape start draws it".into());
+        }
+        for v in values {
+            if let Some(Err(rec)) = flow::origin(*v) {
+                let r = &self.inventory.records[rec as usize];
+                return Err(if matches!(r.kind, Kind::Sh(0x12 | 0x6e | 0xc4 | 0xc6)) {
+                    format!(
+                        "the block called at CODE+{:X} does not start at a record",
+                        r.offset
+                    )
                 } else {
-                    e
-                }
-            })?;
-            match found {
-                None => found = Some(w),
-                Some(f) if f == w || (material && self.selector(f) == self.selector(w)) => {}
-                Some(_) => {
-                    return Err(format!(
-                        "{} differs when entered from CODE+{source:X}",
-                        what()
-                    ))
-                }
+                    format!(
+                        "bytes Hangar cannot decode at CODE+{:X} lead to it",
+                        r.offset
+                    )
+                });
             }
         }
-        found.ok_or_else(|| format!("nothing reaches CODE+{x:X}"))
+        if values.contains(&flow::UNDEFINED) {
+            return Err(if material {
+                "on some path to it no texture is selected yet (no E2/E0 record since the shape start)"
+                    .into()
+            } else {
+                format!("on some path to it slot {key} is never written")
+            });
+        }
+        let writers: Vec<String> = values
+            .iter()
+            .filter_map(|v| match flow::origin(*v) {
+                Some(Ok(rec)) => Some(self.describe(material, rec)),
+                _ => None,
+            })
+            .collect();
+        Err(if material {
+            format!(
+                "different textures reach it on different paths: {}",
+                writers.join(" and ")
+            )
+        } else {
+            format!(
+                "another path rewrites slot {key}: it may show the vertex from {}",
+                writers.join(" or ")
+            )
+        })
     }
     /// Bytes of the E2 (16) or E0 (4) record at a CODE offset.
     pub fn selector(&self, at: usize) -> &[u8] {
@@ -743,18 +754,25 @@ impl Geometry {
         };
         self.code.get(at..at + n).unwrap_or(&[])
     }
-    /// The buffer whose vertex a face's slot shows, when that is provable.
+    /// The buffer whose vertex a face's slot shows on every path that draws
+    /// the face, when that is provable.
     pub fn writer(&self, face: usize, slot: usize) -> Resolved {
-        let f = self.faces.get(face).ok_or("No such face")?;
-        self.resolve(slot, f.offset - self.inventory.code_start, 0)
+        self.faces.get(face).ok_or("No such face")?;
+        let rec = self.prove(slot, face)?;
+        let at = self.inventory.code_start + self.inventory.records[rec].offset;
+        self.buffers
+            .binary_search_by_key(&at, |b| b.offset)
+            .map_err(|_| "its writer is not a vertex buffer".into())
     }
     /// CODE offset of the E2/E0 record whose texture state holds on every
-    /// path reaching a face, proved like a vertex slot: walking back, no
-    /// called block may select a texture, and every entry into that span
-    /// must resolve to the same record.
+    /// path that draws a face (records with the same bytes count as one).
     pub fn material(&self, face: usize) -> Resolved {
-        let f = self.faces.get(face).ok_or("No such face")?;
-        self.resolve(MATERIAL, f.offset - self.inventory.code_start, 0)
+        self.faces.get(face).ok_or("No such face")?;
+        Ok(self.inventory.records[self.prove(MATERIAL, face)?].offset)
+    }
+    /// Whether any path from the shape start reaches the face.
+    pub fn drawn(&self, face: usize) -> bool {
+        !matches!(self.reaching(MATERIAL, face), Ok(s) if s.is_bottom())
     }
     /// Refusal when CODE bytes `[a, e)` may not be rewritten: a pointer or
     /// relocation field inside, a pointer target strictly inside, or a
@@ -821,7 +839,7 @@ impl Geometry {
         }
         for f in self.users.get(&slot).into_iter().flatten() {
             let face = &self.faces[*f];
-            if face.frame == Frame::Unreached {
+            if face.frame == Frame::Unreached || !self.drawn(*f) {
                 continue;
             }
             match self.writer(*f, slot) {
@@ -1384,10 +1402,9 @@ fn pick_host(g: &Geometry, corners: &[(usize, usize)], frame: Frame) -> Result<u
     candidates.sort_unstable_by(|a, b| b.cmp(a));
     let mut last = String::from("no face of this frame can host it");
     for (_, _, f) in candidates.into_iter().take(512) {
-        let h = g.faces[f].offset - cs;
         match corners
             .iter()
-            .try_for_each(|(b, i)| match g.resolve(g.buffers[*b].slot + i, h, 0) {
+            .try_for_each(|(b, i)| match g.writer(f, g.buffers[*b].slot + i) {
                 Ok(w) if w == *b => Ok(()),
                 Ok(_) => Err(format!(
                     "slot {} shows another vertex there",
@@ -1480,7 +1497,7 @@ pub fn append_geometry(source: &[u8], add: &Addition) -> Result<Added> {
                 g.buffers[*b].vertex(*i)
             ));
         }
-        match g.resolve(slot, a, 0) {
+        match g.writer(host, slot) {
             Ok(w) if w == *b => {}
             Ok(_) => {
                 return Err(format!(
@@ -1915,16 +1932,14 @@ pub fn extrude_faces(
         plans.push((f, cap, sides));
     }
     // Host: a selected face at which every boundary corner is current.
-    let cs = g.inventory.code_start;
     let host = picked
         .iter()
         .rev()
         .copied()
         .find(|h| {
-            let at = g.faces[*h].offset - cs;
             boundary
                 .iter()
-                .all(|(b, i)| g.resolve(g.buffers[*b].slot + i, at, 0) == Ok(*b))
+                .all(|(b, i)| g.writer(*h, g.buffers[*b].slot + i) == Ok(*b))
         })
         .ok_or("No selected face sees every edge vertex; extrude a smaller selection")?;
     let mut new_faces = Vec::new();
