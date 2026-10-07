@@ -413,6 +413,23 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                         XSetForeground(d, gc, color as c_ulong);
                         XDrawLine(d, pix, gc, x, y, a, b);
                     }
+                    Draw::Icon(x, y, g, full, half) => {
+                        let mask = g.mask();
+                        for (runs, color) in [(mask.full, full), (mask.half, half)] {
+                            XSetForeground(d, gc, color as c_ulong);
+                            for (row, at, len) in runs {
+                                XFillRectangle(
+                                    d,
+                                    pix,
+                                    gc,
+                                    x + *at as i32,
+                                    y + *row as i32,
+                                    *len as u32,
+                                    1,
+                                );
+                            }
+                        }
+                    }
                     Draw::Bitmap(x, y, width, height, pixels) => {
                         let memory = malloc(pixels.len() * 4);
                         if !memory.is_null() {

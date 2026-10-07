@@ -120,31 +120,7 @@ pub(super) struct Layout {
     pub canvas: Canvas,
     pub hits: Vec<Hit>,
 }
-#[derive(Clone, Copy)]
-pub(super) enum Icon {
-    Logo,
-    Lib,
-    Aircraft,
-    Shape,
-    Image,
-    Weapon,
-    Object,
-    Palette,
-    Mission,
-    Sound,
-    Search,
-    Plus,
-    Select,
-    Move,
-    Rotate,
-    Scale,
-    Frame,
-    Brush,
-    Flight,
-    Check,
-    Warn,
-    Link,
-}
+pub(super) use super::Glyph as Icon;
 const GROUPS: [(&str, &str, Icon); 10] = [
     ("Aircraft", "PT", Icon::Aircraft),
     ("Shapes", "SH", Icon::Shape),
@@ -153,7 +129,7 @@ const GROUPS: [(&str, &str, Icon); 10] = [
     ("Ground objects", "OT", Icon::Object),
     ("Palettes", "PAL", Icon::Palette),
     ("Missions", "M", Icon::Mission),
-    ("Sounds", "SND", Icon::Sound),
+    ("Sounds", "11K", Icon::Sound),
     ("Other resources", "...", Icon::Lib),
     ("Original textures", "ORG", Icon::Image),
 ];
@@ -171,157 +147,13 @@ pub(super) fn category_of(name: &str) -> usize {
         _ => 8,
     }
 }
+/// Draw a generated icon on the default editor ground (`gm-800`).
 pub(super) fn icon(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb) {
-    let paths: &[&[(i32, i32)]] = match i {
-        Icon::Logo => &[
-            &[(8, 1), (15, 8), (8, 15), (1, 8), (8, 1)],
-            &[(5, 8), (11, 8)],
-            &[(8, 5), (8, 11)],
-        ],
-        Icon::Aircraft => &[
-            &[(8, 1), (8, 14)],
-            &[(8, 6), (2, 10), (2, 11), (8, 9), (14, 11), (14, 10), (8, 6)],
-            &[(5, 14), (8, 13), (11, 14)],
-        ],
-        Icon::Shape => &[
-            &[(8, 1), (14, 4), (14, 12), (8, 15), (2, 12), (2, 4), (8, 1)],
-            &[(2, 4), (8, 8), (14, 4)],
-            &[(8, 8), (8, 15)],
-        ],
-        Icon::Lib => &[
-            &[(2, 3), (14, 3), (14, 6), (2, 6), (2, 3)],
-            &[(3, 6), (3, 14), (13, 14), (13, 6)],
-            &[(6, 9), (10, 9)],
-        ],
-        Icon::Image => &[
-            &[(1, 2), (15, 2), (15, 14), (1, 14), (1, 2)],
-            &[(2, 12), (6, 8), (9, 11), (12, 6), (15, 10)],
-            &[(4, 5), (5, 5)],
-        ],
-        Icon::Weapon => &[
-            &[(2, 14), (12, 3), (14, 2), (14, 5), (4, 15), (2, 14)],
-            &[(5, 10), (2, 9), (6, 7)],
-            &[(7, 12), (8, 15), (10, 10)],
-        ],
-        Icon::Object => &[
-            &[(1, 8), (8, 2), (15, 8)],
-            &[(3, 7), (3, 14), (13, 14), (13, 7)],
-            &[(6, 14), (6, 10), (10, 10), (10, 14)],
-        ],
-        Icon::Palette => &[
-            &[
-                (8, 1),
-                (3, 3),
-                (1, 8),
-                (3, 13),
-                (8, 15),
-                (10, 13),
-                (9, 10),
-                (14, 9),
-                (15, 6),
-                (12, 2),
-                (8, 1),
-            ],
-            &[(4, 5), (5, 5)],
-            &[(8, 4), (9, 4)],
-            &[(4, 9), (5, 9)],
-        ],
-        Icon::Mission => &[
-            &[(3, 1), (10, 1), (14, 5), (14, 15), (3, 15), (3, 1)],
-            &[(10, 1), (10, 5), (14, 5)],
-            &[(6, 8), (11, 8)],
-            &[(6, 11), (11, 11)],
-        ],
-        Icon::Sound => &[
-            &[(2, 6), (5, 6), (9, 2), (9, 14), (5, 10), (2, 10), (2, 6)],
-            &[(12, 5), (14, 8), (12, 11)],
-        ],
-        Icon::Search => &[
-            &[
-                (6, 2),
-                (2, 4),
-                (2, 8),
-                (5, 11),
-                (9, 10),
-                (11, 7),
-                (10, 3),
-                (6, 2),
-            ],
-            &[(10, 10), (15, 15)],
-        ],
-        Icon::Plus => &[&[(8, 3), (8, 13)], &[(3, 8), (13, 8)]],
-        Icon::Select => &[&[(3, 2), (13, 7), (8, 9), (6, 14), (3, 2)]],
-        Icon::Move => &[
-            &[(8, 1), (8, 15)],
-            &[(1, 8), (15, 8)],
-            &[(5, 4), (8, 1), (11, 4)],
-            &[(5, 12), (8, 15), (11, 12)],
-            &[(4, 5), (1, 8), (4, 11)],
-            &[(12, 5), (15, 8), (12, 11)],
-        ],
-        Icon::Rotate => &[
-            &[
-                (13, 5),
-                (10, 2),
-                (5, 2),
-                (2, 6),
-                (2, 10),
-                (6, 14),
-                (11, 13),
-                (14, 9),
-            ],
-            &[(13, 1), (13, 5), (9, 5)],
-        ],
-        Icon::Scale => &[
-            &[(2, 14), (14, 2)],
-            &[(9, 2), (14, 2), (14, 7)],
-            &[(2, 9), (2, 14), (7, 14)],
-        ],
-        Icon::Brush => &[
-            &[(2, 13), (5, 10), (8, 13), (2, 13)],
-            &[(6, 9), (12, 2), (15, 5), (9, 11)],
-        ],
-        Icon::Frame => &[
-            &[(2, 6), (2, 2), (6, 2)],
-            &[(10, 2), (14, 2), (14, 6)],
-            &[(14, 10), (14, 14), (10, 14)],
-            &[(6, 14), (2, 14), (2, 10)],
-        ],
-        Icon::Flight => &[
-            &[(2, 12), (2, 7), (5, 3), (11, 3), (14, 7), (14, 12)],
-            &[(8, 11), (11, 6)],
-        ],
-        Icon::Check => &[&[(2, 8), (6, 12), (14, 3)]],
-        Icon::Warn => &[
-            &[(8, 1), (15, 14), (1, 14), (8, 1)],
-            &[(8, 5), (8, 9)],
-            &[(8, 11), (8, 12)],
-        ],
-        Icon::Link => &[
-            &[(6, 10), (3, 10), (1, 8), (1, 5), (4, 2), (7, 2), (9, 4)],
-            &[
-                (7, 12),
-                (9, 14),
-                (12, 14),
-                (15, 11),
-                (15, 8),
-                (13, 6),
-                (10, 6),
-            ],
-            &[(5, 11), (11, 5)],
-        ],
-    };
-    for path in paths {
-        for pair in path.windows(2) {
-            d.line(
-                x + pair[0].0,
-                y + pair[0].1,
-                x + pair[1].0,
-                y + pair[1].1,
-                color,
-            );
-        }
-    }
+    d.icon(x, y, i, color, c::GM_800);
+}
+/// Draw a generated icon whose edge pixels blend into `ground`.
+pub(super) fn icon_on(d: &mut Canvas, x: i32, y: i32, i: Icon, color: Rgb, ground: Rgb) {
+    d.icon(x, y, i, color, ground);
 }
 pub(super) fn border(d: &mut Canvas, x: i32, y: i32, w: i32, h: i32, color: Rgb) {
     d.line(x, y, x + w - 1, y, color);
@@ -344,14 +176,14 @@ pub(super) fn badge(d: &mut Canvas, x: i32, y: i32, s: &str) {
     d.rect(x, y, w, 16, c::GM_600);
     d.text(x + 4, y + 12, s, c::INK_MUTED);
 }
+/// Disclosure chevron centred on (x + 4, y + 4), the old 8px twisty box.
 fn chevron(d: &mut Canvas, x: i32, y: i32, open: bool) {
-    if open {
-        d.line(x, y, x + 4, y + 4, c::INK_MUTED);
-        d.line(x + 4, y + 4, x + 8, y, c::INK_MUTED);
+    let g = if open {
+        Icon::ChevronDown
     } else {
-        d.line(x, y, x + 4, y + 4, c::INK_MUTED);
-        d.line(x + 4, y + 4, x, y + 8, c::INK_MUTED);
-    }
+        Icon::ChevronRight
+    };
+    d.icon(x - 4, y - 4, g, c::INK_MUTED, c::GM_800);
 }
 impl Layout {
     pub(super) fn hit(&mut self, rect: [i32; 4], action: Action) {
@@ -398,25 +230,20 @@ impl Layout {
         active: bool,
     ) {
         let [x, y, w, h] = rect;
-        self.canvas.rect(
-            x,
-            y,
-            w,
-            h,
-            if active {
-                c::AMBER_DEEP
-            } else if self.mouse[0] >= x
-                && self.mouse[0] < x + w
-                && self.mouse[1] >= y
-                && self.mouse[1] < y + h
-            {
-                c::GM_600
-            } else {
-                c::GM_700
-            },
-        );
+        let fill = if active {
+            c::AMBER_DEEP
+        } else if self.mouse[0] >= x
+            && self.mouse[0] < x + w
+            && self.mouse[1] >= y
+            && self.mouse[1] < y + h
+        {
+            c::GM_600
+        } else {
+            c::GM_700
+        };
+        self.canvas.rect(x, y, w, h, fill);
         border(&mut self.canvas, x, y, w, h, c::GM_1000);
-        icon(
+        icon_on(
             &mut self.canvas,
             x + (w - 16) / 2,
             y + (h - 16) / 2,
@@ -428,6 +255,7 @@ impl Layout {
             } else {
                 c::INK_MUTED
             },
+            fill,
         );
         if enabled {
             self.hit(rect, action);
@@ -1342,7 +1170,7 @@ impl App {
         let dock = self.dock_y();
         out.canvas.rect(0, 0, w, h, c::GM_800);
         out.canvas.rect(0, 0, w, 26, c::GM_950);
-        icon(&mut out.canvas, 8, 5, Icon::Logo, c::AMBER);
+        icon(&mut out.canvas, 8, 5, Icon::Hardpoint, c::AMBER);
         out.canvas.label(30, 18, "Hangar", c::INK);
         out.hit([4, 0, 78, 26], Action::Demo);
         let menus = [
@@ -2658,7 +2486,7 @@ impl App {
         };
         label_fit(d, x + 18, y + 129, w - 36, &hint, c::INK_MUTED);
         if self.status.starts_with("Error:") {
-            icon(d, x + 18, y + 143, Icon::Warn, c::DANGER);
+            icon(d, x + 18, y + 143, Icon::Warning, c::DANGER);
             label_fit(d, x + 42, y + 157, w - 60, &self.status, c::DANGER);
         }
         if matches!(p.kind, PromptKind::CloneTitle) {

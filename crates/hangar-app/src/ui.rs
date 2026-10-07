@@ -145,7 +145,11 @@ pub enum Draw {
     /// Baseline-positioned text in a theme style.
     Text(i32, i32, String, u32, Style),
     Bitmap(i32, i32, usize, usize, Vec<u32>),
+    /// A generated 16px icon at its top-left corner: full pixels in the first
+    /// color, half-coverage edge pixels in the second (icon mixed into ground).
+    Icon(i32, i32, Glyph, u32, u32),
 }
+pub use glyphs::Glyph;
 pub struct Canvas {
     pub commands: Vec<Draw>,
 }
@@ -165,6 +169,11 @@ impl Canvas {
     /// Data text (numbers, names, offsets) in the default mono `value` style.
     pub fn text(&mut self, x: i32, y: i32, s: &str, color: Rgb) {
         self.styled(x, y, s, color, Style::Value);
+    }
+    /// Icon `g` at (x, y) in `color` over a `ground` fill (for its edge pixels).
+    pub fn icon(&mut self, x: i32, y: i32, g: Glyph, color: Rgb, ground: Rgb) {
+        self.commands
+            .push(Draw::Icon(x, y, g, color.0, color.mix(ground, 128).0));
     }
     pub fn styled(&mut self, x: i32, y: i32, s: &str, color: Rgb, style: Style) {
         self.commands
@@ -200,6 +209,18 @@ impl Canvas {
                                 end - xx
                             ));
                             xx = end;
+                        }
+                    }
+                }
+                Draw::Icon(x, y, g, full, half) => {
+                    let mask = g.mask();
+                    for (runs, c) in [(mask.full, full), (mask.half, half)] {
+                        for (row, at, len) in runs {
+                            s.push_str(&format!(
+                                "<rect x=\"{}\" y=\"{}\" width=\"{len}\" height=\"1\" fill=\"#{c:06x}\"/>",
+                                x + *at as i32,
+                                y + *row as i32
+                            ));
                         }
                     }
                 }

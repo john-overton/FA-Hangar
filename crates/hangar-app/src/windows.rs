@@ -474,6 +474,27 @@ unsafe fn paint(hwnd: Handle) {
                 );
                 DeleteObject(brush);
             }
+            Draw::Icon(x, y, g, full, half) => {
+                let mask = g.mask();
+                for (runs, c) in [(mask.full, full), (mask.half, half)] {
+                    let brush = CreateSolidBrush(color(c));
+                    for (row, at, len) in runs {
+                        let left = x + *at as i32;
+                        let top = y + *row as i32;
+                        FillRect(
+                            back,
+                            &Rect {
+                                left,
+                                top,
+                                right: left + *len as i32,
+                                bottom: top + 1,
+                            },
+                            brush,
+                        );
+                    }
+                    DeleteObject(brush);
+                }
+            }
             Draw::Line(x, y, a, b, c) => {
                 let pen = CreatePen(0, 1, color(c));
                 let old = SelectObject(back, pen);

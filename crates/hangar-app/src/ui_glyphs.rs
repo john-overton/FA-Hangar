@@ -15,6 +15,7 @@ pub const UI_ADVANCE_BOLD: [u8; 95] = [18, 21, 30, 36, 36, 57, 46, 15, 21, 21, 2
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Glyph {
     Aircraft,
+    Brush,
     Check,
     ChevronDown,
     ChevronRight,
@@ -24,6 +25,7 @@ pub enum Glyph {
     Eye,
     Flight,
     Folder,
+    Frame,
     Graft,
     Hardpoint,
     Image,
@@ -62,8 +64,9 @@ pub struct Mask {
 }
 
 impl Glyph {
-    pub const ALL: [Glyph; 39] = [
+    pub const ALL: [Glyph; 41] = [
         Glyph::Aircraft,
+        Glyph::Brush,
         Glyph::Check,
         Glyph::ChevronDown,
         Glyph::ChevronRight,
@@ -73,6 +76,7 @@ impl Glyph {
         Glyph::Eye,
         Glyph::Flight,
         Glyph::Folder,
+        Glyph::Frame,
         Glyph::Graft,
         Glyph::Hardpoint,
         Glyph::Image,
@@ -107,6 +111,7 @@ impl Glyph {
     pub const fn name(self) -> &'static str {
         match self {
             Glyph::Aircraft => "aircraft",
+            Glyph::Brush => "brush",
             Glyph::Check => "check",
             Glyph::ChevronDown => "chevron-down",
             Glyph::ChevronRight => "chevron-right",
@@ -116,6 +121,7 @@ impl Glyph {
             Glyph::Eye => "eye",
             Glyph::Flight => "flight",
             Glyph::Folder => "folder",
+            Glyph::Frame => "frame",
             Glyph::Graft => "graft",
             Glyph::Hardpoint => "hardpoint",
             Glyph::Image => "image",
@@ -150,6 +156,7 @@ impl Glyph {
     pub const fn mask(self) -> &'static Mask {
         match self {
             Glyph::Aircraft => &AIRCRAFT,
+            Glyph::Brush => &BRUSH,
             Glyph::Check => &CHECK,
             Glyph::ChevronDown => &CHEVRONDOWN,
             Glyph::ChevronRight => &CHEVRONRIGHT,
@@ -159,6 +166,7 @@ impl Glyph {
             Glyph::Eye => &EYE,
             Glyph::Flight => &FLIGHT,
             Glyph::Folder => &FOLDER,
+            Glyph::Frame => &FRAME,
             Glyph::Graft => &GRAFT,
             Glyph::Hardpoint => &HARDPOINT,
             Glyph::Image => &IMAGE,
@@ -196,6 +204,10 @@ const AIRCRAFT: Mask = Mask {
     full: &[(1, 7, 2), (2, 7, 2), (3, 7, 2), (4, 7, 2), (5, 7, 2), (6, 6, 4), (7, 4, 8), (8, 2, 3), (8, 7, 2), (8, 11, 3), (9, 1, 14), (10, 1, 4), (10, 7, 2), (10, 11, 4), (11, 7, 2), (12, 7, 2), (13, 6, 4), (14, 5, 2), (14, 9, 2)],
     half: &[(8, 5, 1), (8, 10, 1), (10, 5, 2), (10, 9, 2), (11, 1, 2), (11, 13, 2), (13, 5, 1), (13, 10, 1), (14, 7, 2)],
 };
+const BRUSH: Mask = Mask {
+    full: &[(2, 13, 1), (3, 12, 1), (4, 11, 1), (5, 10, 1), (6, 9, 1), (7, 6, 3), (8, 5, 4), (9, 4, 5), (10, 3, 1), (10, 7, 2), (11, 2, 2), (11, 7, 2), (12, 2, 2), (12, 6, 2), (13, 2, 5)],
+    half: &[(2, 12, 1), (3, 11, 1), (3, 13, 1), (4, 10, 1), (4, 12, 1), (5, 9, 1), (5, 11, 1), (6, 6, 1), (6, 8, 1), (6, 10, 1), (7, 9, 1), (8, 4, 1), (9, 3, 1), (9, 9, 1), (10, 4, 1), (12, 4, 2)],
+};
 const CHECK: Mask = Mask {
     full: &[(5, 12, 1), (6, 11, 1), (7, 10, 1), (8, 2, 2), (8, 9, 1), (9, 3, 2), (9, 8, 1), (10, 4, 2), (10, 7, 1), (11, 5, 2)],
     half: &[(4, 12, 2), (5, 11, 1), (5, 13, 1), (6, 10, 1), (6, 12, 1), (7, 9, 1), (7, 11, 1), (8, 8, 1), (8, 10, 1), (9, 7, 1), (9, 9, 1), (10, 6, 1), (10, 8, 1), (11, 7, 1), (12, 6, 1)],
@@ -231,6 +243,10 @@ const FLIGHT: Mask = Mask {
 const FOLDER: Mask = Mask {
     full: &[(3, 1, 6), (4, 1, 1), (4, 6, 9), (5, 1, 1), (5, 7, 8), (6, 1, 1), (6, 14, 1), (7, 1, 1), (7, 14, 1), (8, 1, 1), (8, 14, 1), (9, 1, 1), (9, 14, 1), (10, 1, 1), (10, 14, 1), (11, 1, 1), (11, 14, 1), (12, 1, 14)],
     half: &[(4, 2, 1), (4, 5, 1), (5, 6, 1), (11, 2, 1), (11, 13, 1)],
+};
+const FRAME: Mask = Mask {
+    full: &[(2, 2, 4), (2, 10, 4), (3, 2, 1), (3, 13, 1), (4, 2, 1), (4, 13, 1), (5, 2, 1), (5, 13, 1), (7, 7, 2), (8, 7, 2), (10, 2, 1), (10, 13, 1), (11, 2, 1), (11, 13, 1), (12, 2, 1), (12, 13, 1), (13, 2, 4), (13, 10, 4)],
+    half: &[(3, 3, 1), (3, 12, 1), (12, 3, 1), (12, 12, 1)],
 };
 const GRAFT: Mask = Mask {
     full: &[(2, 3, 2), (2, 11, 2), (3, 3, 2), (3, 11, 2), (4, 3, 2), (4, 11, 2), (5, 3, 2), (5, 11, 2), (6, 4, 1), (6, 11, 1), (7, 4, 2), (7, 10, 2), (8, 5, 2), (8, 9, 2), (9, 6, 4), (10, 7, 2), (11, 7, 2), (12, 5, 6), (13, 6, 4), (14, 7, 2)],
