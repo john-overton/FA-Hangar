@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Reject incompatible headers/imports in the no-CRT Windows executables."""
+"""Reject incompatible headers/imports in the no-CRT Windows executables, and
+check the app icon and version resources that crates/hangar-app/build.rs links in."""
 import argparse
 import struct
 from pathlib import Path
@@ -13,7 +14,7 @@ ALLOWED = {
     'gdi32.dll': set('BitBlt CreateCompatibleBitmap CreateCompatibleDC CreateFontA CreatePen CreateSolidBrush DeleteDC DeleteObject LineTo MoveToEx SelectObject SetBkMode SetTextColor TextOutA StretchDIBits'.split()),
 }
 
-def audit(path, legacy):
+def audit(path, legacy, extract_icon=None):
     data = Path(path).read_bytes()
     def u16(at): return struct.unpack_from('<H', data, at)[0]
     def u32(at): return struct.unpack_from('<I', data, at)[0]
@@ -65,12 +66,57 @@ def audit(path, legacy):
         found[dll] = names
     else: raise ValueError('Unterminated DLL list')
     if set(found) != set(ALLOWED): raise ValueError(f'Unexpected DLL set: {found.keys()}')
-    print(f'PASS {Path(path).name}: PE{bits}, {len(data):,} bytes, {sum(map(len,found.values()))} reviewed imports, no runtime DLLs')
+    # Resources: type -> id -> language, ordinal ids only.
+    res, root = {}, u32(directories+2*8)
+    def walk(rva, path):
+        at = offset(root+rva)
+        named, ids = u16(at+12), u16(at+14)
+        for k in range(named+ids):
+            ident, target = struct.unpack_from('<II', data, at+16+k*8)
+            key = path + (None if ident >> 31 else ident,)
+            if target >> 31:
+                if len(key) < 3: walk(target & 0x7fffffff, key)
+            else:
+                rva, size = struct.unpack_from('<II', data, offset(root+target))
+                res.setdefault(key[:2], data[offset(rva):offset(rva)+size])
+    if root: walk(0, ())
+    # LoadIconA(hInstance, 1) needs icon group 1; Windows 98/ME needs an 8-bit
+    # DIB at every DIB size (it cannot use the 32-bit alpha or PNG entries).
+    group = res.get((14, 1))
+    if not group: raise ValueError('Missing app icon resource (RT_GROUP_ICON 1)')
+    images, kinds = [], set()
+    for k in range(struct.unpack_from('<H', group, 4)[0]):
+        entry = group[6+k*14:6+k*14+14]
+        w, _, _, _, _, bpp, size, ident = struct.unpack('<BBBBHHIH', entry)
+        image = res.get((3, ident))
+        if image is None or len(image) != size: raise ValueError(f'App icon image {ident} missing or truncated')
+        png = image[:8] == b'\x89PNG\r\n\x1a\n'
+        if not png and (len(image) < 40 or struct.unpack_from('<IiiHH', image)[0::4] != (40, bpp)):
+            raise ValueError(f'App icon image {ident} is not a {bpp}-bit DIB')
+        images.append((entry[:12], image))
+        kinds.add((w or 256, 'png' if png else bpp))
+    dib_sizes = {w for w, kind in kinds if kind != 'png'}
+    if not dib_sizes or any((w, 8) not in kinds for w in dib_sizes): raise ValueError('App icon lacks 8-bit DIBs for Windows 98/ME')
+    sizes = ' '.join(f'{w}:' + '/'.join(sorted(str(k) for v, k in kinds if v == w)) for w in sorted({w for w, _ in kinds}))
+    version = res.get((16, 1), b'')
+    fixed = version.find(struct.pack('<I', 0xfeef04bd))
+    if fixed < 0: raise ValueError('Missing VERSIONINFO resource')
+    ms, ls = struct.unpack_from('<II', version, fixed+8)
+    if extract_icon:
+        out = struct.pack('<HHH', 0, 1, len(images))
+        body = b''
+        for head, image in images:
+            out += head + struct.pack('<I', 6+16*len(images)+len(body))
+            body += image
+        Path(extract_icon).write_bytes(out + body)
+    print(f'PASS {Path(path).name}: PE{bits}, {len(data):,} bytes, {sum(map(len,found.values()))} reviewed imports, no runtime DLLs, '
+          f'icon {sizes}, version {ms>>16}.{ms&0xffff}.{ls>>16}')
     return found
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('executable', type=Path)
     parser.add_argument('--legacy', action='store_true')
+    parser.add_argument('--extract-icon', type=Path, metavar='ICO', help='write the embedded app icon back out as an .ico')
     args = parser.parse_args()
-    audit(args.executable, args.legacy)
+    audit(args.executable, args.legacy, args.extract_icon)
