@@ -703,6 +703,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             app.smoke_texture_repair();
             crate::saving::smoke();
             app.smoke_save_policy();
+            app.smoke_game_folder();
             ExitProcess(0);
         }
         if rest == "--demo" {

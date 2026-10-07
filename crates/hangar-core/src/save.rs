@@ -1,6 +1,6 @@
 //! Filename policy and recoverable LIB replacement, shared by GUI and CLI.
 use crate::Result;
-use alloc::{format, string::String};
+use alloc::{format, string::String, vec::Vec};
 
 /// Retail SETUP.ESA plus both discs, including bundled demo/installer LIBs.
 /// SWPATCH.LIB is a toolkit/mod library, not a retail archive.
@@ -85,6 +85,143 @@ pub fn validate_destination(path: &str) -> Result<()> {
         return Err("Choose a LIB name with .LIB only at its end: FA loads every file whose name contains .LIB".into());
     }
     Ok(())
+}
+
+/// FA.EXE `_LibStartUp` keeps at most 20 open LIBs (handles at 0x54a648,
+/// count at 0x54a698); a 21st overruns the table.
+pub const MAX_LIBS: usize = 20;
+/// The global resource table is allocated as 0x5505a bytes of 35-byte
+/// records: 9,950 resources across every LIB and loose file in the folder.
+pub const MAX_RESOURCES: usize = 9950;
+/// LIB names are copied into 14-byte slots at 0x54a530 (13 characters and
+/// the terminator) without a length check.
+pub const MAX_LIB_NAME: usize = 13;
+/// One file in a game folder, as FA's loader sees it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FolderFile {
+    pub name: String,
+    /// Directory entry count when the file starts with `EALIB`.
+    pub lib_entries: Option<usize>,
+}
+/// FA upper-cases each name and treats it as a LIB when it contains ".LIB"
+/// (and the file starts with `EALIB`); every other file is one resource.
+pub fn loads_as_lib(name: &str) -> bool {
+    name.to_ascii_uppercase().contains(".LIB")
+}
+/// Backups and stages older Hangar versions wrote beside a LIB
+/// (`X.LIB.bak`, `X.LIB.bak.1`, `X.LIB.tmp`), which FA loads as LIBs.
+pub fn legacy_backup(name: &str) -> bool {
+    let up = name.to_ascii_uppercase();
+    up.contains(".LIB.BAK") || up.contains(".LIB.TMP")
+}
+/// A folder FA runs from: it holds FA.EXE or a retail LIB name.
+pub fn is_game_folder(names: &[&str]) -> bool {
+    names
+        .iter()
+        .any(|n| n.eq_ignore_ascii_case("FA.EXE") || protected_name(n).is_some())
+}
+/// What FA's loader would find in a game folder after a save.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GameFolder {
+    pub libs: usize,
+    pub lib_entries: usize,
+    pub loose: usize,
+    /// LIB names longer than `MAX_LIB_NAME`, as FA upper-cases them.
+    pub long_names: Vec<String>,
+    pub legacy_backups: Vec<String>,
+}
+impl GameFolder {
+    pub fn resources(&self) -> usize {
+        self.lib_entries + self.loose
+    }
+    /// Limits the folder would break: each one crashes or corrupts FA at
+    /// startup, so saving needs explicit confirmation.
+    pub fn problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if self.libs > MAX_LIBS {
+            out.push(format!(
+                "{} LIB files would load from this folder; FA keeps at most {MAX_LIBS}.",
+                self.libs
+            ));
+        }
+        if self.resources() > MAX_RESOURCES {
+            out.push(format!(
+                "{} resources ({} in LIBs + {} loose files); FA's resource table holds {}.",
+                group(self.resources()),
+                group(self.lib_entries),
+                group(self.loose),
+                group(MAX_RESOURCES)
+            ));
+        }
+        for name in &self.long_names {
+            out.push(format!(
+                "{name} is {} characters; FA's LIB name slot holds {MAX_LIB_NAME}.",
+                name.len()
+            ));
+        }
+        out
+    }
+    /// Advice that does not block a save.
+    pub fn warnings(&self) -> Vec<String> {
+        self.legacy_backups
+            .iter()
+            .map(|n| format!("FA loads {n} as a LIB; move it out of the game folder."))
+            .collect()
+    }
+    pub fn summary(&self) -> String {
+        format!(
+            "Game folder: {} of {MAX_LIBS} LIBs, {} of {} resources",
+            self.libs,
+            group(self.resources()),
+            group(MAX_RESOURCES)
+        )
+    }
+}
+fn group(n: usize) -> String {
+    if n >= 1000 {
+        format!("{},{:03}", n / 1000, n % 1000)
+    } else {
+        format!("{n}")
+    }
+}
+/// The folder `files` after saving `target` (its leaf name) with `entries`
+/// directory entries: an existing target is replaced and its previous file
+/// becomes one more loose resource (`<STEM>.BAK`). Each file counts once,
+/// as FA's loader counts it; files whose LIB-like name lacks an EALIB header
+/// are skipped, as FA skips them.
+pub fn game_folder(files: &[FolderFile], target: &str, entries: usize) -> GameFolder {
+    let mut out = GameFolder::default();
+    let mut add = |name: &str, lib: Option<usize>| {
+        if loads_as_lib(name) {
+            let Some(n) = lib else {
+                return;
+            };
+            out.libs += 1;
+            out.lib_entries += n;
+            let up = name.to_ascii_uppercase();
+            if up.len() > MAX_LIB_NAME {
+                out.long_names.push(up);
+            }
+            if legacy_backup(name) {
+                out.legacy_backups.push(String::from(name));
+            }
+        } else {
+            out.loose += 1;
+        }
+    };
+    let mut exists = false;
+    for f in files {
+        if f.name.eq_ignore_ascii_case(target) {
+            exists = true;
+        } else {
+            add(&f.name, f.lib_entries);
+        }
+    }
+    add(target, Some(entries));
+    if exists {
+        out.loose += 1;
+    }
+    out
 }
 
 /// All moves MUST fail if the destination already exists. A failed write must
@@ -309,6 +446,71 @@ mod tests {
         assert_eq!(d.files["MOD.LIB"], b"other save");
         assert_eq!(d.files["MOD.BAK"], b"old");
         assert_eq!(d.files["MOD.TMP"], b"new");
+    }
+    fn file(name: &str, lib: Option<usize>) -> FolderFile {
+        FolderFile {
+            name: name.into(),
+            lib_entries: lib,
+        }
+    }
+    #[test]
+    fn game_folders_follow_fa_loader_limits() {
+        assert!(is_game_folder(&["readme.txt", "fa.exe"]));
+        assert!(is_game_folder(&["FA_2.LIB"]));
+        assert!(!is_game_folder(&["MOD.LIB", "NOTES.TXT"]));
+        assert!(loads_as_lib("swpatch.lib") && loads_as_lib("TopGun.LIB.bak.1"));
+        assert!(!loads_as_lib("TOPGUN.BAK") && !loads_as_lib("TOPGUN.B01"));
+        assert!(legacy_backup("TopGun.LIB.bak") && legacy_backup("X.lib.tmp"));
+        assert!(!legacy_backup("TOPGUN.BAK"));
+        // Retail installation: 7,505 LIB entries plus loose files.
+        let mut files = vec![
+            file("FA.EXE", None),
+            file("FA_1.LIB", Some(2001)),
+            file("FA_2.LIB", Some(5405)),
+            file("FA_4B.LIB", Some(77)),
+            file("FA_4D.LIB", Some(22)),
+            file("swpatch.lib", Some(15)),
+            file("README.TXT", None),
+            // A .LIB name without an EALIB header is skipped, as FA skips it.
+            file("NOTALIB.LIB", None),
+        ];
+        let f = game_folder(&files, "TOPGUN.LIB", 93);
+        assert_eq!((f.libs, f.lib_entries, f.loose), (6, 7613, 2));
+        assert!(f.problems().is_empty() && f.warnings().is_empty());
+        assert_eq!(
+            f.summary(),
+            "Game folder: 6 of 20 LIBs, 7,615 of 9,950 resources"
+        );
+        // Saving over an existing LIB counts it once and adds its .BAK.
+        files.push(file("TopGun.LIB", Some(80)));
+        let again = game_folder(&files, "TOPGUN.LIB", 93);
+        assert_eq!((again.libs, again.lib_entries, again.loose), (6, 7613, 3));
+        // Legacy backups load as LIBs; a 14-character name overflows a slot.
+        files.push(file("TopGun.LIB.bak", Some(80)));
+        files.push(file("TG.LIB.bak.1", Some(80)));
+        let f = game_folder(&files, "TOPGUN.LIB", 93);
+        assert_eq!(f.libs, 8);
+        assert_eq!(f.legacy_backups, ["TopGun.LIB.bak", "TG.LIB.bak.1"]);
+        assert_eq!(f.long_names, ["TOPGUN.LIB.BAK"]);
+        assert!(f.problems()[0].contains("14 characters"));
+        assert!(f.warnings()[0]
+            .contains("FA loads TopGun.LIB.bak as a LIB; move it out of the game folder"));
+        // The saved LIB's own name is checked too.
+        let f = game_folder(&files, "TOPGUNMOD1.LIB", 1);
+        assert!(f.long_names.contains(&"TOPGUNMOD1.LIB".into()));
+        // More than 20 LIBs, and more than 9,950 resources.
+        let many: Vec<_> = (0..20)
+            .map(|i| file(&format!("M{i}.LIB"), Some(1)))
+            .collect();
+        let f = game_folder(&many, "NEW.LIB", 1);
+        assert_eq!(f.libs, 21);
+        assert!(f.problems()[0].contains("21 LIB files"));
+        let f = game_folder(&files[..6], "BIG.LIB", 2430);
+        assert_eq!(f.resources(), 9951);
+        assert!(f.problems()[0].contains("9,951 resources (9,950 in LIBs + 1 loose files)"));
+        assert!(game_folder(&files[..6], "BIG.LIB", 2429)
+            .problems()
+            .is_empty());
     }
     #[test]
     fn backups_are_numbered_8_3_names_without_lib() {

@@ -23,6 +23,42 @@ pub fn library(path: &str, bytes: &[u8]) -> Result<Option<String>> {
     hangar_core::save::library(&mut Files, path, bytes)
 }
 
+/// FA's loader view of the folder `path` saves into, after saving a LIB of
+/// `entries` entries there; `None` when it is not a game folder (no FA.EXE
+/// and no retail LIB name) or cannot be listed. Only names and the first
+/// seven bytes of `.LIB`-named files are read.
+pub fn game_folder(path: &str, entries: usize) -> Option<hangar_core::save::GameFolder> {
+    use hangar_core::save::{self, FolderFile};
+    let (folder, leaf) = match path.rfind(['/', '\\']) {
+        Some(at) => (
+            String::from(if at == 0 { &path[..1] } else { &path[..at] }),
+            &path[at + 1..],
+        ),
+        None => (crate::platform::current_dir(), path),
+    };
+    let items = crate::platform::list_dir(&folder).ok()?;
+    let names: Vec<&str> = items
+        .iter()
+        .filter(|i| !i.directory)
+        .map(|i| i.name.as_str())
+        .collect();
+    if !save::is_game_folder(&names) {
+        return None;
+    }
+    let files: Vec<FolderFile> = items
+        .iter()
+        .filter(|i| !i.directory)
+        .map(|i| FolderFile {
+            name: i.name.clone(),
+            lib_entries: save::loads_as_lib(&i.name)
+                .then(|| crate::platform::read_range(&i.path, 0, 7).ok())
+                .flatten()
+                .filter(|h| h.starts_with(b"EALIB"))
+                .map(|h| u16::from_le_bytes([h[5], h[6]]) as usize),
+        })
+        .collect();
+    Some(save::game_folder(&files, leaf, entries))
+}
 /// Runs on both Windows CI architectures as well as Linux. Only synthetic data.
 pub fn smoke() {
     let name = "HGSAVE.LIB";

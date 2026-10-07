@@ -38,6 +38,8 @@ pub(super) enum Action {
     NewLibrary,
     CloseLibrary,
     DiscardChanges,
+    /// Save anyway past FA's loader limits (the GameFolder prompt).
+    ConfirmSave,
     Animation,
     /// Edit Mesh: vertex (false) or face (true) select mode.
     SelectMode(bool),
@@ -735,6 +737,20 @@ impl App {
                     self.refresh();
                 }
                 self.result(result);
+            }
+            Action::ConfirmSave => {
+                if matches!(
+                    self.prompt.as_ref().map(|p| &p.kind),
+                    Some(PromptKind::GameFolder)
+                ) {
+                    if let Some(c) = self.save_check.as_mut() {
+                        c.confirmed = true;
+                        let path = c.path.clone();
+                        self.prompt = None;
+                        let result = self.perform_file(FileAction::Save, &path);
+                        self.result(result);
+                    }
+                }
             }
             Action::DiscardChanges => match self.prompt.as_ref().map(|p| &p.kind) {
                 Some(PromptKind::Discard) => {
@@ -2823,11 +2839,37 @@ impl App {
         use widgets::{baseline, notice, Btn, Tone};
         let p = self.prompt.as_ref().unwrap();
         let w = (self.width - 48).min(640);
-        let h = 196;
+        // The loader-limit notice can run to several lines.
+        let limits = match (&p.kind, &self.save_check) {
+            (PromptKind::GameFolder, Some(c)) => Some(format!(
+                "{} FA crashes or corrupts memory at startup past these limits. Save anyway only if you will move files out of this folder before playing.",
+                c.problems.join(" ")
+            )),
+            _ => None,
+        };
+        let h = limits.as_ref().map_or(196, |text| {
+            (DIALOG_HEAD
+                + widgets::notice_height(w - 2 * space::SPACE_4, text)
+                + m::BUTTON_H
+                + 3 * space::SPACE_4)
+                .clamp(196, self.height - 16)
+        });
         let rect = [(self.width - w) / 2, self.height / 2 - h / 2, w, h];
         o.hits.clear();
         let body = self.dialog_frame(o, rect, &p.title);
         let [bx, by, bw, _] = body;
+        if let Some(text) = &limits {
+            notice(&mut o.canvas, bx, by, bw, Tone::Danger, text);
+            self.dialog_actions(
+                o,
+                rect,
+                &[],
+                Some("Cancel"),
+                Some(Btn::new("Save anyway").with_icon(Icon::Warning).danger()),
+                Action::ConfirmSave,
+            );
+            return;
+        }
         if matches!(p.kind, PromptKind::Discard | PromptKind::CloseLibrary) {
             notice(
                 &mut o.canvas,

@@ -98,7 +98,7 @@ fn export_object(args: &[String]) -> Result<()> {
         }
         e
     })?;
-    crate::saving::library(positional[4], &package.archive.bytes()?)?;
+    save_lib(positional[4], &package.archive.bytes()?)?;
     for (old, new) in &package.mapping {
         println!("{old:13} -> {new}");
     }
@@ -130,6 +130,38 @@ fn export_object(args: &[String]) -> Result<()> {
         package.archive.bytes()?.len()
     );
     Ok(())
+}
+/// FA's loader limits when `path` is in a game folder: a LIB write that
+/// would break them is refused with the numbers (the GUI asks instead).
+fn folder_guard(path: &str, bytes: &[u8]) -> Result<Option<hangar_core::save::GameFolder>> {
+    let entries = Archive::parse(bytes.to_vec())?.entries.len();
+    let folder = crate::saving::game_folder(path, entries);
+    if let Some(f) = &folder {
+        let problems = f.problems();
+        if !problems.is_empty() {
+            return Err(format!(
+                "Refused: saving here would break FA's loader limits. {} {}",
+                problems.join(" "),
+                f.summary()
+            ));
+        }
+    }
+    Ok(folder)
+}
+fn folder_report(folder: Option<hangar_core::save::GameFolder>) {
+    if let Some(f) = folder {
+        println!("{}", f.summary());
+        for w in f.warnings() {
+            println!("WARN {w}");
+        }
+    }
+}
+/// `saving::library` behind `folder_guard`, printing the folder summary.
+fn save_lib(path: &str, bytes: &[u8]) -> Result<Option<String>> {
+    let folder = folder_guard(path, bytes)?;
+    let backup = crate::saving::library(path, bytes)?;
+    folder_report(folder);
+    Ok(backup)
 }
 /// PIC header fields that decide whether FA's texture mapper can read it.
 fn texture_header(bytes: &[u8]) -> String {
@@ -253,7 +285,10 @@ fn repair_textures(args: &[String]) -> Result<()> {
         .iter()
         .filter(|c| c.message.starts_with(validation::TEXTURE_LAYOUT_ERROR))
         .count();
-    platform::write_new(output, &doc.archive.bytes()?)?;
+    let bytes = doc.archive.bytes()?;
+    let folder = folder_guard(output, &bytes)?;
+    platform::write_new(output, &bytes)?;
+    folder_report(folder);
     println!(
         "Repaired {} of {} textures ({} stored originals); {} SH entries unchanged; {remaining} texture-layout errors remain; wrote {output}",
         repair.repaired.len(),
@@ -298,6 +333,7 @@ pub fn run() -> Result<()> {
             app.smoke_texture_repair();
             crate::saving::smoke();
             app.smoke_save_policy();
+            app.smoke_game_folder();
             println!("App size: {} bytes",core::mem::size_of::<App>());
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
@@ -352,7 +388,7 @@ pub fn run() -> Result<()> {
             platform::capture(app,argument(&args,1)?)?;
         },
         Some("--demo")=>{app.demo();platform::run(app)?;},
-        Some("demo-lib")=>{app.demo();crate::saving::library(argument(&args,1)?,&app.doc.archive.bytes()?)?;},
+        Some("demo-lib")=>{app.demo();save_lib(argument(&args,1)?,&app.doc.archive.bytes()?)?;},
         Some("--snapshot")=>{if let Some(path)=args.get(2).filter(|p|p.as_str()!="-"){app.open(path)?;if let Some(name)=args.get(3){let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at);}}else{app.demo();}
             if let Some(workspace)=args.get(4){app.workspace(workspace)?;}
             if let Some(size)=args.get(5){if let Some((w,h))=size.split_once('x'){app.width=w.parse().map_err(|_|"Invalid width")?;app.height=h.parse().map_err(|_|"Invalid height")?;}}
@@ -370,7 +406,7 @@ pub fn run() -> Result<()> {
                 variant.archive.entries.push(hangar_core::archive::Entry::new(name,platform::read(path)?)?);
             }
             for name in &variant.missing_textures {if variant.archive.find(name).is_none(){return Err(format!("Missing imported-shape texture {name}; supply its path after OUTPUT.LIB"));}}
-            crate::saving::library(argument(&args,6)?,&variant.archive.bytes()?)?;
+            save_lib(argument(&args,6)?,&variant.archive.bytes()?)?;
             println!("Created {} entries from {}. Donor damage/shadow retained. Shared stock references: {}. Game test still required.",variant.archive.entries.len(),variant.donor,variant.shared.join(", "));
         },
         Some("references") => {
@@ -400,13 +436,13 @@ pub fn run() -> Result<()> {
         Some(cmd @ ("list"|"inspect"|"extract"|"repack"|"replace"|"set"))=>{
             let a=Archive::parse(platform::read(argument(&args,1)?)?)?;
             if cmd=="list"{for (i,e) in a.entries.iter().enumerate(){println!("{i:5} {:13} {:9} bytes  flag {}",e.name,e.stored_len(),e.flag());}}
-            else if cmd=="repack"{crate::saving::library(argument(&args,2)?,&a.bytes()?)?;}
+            else if cmd=="repack"{save_lib(argument(&args,2)?,&a.bytes()?)?;}
             else{let at=a.find(argument(&args,2)?).ok_or("Entry not found")?;let bytes=a.entries[at].read()?;let ext=a.entries[at].name.rsplit('.').next().unwrap();
                 match cmd{
                     "inspect"=>{if ext=="SH"{let m=Model::parse(&bytes)?;println!("{} vertices, {} faces, writable={} {}",m.vertices.len(),m.faces.len(),m.writable,m.reason);}else{let b=Brf::parse(&bytes,ext)?;for (i,f) in b.fields.iter().enumerate(){println!("{i:4} {:36} {:7} {}{}",f.label,f.kind,if f.scaled{"^"}else{""},f.value);}}},
                     "extract"=>platform::write_new(argument(&args,3)?,&bytes)?,
-                    "replace"=>{let mut d=Document::new(a);let name=d.archive.entries[at].name.clone();let new=platform::read(argument(&args,3)?)?;if new!=bytes{let entries=hangar_core::originals::with_originals(&d,vec![hangar_core::archive::Entry::new(&name,new)?],&[]);if let Some(org)=entries.get(1){println!("Original {name} kept as {}",org.name);}d.transaction(entries,&[])?;}crate::saving::library(argument(&args,4)?,&d.archive.bytes()?)?;},
-                    "set"=>{let b=Brf::parse(&bytes,ext)?;let index=argument(&args,3)?.parse().map_err(|_|"Invalid field index")?;let new=b.edit(&bytes,index,argument(&args,4)?,ext)?;let mut d=Document::new(a);d.replace(at,new)?;crate::saving::library(argument(&args,5)?,&d.archive.bytes()?)?;},_=>{}
+                    "replace"=>{let mut d=Document::new(a);let name=d.archive.entries[at].name.clone();let new=platform::read(argument(&args,3)?)?;if new!=bytes{let entries=hangar_core::originals::with_originals(&d,vec![hangar_core::archive::Entry::new(&name,new)?],&[]);if let Some(org)=entries.get(1){println!("Original {name} kept as {}",org.name);}d.transaction(entries,&[])?;}save_lib(argument(&args,4)?,&d.archive.bytes()?)?;},
+                    "set"=>{let b=Brf::parse(&bytes,ext)?;let index=argument(&args,3)?.parse().map_err(|_|"Invalid field index")?;let new=b.edit(&bytes,index,argument(&args,4)?,ext)?;let mut d=Document::new(a);d.replace(at,new)?;save_lib(argument(&args,5)?,&d.archive.bytes()?)?;},_=>{}
                 }
             }
         },

@@ -339,6 +339,15 @@ enum PromptKind {
     DecalLibrary,
     TransferReview,
     Number(widgets::NumberTarget),
+    /// A save into a game folder that would break FA's loader limits
+    /// (`save_check`); only Save anyway or Cancel continue.
+    GameFolder,
+}
+/// A save waiting for confirmation because of FA's loader limits.
+struct SaveCheck {
+    path: String,
+    problems: Vec<String>,
+    confirmed: bool,
 }
 struct Prompt {
     kind: PromptKind,
@@ -408,6 +417,7 @@ pub struct App {
     decal_paths: Vec<String>,
     decal_preset: usize,
     decal_text: String,
+    save_check: Option<Box<SaveCheck>>,
     decal_is_text: bool,
     decal_ink: Option<u8>,
     decal_placement: hangar_core::decal::Placement,
@@ -569,6 +579,7 @@ impl App {
             decal_paths: crate::platform::load_decals(),
             decal_preset: 0,
             decal_text: "AF 001".into(),
+            save_check: None,
             decal_is_text: false,
             decal_ink: None,
             decal_placement: hangar_core::decal::Placement {
@@ -1110,6 +1121,117 @@ impl App {
             crate::platform::remove_file(p).unwrap();
         }
     }
+    /// Saving into a synthetic game folder (FA.EXE plus a legacy
+    /// `HGFOLD.LIB.bak`, which FA loads as a 14-character LIB name) pauses on
+    /// the loader-limit prompt; Cancel writes nothing, Save anyway saves and
+    /// reports the folder, and without the legacy file the save goes through
+    /// with a `<STEM>.BAK` backup. Linux uses a temp folder; Windows, which
+    /// has no directory-creation import, uses scratch names in the current one.
+    pub fn smoke_game_folder(&mut self) {
+        #[cfg(not(windows))]
+        let folder = {
+            let dir = std::env::temp_dir().join(format!("hangar-folder-{}", std::process::id()));
+            std::fs::create_dir(&dir).unwrap();
+            dir.to_string_lossy().into_owned()
+        };
+        #[cfg(windows)]
+        let folder = crate::platform::current_dir();
+        let at = |name: &str| format!("{}/{name}", folder.trim_end_matches(['/', '\\']));
+        let (exe, legacy, lib, bak) = (
+            at("FA.EXE"),
+            at("HGFOLD.LIB.bak"),
+            at("HGFOLD.LIB"),
+            at("HGFOLD.BAK"),
+        );
+        for p in [&exe, &legacy, &lib, &bak, &at("HGFOLD.TMP")] {
+            assert!(
+                !crate::platform::save_exists(p).unwrap(),
+                "Game-folder smoke scratch path exists"
+            );
+        }
+        crate::platform::write_new(&exe, b"MZ").unwrap();
+        let mut old = Archive::empty();
+        old.entries
+            .push(Entry::new("OLD.TXT", b"old".to_vec()).unwrap());
+        crate::platform::write_new(&legacy, &old.bytes().unwrap()).unwrap();
+        *self = Self::new();
+        self.demo();
+        self.width = 800;
+        self.height = 600;
+        let save = |app: &mut App| {
+            app.file_prompt(FileAction::Save);
+            app.key(Key::Char('a'), true, false);
+            for c in lib.chars() {
+                app.key(Key::Char(c), false, false);
+            }
+            app.key(Key::Enter, false, false);
+        };
+        let press = |app: &mut App, want: fn(&view::Action) -> bool| {
+            let hit = app
+                .layout()
+                .hits
+                .into_iter()
+                .find(|h| want(&h.action))
+                .expect("Game-folder prompt control missing");
+            app.click(hit.rect[0] + 4, hit.rect[1] + 4, 1, true);
+        };
+        save(self);
+        assert!(
+            matches!(
+                self.prompt.as_ref().map(|p| &p.kind),
+                Some(PromptKind::GameFolder)
+            ),
+            "{}",
+            self.status
+        );
+        assert!(self.status.starts_with("Save paused"), "{}", self.status);
+        assert!(self.status.contains("HGFOLD.LIB.BAK is 14 characters"));
+        assert!(!crate::platform::save_exists(&lib).unwrap());
+        for hit in self.layout().hits {
+            assert!(hit.rect[0] >= 0 && hit.rect[1] >= 0);
+            assert!(hit.rect[0] + hit.rect[2] <= 800 && hit.rect[1] + hit.rect[3] <= 600);
+        }
+        // Enter alone never confirms; Cancel writes nothing.
+        self.key(Key::Enter, false, false);
+        assert!(self.prompt.is_some() && !crate::platform::save_exists(&lib).unwrap());
+        press(self, |a| matches!(a, view::Action::Cancel));
+        assert!(self.prompt.is_none());
+        assert!(!crate::platform::save_exists(&lib).unwrap());
+        // Save anyway writes the LIB and names the limits it breaks.
+        save(self);
+        press(self, |a| matches!(a, view::Action::ConfirmSave));
+        assert!(self.prompt.is_none(), "{}", self.status);
+        assert!(
+            crate::platform::save_exists(&lib).unwrap(),
+            "{}",
+            self.status
+        );
+        assert!(
+            self.status.contains("Game folder: 2 of 20 LIBs"),
+            "{}",
+            self.status
+        );
+        assert!(self
+            .status
+            .contains("FA loads HGFOLD.LIB.bak as a LIB; move it out of the game folder"));
+        // Without the legacy file the next save needs no confirmation.
+        crate::platform::remove_file(&legacy).unwrap();
+        save(self);
+        assert!(self.prompt.is_none(), "{}", self.status);
+        assert!(self.status.contains("Backup:") && self.status.contains("HGFOLD.BAK"));
+        assert!(
+            self.status.contains("Game folder: 1 of 20 LIBs"),
+            "{}",
+            self.status
+        );
+        assert!(!self.status.contains("move it out"));
+        for p in [&lib, &bak, &exe] {
+            crate::platform::remove_file(p).unwrap();
+        }
+        #[cfg(not(windows))]
+        std::fs::remove_dir(&folder).unwrap();
+        *self = Self::new();
+    }
     pub fn file_prompt(&mut self, a: FileAction) {
         if self.mesh_drag.take().is_some() {
             self.preview = None;
@@ -1316,6 +1438,31 @@ impl App {
                         missing.join(", ")
                     ));
                 }
+                // A save into FA's own folder must keep its loader limits.
+                let folder = crate::saving::game_folder(path, self.doc.archive.entries.len());
+                if let Some(problems) = folder.as_ref().map(|f| f.problems()) {
+                    let confirmed = self
+                        .save_check
+                        .as_ref()
+                        .is_some_and(|c| c.confirmed && c.path == path);
+                    if !problems.is_empty() && !confirmed {
+                        let leaf = path.rsplit(['/', '\\']).next().unwrap_or(path);
+                        self.status = format!("Save paused: {}", problems.join(" "));
+                        self.save_check = Some(Box::new(SaveCheck {
+                            path: path.into(),
+                            problems,
+                            confirmed: false,
+                        }));
+                        self.prompt = Some(Prompt {
+                            kind: PromptKind::GameFolder,
+                            title: format!("Saving {leaf} here would break FA's loader limits"),
+                            value: String::new(),
+                            axis: 0,
+                        });
+                        return Ok(());
+                    }
+                }
+                self.save_check = None;
                 let b = self.doc.archive.bytes()?;
                 let backup = crate::saving::library(path, &b)?;
                 self.doc.mark_saved();
@@ -1335,6 +1482,12 @@ impl App {
                         .map(|p| format!(" | Backup: {p}"))
                         .unwrap_or_default()
                 );
+                if let Some(f) = folder {
+                    self.status += &format!(" | {}", f.summary());
+                    for w in f.problems().into_iter().chain(f.warnings()) {
+                        self.status += &format!(" | {w}");
+                    }
+                }
                 Ok(())
             }
             FileAction::Import => {
@@ -2005,6 +2158,7 @@ impl App {
                                 Err("Type CREATE or press Esc".into())
                             }
                         })(),
+                        PromptKind::GameFolder => Err("Click Save anyway or Cancel".into()),
                         PromptKind::Discard => {
                             if p.value == "DISCARD" {
                                 self.quit = true;
