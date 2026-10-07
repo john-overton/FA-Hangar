@@ -1419,7 +1419,10 @@ impl App {
                 c::GM_800
             };
             let d = &mut o.canvas;
-            d.rect(0, y, l, m::ROW_H, fill);
+            // A LIB row is two controls: the twisty and the LIB itself.
+            let split = if cat.is_none() { 4 + m::ICON_SM + 2 } else { 0 };
+            d.rect(0, y, split, m::ROW_H, fill);
+            d.rect(split, y, l - split, m::ROW_H, fill);
             let mid = y + (m::ROW_H - m::ICON) / 2;
             let twisty = y + (m::ROW_H - m::ICON_SM) / 2;
             let right = l - space::SPACE_2;
@@ -2265,7 +2268,9 @@ impl App {
                 c::GM_900
             };
             let d = &mut o.canvas;
-            d.rect(x, yy, w, rowh, fill);
+            // The name and type pick the row; the value field sits beside it.
+            d.rect(x, yy, vx - x, rowh, fill);
+            d.rect(vx, yy, x + w - vx, rowh, fill);
             let base = baseline(yy, rowh, Style::Value);
             d.styled(
                 x + 10,
@@ -2618,6 +2623,7 @@ impl App {
         self.smoke_chrome();
         self.smoke_outliner();
         self.smoke_inspector();
+        self.smoke_hit_geometry();
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();
@@ -2696,26 +2702,223 @@ impl App {
         }
     }
 }
+/// Hit regions drawn as lines over the viewport (station markers, vertex
+/// handles) and the menu surface, which sits over the menu's own items.
+fn free_hit(a: Action) -> bool {
+    matches!(
+        a,
+        Action::HardpointSelect(_) | Action::MeshVertex(_) | Action::MenuPad
+    )
+}
 impl App {
+    /// Every hit region lies inside the control it draws (rect fills within
+    /// 1px of the region reach all four edges, hovered when needed), stays in
+    /// the window, and no two regions overlap.
+    fn smoke_geometry(&mut self, state: &str) {
+        let (w, h) = (self.width, self.height);
+        let hits: Vec<Hit> = self.layout().hits;
+        let covered = |draw: &Canvas, [x, y, rw, rh]: [i32; 4]| {
+            let mut u = [i32::MAX, i32::MAX, i32::MIN, i32::MIN];
+            for d in &draw.commands {
+                let r = match d {
+                    Draw::Rect(a, b, c, d, _) => [*a, *b, a + c, b + d],
+                    Draw::Bitmap(a, b, c, d, _) => [*a, *b, a + *c as i32, b + *d as i32],
+                    _ => continue,
+                };
+                if r[0] >= x - 1 && r[1] >= y - 1 && r[2] <= x + rw + 1 && r[3] <= y + rh + 1 {
+                    u = [
+                        u[0].min(r[0]),
+                        u[1].min(r[1]),
+                        u[2].max(r[2]),
+                        u[3].max(r[3]),
+                    ];
+                }
+            }
+            u[0] <= x + 1 && u[1] <= y + 1 && u[2] >= x + rw - 1 && u[3] >= y + rh - 1
+        };
+        let plain = self.draw();
+        for (i, hit) in hits.iter().enumerate() {
+            let [x, y, rw, rh] = hit.rect;
+            assert!(
+                x >= 0 && y >= 0 && x + rw <= w && y + rh <= h && rw > 0 && rh > 0,
+                "{state} {w}x{h}: hit region {:?} outside the window",
+                hit.rect
+            );
+            if free_hit(hit.action) {
+                continue;
+            }
+            if !covered(&plain, hit.rect) {
+                let mouse = self.mouse;
+                self.mouse = [x + rw / 2, y + rh / 2];
+                let hovered = self.draw();
+                self.mouse = mouse;
+                assert!(
+                    covered(&hovered, hit.rect),
+                    "{state} {w}x{h}: hit region {:?} exceeds its drawn control",
+                    hit.rect
+                );
+            }
+            for other in &hits[i + 1..] {
+                let [ox, oy, ow, oh] = other.rect;
+                assert!(
+                    free_hit(other.action)
+                        || x >= ox + ow
+                        || ox >= x + rw
+                        || y >= oy + oh
+                        || oy >= y + rh,
+                    "{state} {w}x{h}: hit regions {:?} and {:?} overlap",
+                    hit.rect,
+                    other.rect
+                );
+            }
+        }
+    }
+    /// Hit-region geometry for every restyled editor and dialog at both
+    /// window sizes.
+    pub(super) fn smoke_hit_geometry(&mut self) {
+        for (w, h) in [(1280, 800), (800, 600)] {
+            for state in 0..20 {
+                self.libraries.clear();
+                self.demo();
+                self.width = w;
+                self.height = h;
+                self.mouse = [0, 0];
+                self.textured = false;
+                let pic = self.doc.archive.find("DEMO.PIC").unwrap();
+                let name = match state {
+                    0 => {
+                        self.select_entry(0);
+                        "model"
+                    }
+                    1 => {
+                        self.select_entry(1);
+                        self.mode = Mode::Model;
+                        "model PT"
+                    }
+                    2 => {
+                        self.select_entry(1);
+                        self.mode = Mode::Browse;
+                        "browse"
+                    }
+                    3 => {
+                        self.select_entry(1);
+                        self.act(Action::Mode(Mode::Properties));
+                        "envelope"
+                    }
+                    4 => {
+                        self.select_entry(1);
+                        self.mode = Mode::Properties;
+                        "all fields"
+                    }
+                    5 => {
+                        self.select_entry(1);
+                        self.pin_donor().unwrap();
+                        self.graft_mask = !0;
+                        self.refresh_graft();
+                        "graft"
+                    }
+                    6 => {
+                        self.act(Action::Validate);
+                        "package"
+                    }
+                    7..=9 => {
+                        self.select_entry(pic);
+                        self.media_tab = state as u8 - 7;
+                        "paint"
+                    }
+                    10 => {
+                        self.select_entry(1);
+                        self.mode = Mode::Model;
+                        self.act(Action::Hardpoints);
+                        "hardpoints"
+                    }
+                    11 => {
+                        self.select_entry(0);
+                        self.dock = 4;
+                        "references"
+                    }
+                    12 => {
+                        self.select_entry(1);
+                        self.number_prompt(widgets::NumberTarget::Field(0));
+                        "prompt"
+                    }
+                    13 => {
+                        self.doc.mark_unsaved();
+                        self.close();
+                        "discard"
+                    }
+                    14 => {
+                        self.select_entry(0);
+                        self.base_color_prompt(false);
+                        "base color"
+                    }
+                    15 => {
+                        self.file_prompt(FileAction::Open);
+                        "browser"
+                    }
+                    16 => {
+                        self.select_entry(0);
+                        self.mode = Mode::Model;
+                        self.act(Action::ModelPaint);
+                        "model paint"
+                    }
+                    17 => {
+                        self.select_entry(0);
+                        self.dock = 1;
+                        self.mode = Mode::Model;
+                        self.act(Action::Panel(widgets::pane::GEOMETRY));
+                        "collapsed panel"
+                    }
+                    18 => {
+                        self.select_entry(0);
+                        self.copy_resource().unwrap();
+                        let mut bytes = picture::demo();
+                        bytes.push(0);
+                        let mut target = Archive::empty();
+                        target.entries.push(Entry::new("DEMO.PIC", bytes).unwrap());
+                        self.install_library(Document::new(target), "TARGET.LIB".into())
+                            .unwrap();
+                        self.refresh();
+                        self.paste_resources().unwrap();
+                        "transfer review"
+                    }
+                    _ => {
+                        self.select_entry(1);
+                        self.begin_clone();
+                        self.variant_id = "NEWJET".into();
+                        self.clone_draft = Some(self.build_clone().unwrap());
+                        self.prompt = Some(Prompt {
+                            kind: PromptKind::CloneReview,
+                            title: "Review".into(),
+                            value: String::new(),
+                            axis: 0,
+                        });
+                        "export review"
+                    }
+                };
+                self.smoke_geometry(name);
+                self.graft_donor = None;
+                self.graft_mask = 0;
+                self.transfer_plan = None;
+                self.clone_draft = None;
+                self.prompt = None;
+                self.browser = None;
+                self.dock = 0;
+                self.panels = 0;
+                self.doc.mark_saved();
+            }
+        }
+        self.width = 1280;
+        self.height = 800;
+        self.demo();
+    }
     /// Property panels through their hit regions: collapse (and Ctrl+click),
     /// wheel scrolling with the scroll cue, a BRF NumberField scrub,
     /// Backspace reset to the file on disk, and undo.
     fn smoke_inspector(&mut self) {
         use widgets::{pane, NumberTarget};
-        let find = |app: &App, predicate: &dyn Fn(Action) -> bool| {
-            app.layout()
-                .hits
-                .into_iter()
-                .rev()
-                .find(|h| predicate(h.action))
-                .map(|h| h.rect)
-        };
-        let press = |app: &mut App, r: [i32; 4]| {
-            let (x, y) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
-            app.motion(x, y, false);
-            app.click(x, y, 1, true);
-            app.click(x, y, 1, false);
-        };
+        let find = |app: &App, predicate: &dyn Fn(Action) -> bool| app.chrome_hit(predicate);
+        let press = |app: &mut App, r: [i32; 4]| app.chrome_click(r);
         for (w, h) in [(1280, 800), (800, 600)] {
             self.demo();
             self.width = w;
@@ -2775,10 +2978,7 @@ impl App {
             let field = find(self, &|a| matches!(a, Action::Number(n) if n == t))
                 .expect("Weight NumberField");
             let (x, y) = (field[0] + field[2] / 2, field[1] + field[3] / 2);
-            self.motion(x, y, false);
-            self.click(x, y, 1, true);
-            self.motion(x + 20, y, false);
-            self.click(x + 20, y, 1, false);
+            self.smoke_drag(field, 20);
             assert_eq!(self.number_spec(t).unwrap().value, disk + 10);
             assert_eq!(self.doc.changed_count(), 1);
             let shown = widgets::format_number(disk + 10, 0);
@@ -2829,12 +3029,7 @@ impl App {
                 .map(|h| h.rect)
                 .expect("Outliner control missing")
         };
-        let press = |app: &mut App, r: [i32; 4]| {
-            let (x, y) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
-            app.motion(x, y, false);
-            app.click(x, y, 1, true);
-            app.click(x, y, 1, false);
-        };
+        let press = |app: &mut App, r: [i32; 4]| app.chrome_click(r);
         for (w, h) in [(1280, 800), (800, 600)] {
             self.demo();
             self.width = w;
@@ -2933,14 +3128,7 @@ impl App {
     }
     /// Select tool, shading toggle, menu padding and hover under overlays.
     fn smoke_toolbar_and_menus(&mut self) {
-        let find = |app: &App, predicate: &dyn Fn(Action) -> bool| {
-            app.layout()
-                .hits
-                .into_iter()
-                .rev()
-                .find(|h| predicate(h.action))
-                .map(|h| h.rect)
-        };
+        let find = |app: &App, predicate: &dyn Fn(Action) -> bool| app.chrome_hit(predicate);
         self.width = 1280;
         self.height = 800;
         self.select_entry(0);

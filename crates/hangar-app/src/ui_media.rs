@@ -1696,14 +1696,8 @@ fn brush_test_app() -> Box<App> {
     Box::new(App::new())
 }
 fn press(a: &mut App, predicate: impl Fn(Action) -> bool) {
-    let hit = a
-        .layout()
-        .hits
-        .into_iter()
-        .rev()
-        .find(|h| predicate(h.action))
-        .expect("Visible control missing");
-    let (x, y) = (hit.rect[0] + hit.rect[2] / 2, hit.rect[1] + hit.rect[3] / 2);
+    let rect = a.chrome_hit(&predicate).expect("Visible control missing");
+    let (x, y) = (rect[0] + rect[2] / 2, rect[1] + rect[3] / 2);
     a.click(x, y, 1, true);
     a.click(x, y, 1, false);
 }
@@ -1874,13 +1868,7 @@ impl App {
     pub(super) fn smoke_paint_tools(&mut self) {
         let mut a = brush_test_app();
         let rect = |a: &App, predicate: &dyn Fn(Action) -> bool| {
-            a.layout()
-                .hits
-                .into_iter()
-                .rev()
-                .find(|h| predicate(h.action))
-                .map(|h| h.rect)
-                .expect("Paint control missing")
+            a.chrome_hit(predicate).expect("Paint control missing")
         };
         for (w, h) in [(1280, 800), (800, 600)] {
             a.demo();

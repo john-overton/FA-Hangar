@@ -978,7 +978,9 @@ fn chrome_action(a: Action) -> bool {
     )
 }
 impl App {
-    fn chrome_hit(&self, predicate: &dyn Fn(Action) -> bool) -> Option<[i32; 4]> {
+    /// The topmost hit region whose action matches (shared smoke helper).
+    #[inline(never)]
+    pub(super) fn chrome_hit(&self, predicate: &dyn Fn(Action) -> bool) -> Option<[i32; 4]> {
         self.layout()
             .hits
             .into_iter()
@@ -986,11 +988,19 @@ impl App {
             .find(|h| predicate(h.action))
             .map(|h| h.rect)
     }
-    fn chrome_click(&mut self, rect: [i32; 4]) {
+    pub(super) fn chrome_click(&mut self, rect: [i32; 4]) {
+        self.smoke_drag(rect, 0);
+    }
+    /// Hover, press at the centre of `rect`, move `dx` px and release.
+    #[inline(never)]
+    pub(super) fn smoke_drag(&mut self, rect: [i32; 4], dx: i32) {
         let (x, y) = (rect[0] + rect[2] / 2, rect[1] + rect[3] / 2);
         self.motion(x, y, false);
         self.pointer(x, y, 1, true, false);
-        self.pointer(x, y, 1, false, false);
+        if dx != 0 {
+            self.motion(x + dx, y, false);
+        }
+        self.pointer(x + dx, y, 1, false, false);
     }
     /// Every chrome hit region is covered by what the control draws when
     /// hovered (1px notch tolerance), and stays inside the window.

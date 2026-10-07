@@ -322,21 +322,9 @@ impl App {
         assert_eq!(a.hp_context.as_ref().unwrap().stations.len(), 2);
         a.act(Action::Hardpoints);
         let find = |a: &App, predicate: &dyn Fn(Action) -> bool| {
-            a.layout()
-                .hits
-                .into_iter()
-                .rev()
-                .find(|h| predicate(h.action))
-                .map(|h| h.rect)
-                .expect("Station control missing")
+            a.chrome_hit(predicate).expect("Station control missing")
         };
-        let press = |a: &mut App, r: [i32; 4], dx: i32| {
-            let (x, y) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
-            a.motion(x, y, false);
-            a.click(x, y, 1, true);
-            a.motion(x + dx, y, false);
-            a.click(x + dx, y, 1, false);
-        };
+        let press = |a: &mut App, r: [i32; 4], dx: i32| a.smoke_drag(r, dx);
         let slew = find(&a, &|x| matches!(x, Action::StationSlew(true)));
         press(&mut a, slew, 0);
         assert!(a.hp_slew);
