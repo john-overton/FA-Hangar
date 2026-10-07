@@ -124,9 +124,12 @@ Windows uses Tahoma for interface labels and Lucida Console for resource data.
 - View a bounded static pose from SH data, orbit/pan/zoom, use front/side/top
   views, and export geometry-only OBJ files.
 - Move, rotate and scale the supported static SH subset. Tab opens vertex edit
-  mode; click a vertex, drag in an orthographic view, or use G/R/S, which act
-  on the selected vertices about their median point. A selects all vertices
-  or clears a full selection. Shapes with unhandled spatial records,
+  mode; click a vertex to select it, Shift+click to add or remove one, drag in
+  an orthographic view, or use G/R/S, which act on the selected vertices about
+  their median point. A selects all vertices or clears a full selection. A
+  press only becomes a drag after the pointer moves 4 pixels, and the vertex
+  keeps its offset from the cursor; dragging a selected vertex moves the whole
+  selection. Shapes with unhandled spatial records,
   bounds, visibility logic or animation remain read-only. The synthetic demo
   exercises transforms without retail data.
 - Entry-level undo/redo, dirty state and explicit discard on close. Retail LIB
@@ -474,7 +477,7 @@ resource names. Use 0.8.2 or newer for further automatic panel texture creation.
 | Orbit / pan | Middle-drag / Shift+middle-drag |
 | Zoom / frame | Wheel over viewport / Home or period |
 | Front / side / top / projection | 1 / 3 / 7 / 5, including numpad |
-| Vertex edit mode | Tab; click vertex, A all/none, G/R/S on the selection, orthographic drag |
+| Vertex edit mode | Tab; click vertex, Shift+click adds/removes, A all/none, G/R/S on the selection, orthographic drag (X/Y/Z locks an axis) |
 | Transform supported static shape | G / R / S, X/Y/Z toggles axis lock, numeric value, Enter |
 | Hardpoint placement / movement | H at cursor; drag diamond or G then X/Y/Z |
 | Decal placement | Click/drag on atlas or model; Apply decal / Esc cancel |

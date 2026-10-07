@@ -19,6 +19,13 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   previously R and S transformed the whole shape. G/R/S start unconstrained:
   S scales uniformly, R uses the view axis and G accepts `X Y Z` offsets.
   X/Y/Z toggles the axis lock. A toggles select all/none.
+- Vertex presses need 4 pixels of movement before they drag, so a click only
+  selects; drags keep the grab offset instead of snapping the vertex to the
+  cursor and move the whole selection. Shift+click adds or removes vertices,
+  X/Y/Z locks a drag axis, and the selection survives undo/redo.
+- Edit mode on a shape owned by another open LIB, or in perspective view,
+  now says why vertices cannot be dragged instead of ignoring the click or
+  showing the station message.
 
 ## 0.8.2
 

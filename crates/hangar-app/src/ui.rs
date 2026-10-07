@@ -756,6 +756,8 @@ impl App {
                 }
             }
         }
+        let vertices = self.model.as_ref().map_or(0, |m| m.vertices.len());
+        self.mesh_vertices.retain(|i| *i < vertices);
         self.refresh_graft();
         self.refresh_hardpoints();
         if self.animation_tool {
@@ -1230,6 +1232,12 @@ impl App {
             self.preview = None;
             self.status = "Vertex drag cancelled".into();
             return;
+        }
+        if let (Some(_), Key::Char(ch), false) = (&self.mesh_drag, key, ctrl) {
+            if let Some(axis) = "xyz".find(ch.to_ascii_lowercase()) {
+                self.mesh_drag_axis(axis);
+                return;
+            }
         }
         if self.hp_drag.is_some()
             && (matches!(key, Key::Escape) || ctrl && matches!(key, Key::Char('z')))
@@ -1708,6 +1716,10 @@ impl App {
         self.height - if self.height < 700 { 170 } else { 208 }
     }
     pub fn click(&mut self, x: i32, y: i32, button: u8, down: bool) {
+        self.pointer(x, y, button, down, false);
+    }
+    /// Mouse button event with the Shift state, which extends vertex selections.
+    pub fn pointer(&mut self, x: i32, y: i32, button: u8, down: bool, shift: bool) {
         self.mouse = [x, y];
         if button == 1 && !down {
             if self.mesh_drag.is_some() {
@@ -1791,7 +1803,7 @@ impl App {
                 .find(|h| h.contains(x, y) && matches!(h.action, view::Action::MeshVertex(_)))
                 .map(|h| h.action);
             if let Some(view::Action::MeshVertex(i)) = vertex {
-                self.mesh_select(i, true);
+                self.mesh_press(i, shift);
                 return;
             }
         }

@@ -315,7 +315,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                     if kind == 4 && (e.keycode == 4 || e.keycode == 5) {
                         app.wheel(if e.keycode == 4 { 1 } else { -1 });
                     } else {
-                        app.click(e.x, e.y, e.keycode as u8, kind == 4);
+                        app.pointer(e.x, e.y, e.keycode as u8, kind == 4, e.state & 1 != 0);
                     }
                 }
                 6 => {

@@ -597,7 +597,7 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
                 0x207 => (2, true),
                 _ => (2, false),
             };
-            app.click(x, y, button, down);
+            app.pointer(x, y, button, down, shift);
         }
         0x200 => app.motion(
             lp as u16 as i16 as i32,

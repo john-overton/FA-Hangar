@@ -16,7 +16,15 @@ pub(super) struct MeshDrag {
     pub model: Model,
     pub reference: [i32; 3],
     pub delta: [i32; 3],
+    /// Source point under the cursor at press: the drag keeps this grab offset.
+    pub grab: [i32; 3],
+    pub start: [i32; 2],
+    pub pressed: usize,
+    pub moving: bool,
+    pub axis: Option<usize>,
 }
+/// Pixels the pointer must travel before a vertex press becomes a drag.
+const DRAG_THRESHOLD: i32 = 4;
 impl App {
     pub(super) fn repair_panels(&mut self) -> Result<()> {
         self.finish_stroke();
@@ -156,52 +164,116 @@ impl App {
             o.hit([x - 5, y - 5, 11, 11], Action::MeshVertex(i));
         }
     }
-    pub(super) fn mesh_select(&mut self, i: usize, drag: bool) {
+    pub(super) fn mesh_select(&mut self, i: usize) {
         self.mesh_vertices = vec![i];
         self.selected_face = None;
-        if !drag {
+    }
+    /// Press on a vertex: Shift toggles it in the selection; a plain press keeps an
+    /// existing selection containing it so a drag moves them all, and a click without
+    /// dragging selects only that vertex on release.
+    pub(super) fn mesh_press(&mut self, i: usize, shift: bool) {
+        self.selected_face = None;
+        if shift {
+            if let Some(at) = self.mesh_vertices.iter().position(|v| *v == i) {
+                self.mesh_vertices.remove(at);
+            } else {
+                self.mesh_vertices.insert(0, i);
+            }
             return;
         }
-        let Some(entry) = self.model_entry else {
+        if !self.mesh_vertices.contains(&i) {
+            self.mesh_vertices = vec![i];
+        }
+        if let Some(reason) = self.mesh_blocked() {
+            self.status = reason;
+            return;
+        }
+        if self.perspective && !self.textured {
+            self.status = "Vertex selected / switch to an orthographic view (5) to drag".into();
+            return;
+        }
+        let (Some(entry), Some(model)) = (self.model_entry, &self.model) else {
             return;
         };
-        let Some(model) = &self.model else {
+        let Some(v) = model.vertices.get(i) else {
             return;
         };
-        if !model.writable {
-            self.status = model.reason.clone();
+        let Ok(grab) = self.cursor_station(self.mouse[0], self.mouse[1], v.point) else {
             return;
-        }
-        if let Some(v) = model.vertices.get(i) {
-            self.mesh_drag = Some(Box::new(MeshDrag {
-                entry,
-                original: self.doc.archive.entries[entry].clone(),
-                model: model.clone(),
-                reference: v.point,
-                delta: [0; 3],
-            }));
-        }
+        };
+        self.mesh_drag = Some(Box::new(MeshDrag {
+            entry,
+            original: self.doc.archive.entries[entry].clone(),
+            model: model.clone(),
+            reference: v.point,
+            delta: [0; 3],
+            grab,
+            start: self.mouse,
+            pressed: i,
+            moving: false,
+            axis: None,
+        }));
     }
     pub(super) fn mesh_motion(&mut self, x: i32, y: i32) -> Result<()> {
         let d = self.mesh_drag.as_ref().ok_or("No mesh drag")?;
-        let point = self.cursor_station(x, y, d.reference)?;
-        let delta = core::array::from_fn(|k| point[k] - d.reference[k]);
-        let mut preview = d.model.clone();
-        for i in &self.mesh_vertices {
-            for (k, n) in delta.iter().enumerate() {
-                preview.vertices[*i].point[k] = d.model.vertices[*i].point[k]
-                    .checked_add(*n)
-                    .ok_or("Coordinate overflow")?;
+        if !d.moving && (x - d.start[0]).abs().max((y - d.start[1]).abs()) < DRAG_THRESHOLD {
+            return Ok(());
+        }
+        if self.perspective && !self.textured {
+            return Err("Switch to an orthographic view (5) to drag vertices".into());
+        }
+        let point = self
+            .cursor_station(x, y, d.reference)
+            .map_err(|_| "Vertex outside signed source-coordinate range")?;
+        let mut delta: [i32; 3] = core::array::from_fn(|k| point[k] - d.grab[k]);
+        if let Some(axis) = d.axis {
+            for (k, n) in delta.iter_mut().enumerate() {
+                if k != axis {
+                    *n = 0;
+                }
             }
         }
-        preview.refresh_normals(&d.model);
-        self.mesh_drag.as_mut().unwrap().delta = delta;
+        let preview = d.model.transform_selection(
+            Transform::Translate(delta),
+            Some(&self.mesh_vertices),
+            [0; 3],
+        )?;
+        let d = self.mesh_drag.as_mut().unwrap();
+        d.moving = true;
+        d.delta = delta;
+        self.status = format!(
+            "Dragging {} vertices / {} / Esc cancels",
+            self.mesh_vertices.len(),
+            match d.axis {
+                Some(a) => format!("{} axis locked", ['X', 'Y', 'Z'][a]),
+                None => "X Y Z locks an axis".into(),
+            }
+        );
         self.preview = Some(preview);
         Ok(())
+    }
+    /// X/Y/Z during a vertex drag toggles the axis lock, as in the transform prompt.
+    pub(super) fn mesh_drag_axis(&mut self, axis: usize) {
+        if let Some(d) = self.mesh_drag.as_mut() {
+            d.axis = if d.axis == Some(axis) {
+                None
+            } else {
+                Some(axis)
+            };
+            if d.moving {
+                let [x, y] = self.mouse;
+                let result = self.mesh_motion(x, y);
+                self.result(result);
+            }
+        }
     }
     pub(super) fn finish_mesh_drag(&mut self) -> Result<()> {
         if let Some(d) = self.mesh_drag.take() {
             self.preview = None;
+            if !d.moving {
+                self.mesh_vertices = vec![d.pressed];
+                return Ok(());
+            }
             if d.delta == [0; 3] {
                 return Ok(());
             }
@@ -530,20 +602,83 @@ impl App {
         a.mesh_edit = true;
         a.mesh_vertices = vec![0];
         let [x, y] = a.hp_project(before).unwrap();
-        a.mesh_select(0, true);
-        a.mesh_motion(x + 12, y + 6).unwrap();
+        let project = |a: &App, i: usize| {
+            a.hp_project(a.preview.as_ref().or(a.model.as_ref()).unwrap().vertices[i].point)
+                .unwrap()
+        };
+        // A click below the drag threshold selects without editing.
+        a.mesh_vertices = vec![0, 1];
+        a.pointer(x + 1, y + 1, 1, true, false);
+        assert_eq!(
+            a.mesh_vertices,
+            vec![0, 1],
+            "Press keeps a selection to drag"
+        );
+        a.motion(x + 3, y + 2, false);
+        assert!(a.preview.is_none());
+        a.pointer(x + 3, y + 2, 1, false, false);
+        assert!(!a.doc.dirty());
+        assert_eq!(
+            a.mesh_vertices,
+            vec![0],
+            "Click selects only the pressed vertex"
+        );
+        // Shift+click extends and toggles the selection.
+        let [x1, y1] = project(&a, 1);
+        a.pointer(x1, y1, 1, true, true);
+        a.pointer(x1, y1, 1, false, true);
+        assert_eq!(a.mesh_vertices, vec![1, 0]);
+        a.pointer(x1, y1, 1, true, true);
+        a.pointer(x1, y1, 1, false, true);
+        assert_eq!(a.mesh_vertices, vec![0]);
+        a.pointer(x1, y1, 1, true, true);
+        a.pointer(x1, y1, 1, false, true);
+        // Dragging keeps the grab offset rather than snapping the vertex to the cursor.
+        a.pointer(x + 4, y + 4, 1, true, false);
+        a.motion(x + 14, y + 9, false);
         assert!(a.preview.is_some());
         assert!(!a.doc.dirty());
+        // Source units are coarser than pixels; allow their rounding.
+        let [px, py] = project(&a, 0);
+        assert!(
+            (px - (x + 10)).abs() <= 2 && (py - (y + 5)).abs() <= 2,
+            "Grab offset"
+        );
+        let moved = |a: &App, i: usize| {
+            let (p, m) = (a.preview.as_ref().unwrap(), a.model.as_ref().unwrap());
+            core::array::from_fn::<i32, 3, _>(|k| p.vertices[i].point[k] - m.vertices[i].point[k])
+        };
+        assert_eq!(moved(&a, 0), moved(&a, 1), "Selection moves together");
         a.key(Key::Char('z'), true, false);
         assert!(a.mesh_drag.is_none());
         assert!(a.preview.is_none());
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
-        a.mesh_select(0, true);
-        a.mesh_motion(x + 12, y + 6).unwrap();
-        a.click(x + 12, y + 6, 1, false);
+        a.pointer(x + 2, y + 1, 1, true, false);
+        a.motion(x + 12, y + 6, false);
+        a.key(Key::Char('x'), false, false);
+        let locked = a.mesh_drag.as_ref().unwrap().delta;
+        assert!(
+            locked[0] != 0 && locked[1] == 0 && locked[2] == 0,
+            "X axis lock"
+        );
+        a.pointer(x + 12, y + 6, 1, false, false);
         assert!(a.doc.dirty());
+        assert_eq!(a.mesh_vertices.len(), 2);
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        assert_eq!(a.mesh_vertices.len(), 2, "Selection survives undo");
+        a.act(Action::Redo);
+        assert!(a.doc.dirty());
+        a.act(Action::Undo);
+        a.mesh_vertices = vec![0, 999];
+        a.refresh();
+        assert_eq!(a.mesh_vertices, vec![0], "Stale vertex indices are dropped");
+        a.perspective = true;
+        a.textured = false;
+        a.pointer(x, y, 1, true, false);
+        assert!(a.mesh_drag.is_none() && a.status.contains("orthographic"));
+        a.pointer(x, y, 1, false, false);
+        a.perspective = false;
         for (w, h) in [(800, 600), (1280, 800)] {
             a.width = w;
             a.height = h;

@@ -529,7 +529,7 @@ impl App {
                 self.media_tab = 0;
                 self.selected_face = None;
             }
-            Action::MeshVertex(i) => self.mesh_select(i, false),
+            Action::MeshVertex(i) => self.mesh_select(i),
             Action::MeshAll => self.mesh_toggle_all(),
             Action::MeshMove => self.mesh_transform_prompt('g'),
             Action::BaseColor(face) => self.base_color_prompt(face),
