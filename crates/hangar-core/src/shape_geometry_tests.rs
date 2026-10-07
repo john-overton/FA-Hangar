@@ -1254,3 +1254,35 @@ fn connect_refusals_are_explicit() {
     let quad = face(&lb, "fc");
     assert!(connect_corners(&fb, &[(quad, [0, 2])]).is_ok());
 }
+
+/// A retail-like sliver: the rounded midpoint of its edge is 0.87 units off
+/// the line, and barycentrics over so thin a face would clamp far along it.
+#[test]
+fn split_on_a_sliver_edge_follows_the_edge() {
+    let sliver: [[i16; 3]; 3] = [[5, 61, 3], [4, 43, 6], [4, 55, 5]];
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x40, 0]);
+    a.b(&[0xf2, 0]).rel16("end", 2);
+    a.b(&[0xe2, 0]).b(b"BASE.PIC\0\0\0\0\0\0");
+    a.label("s").verts(0, &sliver);
+    a.label("fs").face(
+        0x28,
+        70,
+        lit(&sliver),
+        &[0, 1, 2],
+        &[[0, 0], [0, 100], [0, 60]],
+    );
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    let at = CS + a.at("fs");
+    let b = a.finish();
+    // Midpoint of (4, 43, 6)-(4, 55, 5), rounded.
+    let s = split_faces(&b, &[at], [4, 49, 6]).unwrap();
+    assert_eq!(s.faces.len(), 2, "the edge's own triangle is skipped");
+    let g = Geometry::parse(&s.shape).unwrap();
+    for o in &s.faces {
+        let f = &g.faces[g.face_at(*o).unwrap()];
+        // 72/145 of the way from UV (0, 100) to (0, 60).
+        assert_eq!(f.uv[2], [0, 80]);
+    }
+}

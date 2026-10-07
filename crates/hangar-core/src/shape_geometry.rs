@@ -1905,23 +1905,43 @@ fn split_fan(g: &Geometry, i: usize, point: [i32; 3]) -> Result<Vec<NewFace>> {
     }
     let off_plane = crate::surface::plane_distance(&points, point)
         .ok_or_else(|| format!("Face at {at:X} is degenerate: its corners are collinear"))?;
-    let located = crate::surface::locate3(&points, point)
-        .and_then(|l| l.mix(&points).map(|p| (l, p)))
-        .filter(|(_, p)| (0..3).all(|k| (p[k] - point[k]).abs() <= 1));
-    let Some((located, _)) = located.filter(|_| off_plane <= 1) else {
-        return Err(format!("The point is not on the face at {at:X}"));
-    };
-    let uv = if f.content & 4 != 0 {
-        Some(
-            located
-                .mix(&f.uv)
-                .ok_or("UV interpolation")?
-                .map(|v| v.clamp(0, 65535)),
-        )
-    } else {
-        None
-    };
     let skip = crate::surface::on_edge(&points, point);
+    let textured = f.content & 4 != 0;
+    let uv = match skip {
+        // On an edge: along it, which stays exact on sliver faces.
+        Some(e) => {
+            let (a, b) = (points[e], points[(e + 1) % n]);
+            let d: [i64; 3] = core::array::from_fn(|c| b[c] as i64 - a[c] as i64);
+            let num: i64 = (0..3).map(|c| d[c] * (point[c] as i64 - a[c] as i64)).sum();
+            let den: i64 = d.iter().map(|v| v * v).sum::<i64>().max(1);
+            let (ua, ub) = (f.uv.get(e).copied(), f.uv.get((e + 1) % n).copied());
+            match (textured, ua, ub) {
+                (true, Some(ua), Some(ub)) => Some(core::array::from_fn(|c| {
+                    let v = ua[c] as i64 * den + (ub[c] as i64 - ua[c] as i64) * num;
+                    crate::gizmo::div_round(v, den).clamp(0, 65535) as i32
+                })),
+                _ => None,
+            }
+        }
+        None => {
+            let located = crate::surface::locate3(&points, point)
+                .and_then(|l| l.mix(&points).map(|p| (l, p)))
+                .filter(|(_, p)| (0..3).all(|k| (p[k] - point[k]).abs() <= 1));
+            let Some((located, _)) = located.filter(|_| off_plane <= 1) else {
+                return Err(format!("The point is not on the face at {at:X}"));
+            };
+            if textured {
+                Some(
+                    located
+                        .mix(&f.uv)
+                        .ok_or("UV interpolation")?
+                        .map(|v| v.clamp(0, 65535)),
+                )
+            } else {
+                None
+            }
+        }
+    };
     let mut fan = Vec::new();
     for k in 0..n {
         let j = (k + 1) % n;

@@ -196,7 +196,8 @@ pub fn snap(points: &[[i32; 3]], point: [i32; 3], tolerance: i32) -> Option<Targ
     all.get(s.target).copied()
 }
 /// The edge (corner `i` to `i + 1`) `p` lies on, when it is on one: inside
-/// the segment, not at a corner, and within half a unit of the line.
+/// the segment, not at a corner, and within one unit of the line (a rounded
+/// midpoint is up to 0.87 units off it).
 pub fn on_edge(points: &[[i32; 3]], p: [i32; 3]) -> Option<usize> {
     let n = points.len();
     (0..n).find(|i| {
@@ -218,7 +219,7 @@ pub fn on_edge(points: &[[i32; 3]], p: [i32; 3]) -> Option<usize> {
             d[0] as i128 * w[1] as i128 - d[1] as i128 * w[0] as i128,
         ];
         let cc: i128 = c.iter().map(|v| v * v).sum();
-        4 * cc <= dd as i128
+        cc <= dd as i128
     })
 }
 
