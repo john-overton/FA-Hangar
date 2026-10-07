@@ -369,7 +369,10 @@ pub fn coplanar_panels(model: &Model, face: usize, limit: usize) -> Vec<usize> {
             .collect()
     };
     let mut group = vec![face];
-    let mut shared: BTreeSet<usize> = offsets(f0).into_iter().collect();
+    // Inserted one by one: collecting a set pulls in a stable sort's
+    // large stack buffer.
+    let mut shared = BTreeSet::new();
+    shared.extend(offsets(f0));
     while group.len() < limit {
         let next = (0..model.faces.len()).find(|i| {
             !group.contains(i)

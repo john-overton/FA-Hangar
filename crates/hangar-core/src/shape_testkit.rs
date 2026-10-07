@@ -376,9 +376,22 @@ impl Asm {
         faces: &[(&[u16], [i32; 3])],
         color: u8,
     ) -> &mut Self {
+        self.solid_uv(slot, points, faces, color, &[])
+    }
+    /// `solid` with UVs: face `k` takes `uvs[k]` (one per corner, in the
+    /// given corner order) and is drawn textured (0x6C); without UVs flat.
+    pub fn solid_uv(
+        &mut self,
+        slot: u16,
+        points: &[[i16; 3]],
+        faces: &[(&[u16], [i32; 3])],
+        color: u8,
+        uvs: &[Vec<[u16; 2]>],
+    ) -> &mut Self {
         self.verts(slot, points);
-        for (corners, inside) in faces {
+        for (k, (corners, inside)) in faces.iter().enumerate() {
             let mut order: Vec<u16> = corners.to_vec();
+            let mut uv: Vec<[u16; 2]> = uvs.get(k).cloned().unwrap_or_default();
             let at = |order: &[u16]| -> Vec<[i32; 3]> {
                 order
                     .iter()
@@ -395,20 +408,111 @@ impl Asm {
                 < 0
             {
                 order.reverse();
+                uv.reverse();
                 p = at(&order);
                 n = crate::model::face_normal(&p).unwrap_or([0, 0, 32765]);
             }
             let slots: Vec<u16> = order.iter().map(|k| slot + k).collect();
             self.face(
-                0x23,
+                if uv.is_empty() { 0x23 } else { 0x28 },
                 color,
                 Some((n.map(|v| v as i16), c.map(|v| v as i16))),
                 &slots,
-                &[],
+                &uv,
             );
         }
         self
     }
+}
+/// A synthetic textured aircraft for per-face texture smoke tests: a box
+/// fuselage whose six faces map separate regions of the 32 x 32 KIT.PIC,
+/// flat wings, a textured fin, and a gear leg on a C4 transform with a
+/// textured face. Native end marker and import tail. Not a game asset.
+pub fn demo_textured_kit() -> Vec<u8> {
+    let mut a = Asm::default();
+    a.b(&[0xff, 0xff, 0, 0, 0x10, 0, 8, 0, 0x40, 0, 0x40, 0, 0x10, 0]);
+    a.b(&[0xe2, 0]).b(b"KIT.PIC\0\0\0\0\0\0\0");
+    let box_points: [[i16; 3]; 8] = core::array::from_fn(|i| {
+        [
+            if i & 1 == 0 { -5 } else { 5 },
+            if i & 2 == 0 { -40 } else { 40 },
+            if i & 4 == 0 { -4 } else { 4 },
+        ]
+    });
+    let inside = [0, 0, 0];
+    let region = |k: u16| -> Vec<[u16; 2]> {
+        let (u, v) = ((k % 2) * 16, (k / 2) * 10);
+        alloc::vec![[u, v], [u + 15, v], [u + 15, v + 9], [u, v + 9]]
+    };
+    a.solid_uv(
+        0,
+        &box_points,
+        &[
+            (&[0, 1, 3, 2], inside),
+            (&[4, 5, 7, 6], inside),
+            (&[0, 1, 5, 4], inside),
+            (&[2, 3, 7, 6], inside),
+            (&[0, 2, 6, 4], inside),
+            (&[1, 3, 7, 5], inside),
+        ],
+        150,
+        &(0..6).map(region).collect::<Vec<_>>(),
+    );
+    plate(
+        &mut a,
+        8,
+        [[-5, -6, 0], [-40, -12, 0], [-40, -2, 0], [-5, 10, 0]],
+        151,
+    );
+    plate(
+        &mut a,
+        12,
+        [[5, -6, 0], [40, -12, 0], [40, -2, 0], [5, 10, 0]],
+        151,
+    );
+    let fin: [[i16; 3]; 4] = [[0, -30, 4], [0, -40, 4], [0, -40, 16], [0, -35, 16]];
+    a.solid_uv(
+        16,
+        &fin,
+        &[
+            (&[0, 1, 2, 3], [1, -35, 10]),
+            (&[0, 1, 2, 3], [-1, -35, 10]),
+        ],
+        152,
+        &[
+            alloc::vec![[0, 30], [9, 30], [9, 31], [0, 31]],
+            alloc::vec![[10, 30], [19, 30], [19, 31], [10, 31]],
+        ],
+    );
+    a.xform(
+        "gl",
+        Some(("_PLgearDown", 1)),
+        "_PLgearPos",
+        Shift::One,
+        true,
+        0x0a,
+        [-12, -4, 2],
+        "legl",
+        "s1",
+    );
+    a.label("s1").b(&[0xca, 0, 0, 0]);
+    a.jump("end");
+    a.label("legl");
+    let leg = [[0, 0, 0], [0, 0, -10], [1, 0, -10], [1, 0, 0]];
+    a.solid_uv(
+        20,
+        &leg,
+        &[(&[0, 1, 2, 3], [0, 1, -5]), (&[0, 1, 2, 3], [0, -1, -5])],
+        153,
+        &[
+            alloc::vec![[20, 30], [23, 30], [23, 31], [20, 31]],
+            alloc::vec![[24, 30], [27, 30], [27, 31], [24, 31]],
+        ],
+    );
+    a.b(&[0x1e]);
+    a.label("end")
+        .b(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0, 0]);
+    a.finish()
 }
 /// A flat quad drawn from both sides.
 fn plate(a: &mut Asm, slot: u16, p: [[i16; 3]; 4], color: u8) {

@@ -855,7 +855,8 @@ fn verify(
         }
     }
     let (cs, cs2) = (g.inventory.code_start, after.inventory.code_start);
-    let targets: BTreeSet<usize> = moves.values().map(|(n, _)| *n).collect();
+    let mut targets = BTreeSet::new();
+    targets.extend(moves.values().map(|(n, _)| *n));
     let mut poses: Vec<Pose> = alloc::vec![Pose::new()];
     for old in moves.keys() {
         if let Some((pose, _)) = pose_drawing(source, &g.inventory, cs + old) {

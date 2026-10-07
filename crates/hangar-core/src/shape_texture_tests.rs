@@ -581,3 +581,28 @@ fn atlas_density_measures_texels_per_unit() {
     let flat = crate::model::Model::parse(&crate::model::demo_shape()).unwrap();
     assert_eq!(atlas_density(&flat), None);
 }
+#[test]
+fn every_face_of_the_textured_kit_can_be_assigned_and_restored() {
+    let src = crate::shape_testkit::demo_textured_kit();
+    for pose in [Pose::new(), gear_down()] {
+        let m = Model::with_pose(&src, &pose).unwrap();
+        assert!(m
+            .faces
+            .iter()
+            .any(|f| f.texture == "KIT.PIC" && f.sub & 4 != 0));
+        for f in &m.faces {
+            let mode = if f.sub & 4 != 0 {
+                UvMode::Keep
+            } else {
+                UvMode::Project {
+                    plane: Plane::Auto,
+                    size: [32, 32],
+                }
+            };
+            let out = assign_texture(&src, &[f.offset], "KITT1.PIC", mode)
+                .unwrap_or_else(|e| panic!("face {:X}: {e}", f.offset));
+            let back = restore_texture_assignment(&out.shape, &out.faces).unwrap();
+            assert_eq!(drawn(&back.shape, &pose), drawn(&src, &pose));
+        }
+    }
+}
