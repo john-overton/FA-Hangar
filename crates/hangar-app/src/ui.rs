@@ -1752,6 +1752,10 @@ impl App {
                 return;
             }
         }
+        if self.prompt.is_none() && matches!(key, Key::Escape) && self.add_tool_on() {
+            self.add_vertex_cancel();
+            return;
+        }
         if self.prompt.is_none() && matches!(key, Key::Escape) && self.replace_picking() {
             self.replace_pick_cancel();
             return;
@@ -2403,6 +2407,23 @@ impl App {
         if button == 1
             && down
             && self.prompt.is_none()
+            && self.add_tool_on()
+            && self.in_viewport(x, y)
+            && !self.layout().hits.iter().any(|h| {
+                h.contains(x, y)
+                    && !matches!(
+                        h.action,
+                        view::Action::MeshVertex(_) | view::Action::Gizmo(_)
+                    )
+            })
+        {
+            let result = self.add_vertex_click(x, y, shift);
+            self.result(result);
+            return;
+        }
+        if button == 1
+            && down
+            && self.prompt.is_none()
             && self.mode == Mode::Model
             && self.mesh_edit
         {
@@ -2569,6 +2590,8 @@ impl App {
                 self.cancel_gizmo();
             } else if self.mesh_drag.is_some() {
                 self.key(Key::Escape, false, false);
+            } else if self.prompt.is_none() && !was_open && self.add_tool_on() {
+                self.add_vertex_cancel();
             } else if self.prompt.is_none()
                 && !was_open
                 && self.mesh_edit
@@ -2675,6 +2698,9 @@ impl App {
         }
         if self.menu == Some(chrome::MENU_CONTEXT) {
             self.context_hover(x, y);
+        }
+        if self.add_tool_on() && self.menu.is_none() && self.prompt.is_none() && !self.drag {
+            self.add_vertex_hover(x, y, shift);
         }
         // Hovering a dimmed gizmo says why it is disabled.
         if self.mesh_edit
@@ -3083,6 +3109,8 @@ mod palette_ui;
 
 #[path = "ui_gizmo.rs"]
 mod gizmo_ui;
+#[path = "ui_vertex.rs"]
+mod vertex_ui;
 
 #[path = "ui_about.rs"]
 mod about_ui;

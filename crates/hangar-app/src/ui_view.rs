@@ -3080,6 +3080,7 @@ impl App {
         self.smoke_object_tools();
         self.smoke_edit_mode();
         self.smoke_gizmo();
+        self.smoke_add_vertex();
         self.smoke_parts_panel();
         self.smoke_face_textures();
         self.smoke_markings();

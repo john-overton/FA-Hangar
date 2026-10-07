@@ -319,7 +319,21 @@ impl App {
                 Item::new("Duplicate", Action::MeshOp(edit_ui::OP_DUPLICATE)).key("Shift+D"),
                 Item::new("Extrude", Action::MeshOp(edit_ui::OP_EXTRUDE)).key("E"),
                 Item::new("Make face", Action::MeshOp(edit_ui::OP_FACE)).key("F"),
-                Item::new("Add vertex at median", Action::MeshOp(edit_ui::OP_VERTEX)),
+                Item::new("Add vertex", Action::MeshOp(edit_ui::OP_VERTEX)).on(self
+                    .ed
+                    .add_vertex
+                    .as_ref()
+                    .is_some_and(|t| !t.split)),
+                Item::new("Split face at point", Action::MeshOp(edit_ui::OP_SPLIT)).on(self
+                    .ed
+                    .add_vertex
+                    .as_ref()
+                    .is_some_and(|t| t.split)),
+                Item::new(
+                    "Split edge at midpoint",
+                    Action::MeshOp(edit_ui::OP_SPLIT_EDGE),
+                )
+                .enabled(!self.ed.face_select && self.mesh_vertices.len() == 2),
                 Item::sep(),
                 Item::new("Pivot: median", Action::Pivot(false)).on(!self.ed.pivot_individual),
                 Item::new("Pivot: individual origins", Action::Pivot(true))

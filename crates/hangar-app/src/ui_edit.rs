@@ -19,6 +19,8 @@ pub(super) const OP_BOX: u8 = 7;
 pub(super) const OP_FACE_COLOR: u8 = 8;
 pub(super) const OP_NEIGHBOUR: u8 = 9;
 pub(super) const OP_INVERT: u8 = 10;
+pub(super) const OP_SPLIT: u8 = 11;
+pub(super) const OP_SPLIT_EDGE: u8 = 12;
 /// A box select in progress, in window pixels.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct BoxSelect {
@@ -73,6 +75,8 @@ pub(super) struct EditState {
     pub assigned: super::texture_ui::AssignedCache,
     /// The Runtime markings panel.
     pub markings: super::markings_ui::State,
+    /// The Add vertex tool, while it is on.
+    pub add_vertex: Option<Box<super::vertex_ui::AddTool>>,
 }
 /// Pixels a press must travel before it becomes a box.
 const BOX_THRESHOLD: i32 = 4;
@@ -508,7 +512,7 @@ impl App {
         "Body (root frame)".into()
     }
     /// The SH the edit writes and its bytes.
-    fn edit_source(&self) -> Result<(usize, Vec<u8>)> {
+    pub(super) fn edit_source(&self) -> Result<(usize, Vec<u8>)> {
         if let Some(reason) = self.mesh_blocked() {
             return Err(reason);
         }
@@ -690,6 +694,11 @@ impl App {
                 self.status = "New faces copy a neighbouring face's colour".into();
                 return Ok(());
             }
+            OP_VERTEX | OP_SPLIT => {
+                self.add_vertex_tool(op == OP_SPLIT);
+                return Ok(());
+            }
+            OP_SPLIT_EDGE => return self.split_edge(),
             OP_FACE_COLOR => {
                 let color = self.ed.new_face_color.unwrap_or(self.brush);
                 self.base_color_from = color;
@@ -751,44 +760,6 @@ impl App {
                     faces,
                 });
                 self.transform_prompt('g');
-            }
-            OP_VERTEX => {
-                let model = self.model.as_ref().ok_or("No model")?;
-                let median = model
-                    .median(&self.mesh_vertices)
-                    .ok_or("Select vertices or faces first")?;
-                // Host: a face using a selected vertex, in an unrotated frame.
-                let host = model
-                    .faces
-                    .iter()
-                    .find(|f| {
-                        f.indices.iter().any(|i| self.mesh_vertices.contains(i))
-                            && f.indices.iter().all(|i| geo::unrotated(model, *i))
-                    })
-                    .ok_or("No face using the selection is drawn in an unrotated frame")?
-                    .offset;
-                let t = geo::frame_translation(model, host)?;
-                let local: [i32; 3] = core::array::from_fn(|k| median[k] - t[k]);
-                let added = geo::add_vertices(&source, host, &[local], &[])?;
-                self.doc.replace(entry, added.shape)?;
-                self.ed.face_select = false;
-                self.refresh();
-                if let Some(model) = &self.model {
-                    self.mesh_vertices = model
-                        .vertices
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, v)| added.vertices.contains(&v.offset))
-                        .map(|(i, _)| i)
-                        .collect();
-                }
-                self.status = format!(
-                    "Added a vertex at the median ({} {} {}), slot {}. One undo step.",
-                    median[0],
-                    median[1],
-                    median[2],
-                    added.slots.first().copied().unwrap_or(0)
-                );
             }
             _ => {}
         }
@@ -1002,6 +973,10 @@ impl App {
         } else {
             self.draw_vertex_handles(o);
         }
+        if self.add_tool_on() {
+            self.add_vertex_overlay(o);
+            return;
+        }
         if let Some(b) = self.ed.mesh_box.filter(|b| b.boxing) {
             let (x0, y0) = (b.start[0].min(b.end[0]), b.start[1].min(b.end[1]));
             let (w, h) = (
@@ -1104,7 +1079,9 @@ impl App {
                     ],
                 );
             }
-            let ops: [(&str, u8, bool); 6] = [
+            let tool = self.ed.add_vertex.as_ref().map(|t| t.split);
+            let edge = !self.ed.face_select && self.mesh_vertices.len() == 2;
+            let ops: [(&str, u8, bool); 8] = [
                 ("Delete faces", OP_DELETE, faces),
                 ("Flip normals", OP_FLIP, faces),
                 ("Duplicate", OP_DUPLICATE, faces),
@@ -1114,13 +1091,20 @@ impl App {
                     OP_FACE,
                     !self.ed.face_select && self.mesh_vertices.len() >= 3,
                 ),
-                ("Add vertex", OP_VERTEX, !self.mesh_vertices.is_empty()),
+                ("Add vertex", OP_VERTEX, true),
+                ("Split face", OP_SPLIT, true),
+                ("Split edge", OP_SPLIT_EDGE, edge),
             ];
             for pair in ops.chunks(2) {
                 if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
                     let half = (rect[2] - space::SPACE_1) / 2;
                     for (k, (label, op, enabled)) in pair.iter().enumerate() {
-                        let b = Btn::new(label).enabled(*enabled);
+                        let on = match *op {
+                            OP_VERTEX => tool == Some(false),
+                            OP_SPLIT => tool == Some(true),
+                            _ => false,
+                        };
+                        let b = Btn::new(label).enabled(*enabled).on(on);
                         let b = if *op == OP_DELETE { b.danger() } else { b };
                         o.button_ex(
                             [
@@ -1176,11 +1160,13 @@ impl App {
             }
         }
         o.panel_end(&mut s);
-        self.face_texture_pane(o, &mut s, false);
-        self.markings_pane(o, &mut s);
+        // A refusal shows under the operations that gave it.
         if let Some(why) = &self.ed.mesh_refusal {
             o.stack_notice(&mut s, Tone::Warn, why);
-        } else if !model.writable {
+        }
+        self.face_texture_pane(o, &mut s, false);
+        self.markings_pane(o, &mut s);
+        if self.ed.mesh_refusal.is_none() && !model.writable {
             o.stack_notice(
                 &mut s,
                 Tone::Neutral,
@@ -1505,19 +1491,14 @@ impl App {
         let neighbour = a.smoke_find(&|x| matches!(x, Action::MeshOp(OP_NEIGHBOUR)));
         a.chrome_click(neighbour);
         assert!(a.ed.new_face_color.is_none());
-        // Add vertex at the median, one undo step; the new vertex is selected.
-        a.mesh_vertices = vec![roots[0], roots[3]];
-        let n0 = a.model.as_ref().unwrap().vertices.len();
+        // Add vertex is a click tool: the button turns it on and off
+        // (smoke_add_vertex places vertices with it).
         let add = a.smoke_find(&|x| matches!(x, Action::MeshOp(OP_VERTEX)));
         a.chrome_click(add);
-        assert_eq!(
-            a.model.as_ref().unwrap().vertices.len(),
-            n0 + 1,
-            "{}",
-            a.status
-        );
-        assert_eq!(a.mesh_vertices.len(), 1);
-        a.act(Action::Undo);
+        assert!(a.add_tool_on(), "{}", a.status);
+        let add = a.smoke_find(&|x| matches!(x, Action::MeshOp(OP_VERTEX)));
+        a.chrome_click(add);
+        assert!(!a.add_tool_on());
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
         // Header menus open inside the window at both sizes.
         for (w, h) in [(800, 600), (1280, 800)] {
@@ -1667,14 +1648,72 @@ impl App {
         .take(3)
         .copied()
         .collect();
-        for (label, op) in [("make face", OP_FACE), ("add vertex", OP_VERTEX)] {
-            self.mesh_vertices = corners.clone();
-            self.mesh_op(op);
-            if !self.doc.dirty() {
-                out.push_str(&format!("REFUSED {label}: {}\n", self.status));
-                continue;
+        self.mesh_vertices = corners.clone();
+        self.mesh_op(OP_FACE);
+        if self.doc.dirty() {
+            restored(self, "make face", &mut out)?;
+        } else {
+            out.push_str(&format!("REFUSED make face: {}\n", self.status));
+        }
+        // Add vertex at the face's centre and at an edge midpoint; split
+        // the face at its centre, and at the midpoint (with its neighbour).
+        let (face, points) = {
+            let m = self.model.as_ref().ok_or("No model")?;
+            let face = m
+                .faces
+                .iter()
+                .position(|f| f.offset == offset)
+                .ok_or("Face lost")?;
+            let points: Vec<[i32; 3]> = m.faces[face]
+                .indices
+                .iter()
+                .map(|i| m.vertices[*i].point)
+                .collect();
+            (face, points)
+        };
+        let targets = hangar_core::surface::targets(&points);
+        for (label, kind, split) in [
+            (
+                "add vertex at the face centre",
+                hangar_core::surface::SnapKind::FaceCentre,
+                false,
+            ),
+            (
+                "add vertex at an edge midpoint",
+                hangar_core::surface::SnapKind::EdgeMidpoint,
+                false,
+            ),
+            (
+                "split face at its centre",
+                hangar_core::surface::SnapKind::FaceCentre,
+                true,
+            ),
+            (
+                "split at an edge midpoint",
+                hangar_core::surface::SnapKind::EdgeMidpoint,
+                true,
+            ),
+        ] {
+            let t = *targets
+                .iter()
+                .find(|t| t.kind == kind)
+                .ok_or("No snap target")?;
+            let p = super::vertex_ui::AddPoint {
+                face,
+                offset,
+                point: t.point,
+                snap: Some(t),
+                at: [0, 0],
+            };
+            let result = if split {
+                self.split_at(&p)
+            } else {
+                self.place_vertex(&p)
+            };
+            match result {
+                Ok(()) => restored(self, label, &mut out)?,
+                Err(e) => out.push_str(&format!("REFUSED {label}: {e}\n")),
             }
-            restored(self, label, &mut out)?;
         }
         // Part settings: every gear direction that flips in place, and back.
         self.act(Action::MeshMode);

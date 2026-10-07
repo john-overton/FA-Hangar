@@ -208,7 +208,7 @@ fn circle(c: [i32; 2], r: i32) -> Vec<[i32; 2]> {
 }
 const AXIS_COLORS: [Rgb; 3] = [c::AXIS_X, c::AXIS_Y, c::AXIS_Z];
 /// Dashed 1px line, 3 on, 3 off.
-fn dashed(d: &mut Canvas, a: [i32; 2], b: [i32; 2], color: Rgb) {
+pub(super) fn dashed(d: &mut Canvas, a: [i32; 2], b: [i32; 2], color: Rgb) {
     let n = (b[0] - a[0]).abs().max((b[1] - a[1]).abs());
     if n == 0 {
         return;
@@ -1195,9 +1195,22 @@ impl App {
         let Some(frame) = self.view_frame(self.view_size()) else {
             return Vec::new();
         };
+        // A loose vertex (no face uses it, as one Add vertex just placed)
+        // shows while it is selected.
+        let mut selected = vec![false; model.vertices.len()];
+        for i in &self.mesh_vertices {
+            if let Some(s) = selected.get_mut(*i) {
+                *s = true;
+            }
+        }
         let mut all: Vec<(VertexHandle, [i32; 3])> = Vec::new();
         for (i, v) in model.vertices.iter().enumerate() {
-            if !used[i] || visible.as_ref().is_some_and(|s| s.get(i) != Some(&true)) {
+            let shown = if used[i] {
+                visible.as_ref().is_none_or(|s| s.get(i) == Some(&true))
+            } else {
+                selected[i]
+            };
+            if !shown {
                 continue;
             }
             let Some(at) = self.hp_project(v.point).filter(|p| inside(*p)) else {

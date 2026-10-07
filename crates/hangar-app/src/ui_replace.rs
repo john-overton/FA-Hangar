@@ -264,7 +264,12 @@ impl App {
     }
     /// Backends report Alt before pointer events (Alt+click picks for Replace).
     pub fn alt_modifier(&mut self, held: bool) {
+        let changed = self.replace.alt != held;
         self.replace.alt = held;
+        if changed && self.add_tool_on() {
+            let shift = self.ed.add_vertex.as_ref().is_some_and(|t| t.shift);
+            self.add_vertex_hover(self.mouse[0], self.mouse[1], shift);
+        }
     }
     /// The PIC entry `name` decoded for replacement, or why not.
     fn replace_source(&self, name: &str) -> Result<(usize, Vec<u8>, Pic)> {
