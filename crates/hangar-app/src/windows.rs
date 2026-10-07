@@ -655,6 +655,9 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
             )
         }
         0x20a => app.wheel((wp >> 16) as u16 as i16 as i32 / 120),
+        // WM_SYSCOMMAND SC_KEYMENU from a bare Alt (lp == 0) would enter menu mode and
+        // swallow the next click after Alt+click; Alt+Space and Alt+F4 still reach Windows.
+        0x112 if wp & 0xfff0 == 0xf100 && lp == 0 => return 0,
         _ => return DefWindowProcA(hwnd, msg, wp, lp),
     }
     let quit = app.quit;
