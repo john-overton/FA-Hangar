@@ -28,6 +28,7 @@ mod schema;
 pub mod shape_code;
 pub mod shape_edit;
 pub mod shape_geometry;
+pub mod shape_parts;
 #[cfg(test)]
 mod shape_testkit;
 pub mod validation;
