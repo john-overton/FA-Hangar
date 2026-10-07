@@ -189,6 +189,8 @@ pub struct App {
     transfer_scroll: usize,
     transfer_note: usize,
     transfer_is_copy: bool,
+    transfer_source: Option<u64>,
+    transfer_move: bool,
     include_dependencies: bool,
     resource_drag: Option<(u64, usize, [i32; 2])>,
     scroll: usize,
@@ -229,6 +231,7 @@ pub struct App {
     variant_draft: Option<Variant>,
     required: Vec<String>,
     collapsed: [bool; 9],
+    root_collapsed: bool,
     category: Option<usize>,
     menu: Option<usize>,
     dock: u8,
@@ -330,6 +333,8 @@ impl App {
             transfer_scroll: 0,
             transfer_note: 0,
             transfer_is_copy: false,
+            transfer_source: None,
+            transfer_move: false,
             include_dependencies: true,
             resource_drag: None,
             scroll: 0,
@@ -370,6 +375,7 @@ impl App {
             variant_draft: None,
             required: Vec::new(),
             collapsed: [true; 9],
+            root_collapsed: false,
             category: None,
             menu: None,
             dock: 0,
@@ -491,6 +497,11 @@ impl App {
         self.refresh();
         self.frame();
         self.remember(path);
+        self.scroll = self
+            .library_rows()
+            .iter()
+            .position(|(id, cat, _)| *id == self.library_id && cat.is_none())
+            .unwrap_or(0);
         self.status = format!(
             "Opened {} | {} entries | {}",
             path,
@@ -511,6 +522,7 @@ impl App {
         self.paint_enabled = false;
         self.model_paint = false;
 
+        self.root_collapsed = false;
         self.field_group = None;
         self.envelope_selected = 0;
         self.envelope_scroll = 0;
@@ -533,11 +545,11 @@ impl App {
             self.table_scroll = table_position.saturating_sub(table_rows / 2);
         }
         let position = self
-            .tree_rows()
+            .library_rows()
             .iter()
-            .position(|(_, i)| *i == Some(self.selected))
+            .position(|(id, _, i)| *id == self.library_id && *i == Some(self.selected))
             .unwrap_or(0);
-        let rows = ((self.height - self.tree_start() - 54) / 20).max(1) as usize;
+        let rows = ((self.height - self.tree_start() - 54) / 22).max(1) as usize;
         if position < self.scroll || position >= self.scroll + rows {
             self.scroll = position.saturating_sub(rows / 2);
         }
@@ -815,10 +827,6 @@ impl App {
         if matches!(a, FileAction::VariantSh) && (self.doc.dirty() || !self.name().ends_with(".PT"))
         {
             self.status = "Select a PT donor in a saved LIB before creating a new aircraft".into();
-            return;
-        }
-        if matches!(a, FileAction::Open) && self.doc.dirty() {
-            self.status = "Save your changes before opening another LIB".into();
             return;
         }
         if matches!(a, FileAction::Variant) && self.doc.archive.entries.get(self.selected).is_none()
@@ -1230,6 +1238,8 @@ impl App {
                     self.prompt = None;
                     self.preview = None;
                     self.transfer_plan = None;
+                    self.transfer_source = None;
+                    self.transfer_move = false;
                     self.status = "Cancelled".into();
                 }
                 Key::Enter => {
@@ -1678,11 +1688,14 @@ impl App {
                         .map(|h| h.action);
                     let result = (|| {
                         match target {
-                            Some(view::Action::Library(id)) if id != library => {
+                            Some(
+                                view::Action::Library(id)
+                                | view::Action::LibraryToggle(id)
+                                | view::Action::LibraryCategory(id, _)
+                                | view::Action::LibraryEntry(id, _),
+                            ) if id != library => {
                                 self.selected = entry;
-                                self.copy_resource()?;
-                                self.switch_library(id)?;
-                                self.paste_resources()?;
+                                self.prepare_drop(id)?;
                             }
                             Some(view::Action::Entry(to))
                                 if to != entry
@@ -1824,10 +1837,10 @@ impl App {
             .map(|h| h.action);
         if let Some(action) = action {
             self.resource_drag = if x < self.left() {
-                if let view::Action::Entry(i) = action {
-                    Some((self.library_id, i, [x, y]))
-                } else {
-                    None
+                match action {
+                    view::Action::Entry(i) => Some((self.library_id, i, [x, y])),
+                    view::Action::LibraryEntry(id, i) => Some((id, i, [x, y])),
+                    _ => None,
                 }
             } else {
                 None
@@ -1863,7 +1876,7 @@ impl App {
         }
         if let Some((_, _, start)) = self.resource_drag {
             if (x - start[0]).abs() + (y - start[1]).abs() > 6 {
-                self.status = "Drop on a LIB to copy / same-type entry to graft".into();
+                self.status = "Drop on a LIB to review copy/move / same-type entry to graft".into();
             }
         }
 
@@ -1999,8 +2012,8 @@ impl App {
             return;
         }
         if self.mouse[0] < self.left() {
-            let count = self.tree_rows().len();
-            let rows = ((self.height - self.tree_start() - 54) / 20).max(1) as usize;
+            let count = self.library_rows().len();
+            let rows = ((self.height - self.tree_start() - 54) / 22).max(1) as usize;
             self.scroll = (self.scroll as i32 - delta * 3)
                 .clamp(0, count.saturating_sub(rows) as i32) as usize;
         } else if self.mouse[0] >= self.right() {

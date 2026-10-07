@@ -17,8 +17,9 @@ pub(super) struct Library {
     mode: Mode,
     camera: (i32, i32, i32, [i32; 2], bool),
     image: (i32, [i32; 2]),
-    filter: String,
-    collapsed: [bool; 9],
+    pub(super) filter: String,
+    pub(super) collapsed: [bool; 9],
+    pub(super) root_collapsed: bool,
     category: Option<usize>,
     required: Vec<String>,
     suggested: Option<String>,
@@ -77,7 +78,7 @@ impl App {
         }
     }
     pub(super) fn tree_start(&self) -> i32 {
-        78 + self.libraries.len() as i32 * 22
+        56
     }
     fn capture_library(&mut self) -> Library {
         Library {
@@ -101,6 +102,7 @@ impl App {
             image: (self.image_zoom, self.image_pan),
             filter: core::mem::take(&mut self.filter),
             collapsed: self.collapsed,
+            root_collapsed: self.root_collapsed,
             category: self.category,
             required: core::mem::take(&mut self.required),
             suggested: self.suggested_output.take(),
@@ -120,6 +122,7 @@ impl App {
         self.mode = library.mode;
         self.filter = library.filter;
         self.collapsed = library.collapsed;
+        self.root_collapsed = library.root_collapsed;
         self.category = library.category;
         self.required = library.required;
         self.suggested_output = library.suggested;
@@ -157,10 +160,12 @@ impl App {
             .iter()
             .position(|l| l.id == id)
             .ok_or("LIB is no longer open")?;
+        let scroll = self.scroll;
         let incoming = self.libraries.remove(at);
         let current = self.capture_library();
         self.libraries.insert(at, current);
         self.restore_library(incoming);
+        self.scroll = scroll;
         self.status = "Active LIB changed / edits and undo history retained".into();
         Ok(())
     }
@@ -186,31 +191,6 @@ impl App {
         Ok(false)
     }
     pub(super) fn install_library(&mut self, doc: Document, path: String) -> Result<()> {
-        if self.libraries.len() >= 7 {
-            return Err("At most 8 LIBs can be open; close one first".into());
-        }
-        let bytes = doc
-            .archive
-            .entries
-            .iter()
-            .map(Entry::stored_len)
-            .sum::<usize>()
-            + self
-                .doc
-                .archive
-                .entries
-                .iter()
-                .map(Entry::stored_len)
-                .sum::<usize>()
-            + self
-                .libraries
-                .iter()
-                .flat_map(|l| &l.doc.archive.entries)
-                .map(Entry::stored_len)
-                .sum::<usize>();
-        if bytes > 256 * 1024 * 1024 {
-            return Err("Open LIBs exceed the 256 MiB stored-resource budget".into());
-        }
         self.finish_stroke();
         if !self.path.is_empty() || !self.doc.archive.entries.is_empty() {
             let current = self.capture_library();
@@ -221,9 +201,19 @@ impl App {
         self.next_library_id += 1;
         self.doc = doc;
         self.path = path;
+        self.mesh_edit = false;
+        self.mesh_vertices.clear();
+        self.animation_tool = false;
+        self.animation_state.clear();
+        self.hp_tool = false;
+        self.hp_drag = None;
+        self.mesh_drag = None;
+        self.model_paint = false;
+        self.paint_enabled = false;
         self.selected = 0;
         self.category = None;
         self.collapsed = [true; 9];
+        self.root_collapsed = false;
         self.scroll = 0;
         self.table_scroll = 0;
         self.field_group = None;
@@ -232,6 +222,11 @@ impl App {
         self.required.clear();
         self.suggested_output = None;
         self.palette_override = None;
+        self.scroll = self
+            .library_rows()
+            .iter()
+            .position(|(id, cat, _)| *id == self.library_id && cat.is_none())
+            .unwrap_or(0);
         Ok(())
     }
     pub(super) fn any_dirty(&self) -> bool {
@@ -266,6 +261,8 @@ impl App {
         self.status = "Closed LIB; other open LIBs retained".into();
     }
     pub(super) fn copy_resource(&mut self) -> Result<()> {
+        self.transfer_source = None;
+        self.transfer_move = false;
         self.finish_stroke();
         if self.doc.archive.entries.get(self.selected).is_none() {
             return Err("Select a resource to copy".into());
@@ -299,13 +296,21 @@ impl App {
             &source.name,
             self.include_dependencies,
         )?);
+        if self.transfer_source.is_some() {
+            self.transfer_plan.as_mut().unwrap().notes.push("When moving, known shared dependencies stay in the source. Linked files supplied by other LIBs are copied. Each changed LIB has its own undo step.".into());
+        }
         self.transfer_is_copy = true;
         self.transfer_scroll = 0;
         self.transfer_note = 0;
         self.prompt = Some(Prompt {
             kind: PromptKind::TransferReview,
             title: format!(
-                "Copy {} from {}",
+                "{} {} from {}",
+                if self.transfer_source.is_some() {
+                    "Transfer"
+                } else {
+                    "Copy"
+                },
                 source.name,
                 source
                     .path
@@ -319,6 +324,8 @@ impl App {
         Ok(())
     }
     pub(super) fn rename_prompt(&mut self, duplicate: bool) {
+        self.transfer_source = None;
+        self.transfer_move = false;
         self.prompt = Some(Prompt {
             kind: PromptKind::ResourceName(duplicate),
             title: if duplicate {
@@ -364,7 +371,28 @@ impl App {
     pub(super) fn apply_transfer(&mut self) -> Result<()> {
         let plan = self.transfer_plan.as_ref().ok_or("No resource review")?;
         let first = plan.items.first().map(|i| i.entry.name.clone());
-        plan.apply(&mut self.doc)?;
+        let moved = if self.transfer_move {
+            let id = self.transfer_source.ok_or("No move source")?;
+            let source = self
+                .libraries
+                .iter_mut()
+                .find(|l| l.id == id)
+                .ok_or("Source LIB is no longer open")?;
+            let root = &self
+                .clipboard
+                .as_ref()
+                .ok_or("No move source snapshot")?
+                .name;
+            Some(resource_ops::move_between(
+                &mut source.doc,
+                &mut self.doc,
+                plan,
+                root,
+            )?)
+        } else {
+            plan.apply(&mut self.doc)?;
+            None
+        };
         if let Some(name) = first {
             if let Some(i) = self.doc.archive.find(&name) {
                 self.selected = i;
@@ -372,14 +400,25 @@ impl App {
         }
         self.transfer_plan = None;
         self.refresh();
-        self.status = "Resource transaction applied / one Ctrl+Z undo step".into();
+        self.status = moved.map_or("Resources copied / one undo step".into(), |n| {
+            format!(
+                "Moved {n} source entries / shared dependencies kept / undo available in each LIB"
+            )
+        });
+        self.transfer_source = None;
+        self.transfer_move = false;
         Ok(())
     }
     pub(super) fn transfer_note_pages(&self, w: i32) -> Vec<Vec<String>> {
         let mut pages = Vec::new();
         if let Some(plan) = &self.transfer_plan {
             for note in &plan.notes {
-                let lines = super::dependencies_ui::wrap(note, ((w - 28) / 7).max(16) as usize);
+                let note = if self.transfer_move {
+                    note.replace("Copies only", "Moves only")
+                } else {
+                    note.clone()
+                };
+                let lines = super::dependencies_ui::wrap(&note, ((w - 28) / 7).max(16) as usize);
                 for chunk in lines.chunks(3) {
                     pages.push(chunk.to_vec());
                 }
@@ -411,24 +450,54 @@ impl App {
             x + 14,
             y + 49,
             w - 28,
-            &format!(
-                "Target: {} / {} resources / {} removals / 1 undo step",
-                self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path),
-                plan.items.len(),
-                plan.removals.len()
-            ),
+            &if self.transfer_move {
+                format!(
+                    "{} incoming / shared links kept at source / one undo per LIB",
+                    plan.items.len()
+                )
+            } else {
+                format!(
+                    "Target: {} / {} resources / {} removals / 1 undo step",
+                    self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path),
+                    plan.items.len(),
+                    plan.removals.len()
+                )
+            },
             c::STEEL,
         );
         if self.transfer_is_copy {
             o.button(
-                [x + 14, y + 60, w - 28, 24],
+                [
+                    x + 14,
+                    y + 60,
+                    if self.transfer_source.is_some() {
+                        w - 226
+                    } else {
+                        w - 28
+                    },
+                    24,
+                ],
                 if self.include_dependencies {
-                    "[x] Include discovered dependencies"
+                    "[x] Object and linked files"
                 } else {
-                    "[ ] Include discovered dependencies"
+                    "[ ] Item only / click for linked files"
                 },
                 Action::TransferDependencies,
                 self.include_dependencies,
+            );
+        }
+        if self.transfer_source.is_some() {
+            o.button(
+                [x + w - 200, y + 60, 88, 24],
+                "Copy",
+                Action::TransferMove(false),
+                !self.transfer_move,
+            );
+            o.button(
+                [x + w - 104, y + 60, 90, 24],
+                "Move",
+                Action::TransferMove(true),
+                self.transfer_move,
             );
         }
         let visible = ((h - 235) / 46).max(1) as usize;
@@ -531,7 +600,11 @@ impl App {
         if plan.ready() {
             o.button(
                 [x + w - 168, y + h - 47, 154, 28],
-                "Apply resources",
+                if self.transfer_move {
+                    "Move resources"
+                } else {
+                    "Apply resources"
+                },
                 Action::Apply,
                 true,
             );
@@ -699,5 +772,189 @@ impl App {
                 }
             }
         }
+    }
+}
+
+impl App {
+    pub(super) fn library_rows(&self) -> Vec<(u64, Option<usize>, Option<usize>)> {
+        let mut libraries = vec![(
+            self.library_id,
+            &self.doc,
+            self.root_collapsed,
+            &self.collapsed,
+            &self.filter,
+        )];
+        libraries.extend(
+            self.libraries
+                .iter()
+                .map(|l| (l.id, &l.doc, l.root_collapsed, &l.collapsed, &l.filter)),
+        );
+        libraries.sort_unstable_by_key(|l| l.0);
+        let mut rows = Vec::new();
+        for (id, doc, root, collapsed, filter) in libraries {
+            rows.push((id, None, None));
+            if root {
+                continue;
+            }
+            let filter = filter.to_ascii_uppercase();
+            for (cat, closed) in collapsed.iter().enumerate() {
+                let entries: Vec<_> = doc
+                    .archive
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| {
+                        super::view::category_of(&e.name) == cat && e.name.contains(&filter)
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+                if entries.is_empty() {
+                    continue;
+                }
+                rows.push((id, Some(cat), None));
+                if !closed || !filter.is_empty() {
+                    rows.extend(entries.into_iter().map(|i| (id, Some(cat), Some(i))));
+                }
+            }
+        }
+        rows
+    }
+    pub(super) fn prepare_drop(&mut self, target: u64) -> Result<()> {
+        let source = self.library_id;
+        self.copy_resource()?;
+        self.switch_library(target)?;
+        self.include_dependencies = false;
+        self.paste_resources()?;
+        self.transfer_source = Some(source);
+        self.transfer_move = true;
+        self.transfer_plan.as_mut().unwrap().notes.push("When moving, known shared dependencies stay in the source. Linked files supplied by other LIBs are copied. Each changed LIB has its own undo step.".into());
+        if let Some(prompt) = &mut self.prompt {
+            prompt.title = format!(
+                "Transfer {} / choose scope and Copy or Move",
+                self.clipboard.as_ref().unwrap().name
+            );
+        }
+        self.status =
+            "Review item only or linked resources before moving / files are unchanged until saved"
+                .into();
+        Ok(())
+    }
+    pub(super) fn toggle_library(&mut self, id: u64) {
+        if id == self.library_id {
+            self.root_collapsed = !self.root_collapsed;
+        } else if let Some(l) = self.libraries.iter_mut().find(|l| l.id == id) {
+            l.root_collapsed = !l.root_collapsed;
+        }
+        let rows = ((self.height - self.tree_start() - 54) / 22).max(1) as usize;
+        self.scroll = self
+            .scroll
+            .min(self.library_rows().len().saturating_sub(rows));
+    }
+}
+
+#[inline(never)]
+fn library_test_app() -> Box<App> {
+    Box::new(App::new())
+}
+impl App {
+    #[inline(never)]
+    pub(super) fn smoke_library_moves(&mut self) {
+        let mut a = library_test_app();
+        a.demo();
+        a.path = "SOURCE.LIB".into();
+        let source = a.library_id;
+        a.doc.mark_unsaved();
+        a.file_prompt(FileAction::Open);
+        assert!(matches!(
+            a.prompt.as_ref().map(|p| &p.kind),
+            Some(PromptKind::File(FileAction::Open))
+        ));
+        a.key(Key::Escape, false, false);
+        assert!(a.doc.dirty());
+        let bytes = a.doc.archive.bytes().unwrap();
+        a.install_library(Document::new(Archive::empty()), "TARGET.LIB".into())
+            .unwrap();
+        let target = a.library_id;
+        a.refresh();
+        a.switch_library(source).unwrap();
+        a.select_entry(0);
+        a.prepare_drop(target).unwrap();
+        assert!(a.transfer_move);
+        assert!(!a.include_dependencies);
+        assert_eq!(a.transfer_plan.as_ref().unwrap().items.len(), 1);
+        a.act(Action::TransferDependencies);
+        assert_eq!(a.transfer_plan.as_ref().unwrap().items.len(), 2);
+        a.act(Action::TransferMove(false));
+        a.apply_transfer().unwrap();
+        a.prompt = None;
+        assert_eq!(a.doc.archive.entries.len(), 2);
+        assert_eq!(
+            a.libraries
+                .iter()
+                .find(|l| l.id == source)
+                .unwrap()
+                .doc
+                .archive
+                .bytes()
+                .unwrap(),
+            bytes
+        );
+        a.act(Action::Undo);
+        a.switch_library(source).unwrap();
+        a.select_entry(0);
+        a.prepare_drop(target).unwrap();
+        a.apply_transfer().unwrap();
+        a.prompt = None;
+        assert!(a.doc.archive.find("DEMO.SH").is_some());
+        assert!(a
+            .libraries
+            .iter()
+            .find(|l| l.id == source)
+            .unwrap()
+            .doc
+            .archive
+            .find("DEMO.SH")
+            .is_none());
+        a.act(Action::Undo);
+        a.switch_library(source).unwrap();
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), bytes);
+        for i in 0..24 {
+            a.install_library(Document::new(Archive::empty()), format!("EXTRA{i}.LIB"))
+                .unwrap();
+            a.refresh();
+        }
+        assert_eq!(a.libraries.len() + 1, 26);
+        a.toggle_library(source);
+        assert!(a
+            .library_rows()
+            .iter()
+            .all(|(id, cat, _)| *id != source || cat.is_none()));
+        a.width = 800;
+        a.height = 600;
+        a.scroll = 0;
+        a.mode = Mode::Model;
+        for hit in a.layout().hits {
+            assert!(
+                hit.rect[0] >= 0
+                    && hit.rect[1] >= 0
+                    && hit.rect[0] + hit.rect[2] <= 800
+                    && hit.rect[1] + hit.rect[3] <= 600
+            );
+        }
+        a.mouse = [20, 300];
+        a.wheel(-100);
+        assert!(a
+            .layout()
+            .hits
+            .iter()
+            .any(|h| matches!(h.action,Action::Library(id) if id==a.library_id)));
+        let last = a.library_id;
+        a.toggle_library(last);
+        assert!(a.root_collapsed);
+        a.toggle_library(last);
+        assert!(!a.root_collapsed);
+        a.switch_library(source).unwrap();
+        assert!(a.root_collapsed);
     }
 }

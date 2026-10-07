@@ -205,6 +205,18 @@ separately. No retail data is included in the test package.
    game installation. Test baseline and edited folders separately. Package/parser
    success does not substitute for these original-game results.
 
+## Multiple LIBs and transfer review (0.8.1)
+
+1. Open more than eight LIBs, including while the current LIB has unsaved edits.
+   Collapse/expand several roots, expand inactive categories and scroll the
+   whole outliner. Check selection, camera and dirty history are retained.
+2. Drag an entry onto another LIB. Cancel once, then test Item only and Object
+   and linked files with both Copy and Move. Review conflicting names explicitly.
+   Copy must retain the source. Move must retain dependencies used by other
+   source objects; each changed LIB must undo independently.
+3. Check inactive and active workspace tabs look separate from File/Edit menus,
+   at 800x600 and a larger window.
+
 ## Please report
 
 Windows version and architecture, CPU/SSE2 or VM setup, whether the window

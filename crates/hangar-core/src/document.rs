@@ -29,6 +29,7 @@ impl ChangeKind {
         }
     }
 }
+#[derive(Clone)]
 pub struct Document {
     pub archive: Archive,
     undo: Vec<Vec<Change>>,
@@ -202,7 +203,11 @@ impl Document {
             return Ok(());
         }
         draft.changed();
-        draft.bytes()?;
+        // Empty documents are valid editor destinations/sources; the file writer
+        // still enforces the archive format's nonempty save contract.
+        if !draft.entries.is_empty() {
+            draft.bytes()?;
+        }
         self.change_batch(changes);
         Ok(())
     }

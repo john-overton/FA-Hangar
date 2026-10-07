@@ -237,3 +237,15 @@ Local handoff files contain user-owned game data and remain outside Git/CI.
 Original-game and Windows 98/ME acceptance remain pending user tests. Native
 continuous animation, visual turret editing, full topology and module relocation
 are not claimed by this milestone.
+
+
+## Version 0.8.1 workspace pass
+
+61 core tests pass. Move tests cover shared transitive dependencies, source and
+target undo, empty-source moves, stale source/target snapshots, and a skipped
+conflicting root with no partial mutation. UI smoke verifies copy/move and
+scope switches, permits opening while dirty, opens 26 synthetic documents,
+collapses inactive roots, scrolls to the last root, and checks 800x600 hit bounds.
+Native compact outliner and drop-review layouts were inspected. Original-game
+acceptance assets are unchanged from the 0.8 handoff; the included editor is
+updated to 0.8.1.

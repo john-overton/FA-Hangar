@@ -25,6 +25,9 @@ pub(super) enum Action {
     Validate,
     ClearSources,
     Library(u64),
+    LibraryToggle(u64),
+    LibraryCategory(u64, usize),
+    TransferMove(bool),
     LibraryEntry(u64, usize),
     NewLibrary,
     CloseLibrary,
@@ -699,6 +702,13 @@ impl App {
                 self.refresh();
                 self.status = "Source catalogs cleared".into();
             }
+            Action::LibraryToggle(id) => self.toggle_library(id),
+            Action::LibraryCategory(id, cat) => {
+                let result = self.switch_library(id);
+                self.result(result);
+                self.act(Action::Category(cat));
+            }
+            Action::TransferMove(moving) => self.transfer_move = moving,
             Action::Library(id) => {
                 let result = self.switch_library(id);
                 self.result(result);
@@ -983,6 +993,22 @@ impl App {
     }
     #[cfg(not(windows))]
     pub fn workspace(&mut self, name: &str) -> Result<()> {
+        if name == "libraries" || name == "move-review" {
+            self.path = "SOURCE.LIB".into();
+            let source = self.library_id;
+            self.install_library(Document::new(Archive::empty()), "TARGET.LIB".into())?;
+            let target = self.library_id;
+            self.refresh();
+            self.switch_library(source)?;
+            self.select_entry(0);
+            if name == "move-review" {
+                self.prepare_drop(target)?;
+            } else {
+                self.scroll = 0;
+            }
+            return Ok(());
+        }
+
         if name == "paint-model" {
             self.mode = Mode::Model;
             self.act(Action::ModelPaint);
@@ -1175,29 +1201,6 @@ impl App {
             self.path.rsplit(['/', '\\']).next().unwrap_or(&self.path)
         }
     }
-    pub(super) fn tree_rows(&self) -> Vec<(usize, Option<usize>)> {
-        let mut rows = Vec::new();
-        let filter = self.filter.to_ascii_uppercase();
-        for cat in 0..9 {
-            let entries: Vec<_> = self
-                .doc
-                .archive
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| category_of(&e.name) == cat && e.name.contains(&filter))
-                .map(|(i, _)| i)
-                .collect();
-            if entries.is_empty() {
-                continue;
-            }
-            rows.push((cat, None));
-            if !self.collapsed[cat] || !filter.is_empty() {
-                rows.extend(entries.into_iter().map(|i| (cat, Some(i))));
-            }
-        }
-        rows
-    }
     pub(super) fn browser_entries(&self) -> Vec<usize> {
         let f = self.filter.to_ascii_uppercase();
         self.doc
@@ -1309,11 +1312,24 @@ impl App {
             ("Package", Mode::Package, 70),
             ("Paint", Mode::Media, 52),
         ];
+        out.canvas.line(378, 4, 378, 22, c::LINE_STRONG);
+        out.canvas.rect(384, 1, 366, 25, c::GM_900);
         let mut tx = 386;
         for (name, m, width) in tabs {
-            if self.mode == m {
-                out.canvas.rect(tx, 3, width, 23, c::GM_700);
-                out.canvas.line(tx + 8, 25, tx + width - 8, 25, c::AMBER);
+            let active = self.mode == m;
+            out.canvas
+                .rect(tx, 3, width, 23, if active { c::GM_700 } else { c::GM_800 });
+            border(
+                &mut out.canvas,
+                tx,
+                3,
+                width,
+                23,
+                if active { c::STEEL } else { c::LINE_STRONG },
+            );
+            if active {
+                out.canvas.rect(tx + 1, 3, width - 2, 2, c::AMBER);
+                out.canvas.line(tx + 1, 25, tx + width - 2, 25, c::GM_700);
             }
             out.canvas.label(
                 tx + 9,
@@ -1517,138 +1533,122 @@ impl App {
             true,
             false,
         );
-        for (row, library) in self.libraries.iter().enumerate() {
-            let yy = 55 + row as i32 * 22;
-            o.canvas.rect(0, yy, l, 22, c::GM_900);
-            chevron(&mut o.canvas, 8, yy + 8, false);
-            icon(&mut o.canvas, 24, yy + 2, Icon::Lib, c::INK_MUTED);
-            text_fit(
-                &mut o.canvas,
-                46,
-                yy + 16,
-                l - 64,
-                library
-                    .path
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .unwrap_or(&library.path),
-                c::INK_MUTED,
-            );
-            if library.doc.dirty() {
-                o.canvas.rect(l - 13, yy + 8, 5, 5, c::AMBER);
-            }
-            o.hit([0, yy, l, 22], Action::Library(library.id));
-        }
-        let dy = self.libraries.len() as i32 * 22;
-        let d = &mut o.canvas;
-        d.rect(0, 55 + dy, l, 22, c::GM_900);
-        chevron(d, 8, 63 + dy, true);
-        icon(d, 24, 57 + dy, Icon::Lib, c::INK_MUTED);
-        text_fit(d, 46, 71 + dy, l - 116, self.lib_name(), c::INK);
-        text_fit(
-            d,
-            l - 57,
-            71 + dy,
-            52,
-            &format!("{}", self.doc.archive.entries.len()),
-            c::INK_MUTED,
-        );
-        if self.doc.dirty() {
-            d.rect(l - 69, 64 + dy, 5, 5, c::AMBER);
-        }
-        let mut counts = [0; 9];
-        for e in &self.doc.archive.entries {
-            counts[category_of(&e.name)] += 1;
-        }
-        let tree = self.tree_rows();
-        let sticky = tree
-            .get(self.scroll)
-            .filter(|(_, entry)| self.scroll > 0 && entry.is_some())
-            .map(|(cat, _)| *cat);
-        if let Some(cat) = sticky {
-            o.canvas.rect(0, 78 + dy, l, 20, c::GM_700);
-            chevron(&mut o.canvas, 24, 84 + dy, true);
-            icon(&mut o.canvas, 40, 80 + dy, GROUPS[cat].2, c::INK_MUTED);
-            label_fit(&mut o.canvas, 62, 93 + dy, l - 144, GROUPS[cat].0, c::INK);
-            badge(&mut o.canvas, l - 36, 80 + dy, GROUPS[cat].1);
-            o.hit([0, 78 + dy, l, 20], Action::Category(cat));
-        }
-        for (row, (cat, entry)) in tree
-            .iter()
-            .skip(self.scroll)
-            .take(
-                (((h - self.tree_start() - 54) / 20).max(0) as usize)
-                    .saturating_sub(usize::from(sticky.is_some())),
-            )
-            .enumerate()
-        {
-            let y = 78 + dy + i32::from(sticky.is_some()) * 20 + row as i32 * 20;
-            let d = &mut o.canvas;
-            if let Some(i) = entry {
-                let e = &self.doc.archive.entries[*i];
-                let selected = *i == self.selected;
-                d.rect(
-                    0,
-                    y,
-                    l,
-                    20,
-                    if selected {
-                        c::AMBER_DEEP
-                    } else if row % 2 == 0 {
-                        c::GM_900
-                    } else {
-                        c::GM_800
-                    },
-                );
-                icon(
-                    d,
-                    46,
-                    y + 2,
-                    GROUPS[*cat].2,
-                    if selected { c::AMBER } else { c::INK_MUTED },
-                );
-                text_fit(
-                    d,
-                    68,
-                    y + 15,
-                    l - 95,
-                    &e.name,
-                    if selected { c::AMBER } else { c::INK },
-                );
-                if self.doc.entry_changed(e) {
-                    d.rect(l - 13, y + 8, 5, 5, c::AMBER);
-                }
-                o.hit([0, y, l, 20], Action::Entry(*i));
+        let rows = self.library_rows();
+        let visible = ((h - self.tree_start() - 54) / 22).max(1) as usize;
+        for (row, (id, cat, entry)) in rows.iter().skip(self.scroll).take(visible).enumerate() {
+            let active = *id == self.library_id;
+            let (doc, path, root_collapsed, collapsed, filter) = if active {
+                (
+                    &self.doc,
+                    self.lib_name(),
+                    self.root_collapsed,
+                    &self.collapsed,
+                    &self.filter,
+                )
             } else {
-                d.rect(
-                    0,
-                    y,
-                    l,
-                    20,
-                    if self.category == Some(*cat) {
-                        c::AMBER_DEEP
-                    } else {
-                        c::GM_800
-                    },
-                );
-                chevron(
-                    d,
+                let library = self.libraries.iter().find(|l| l.id == *id).unwrap();
+                (
+                    &library.doc,
+                    library
+                        .path
+                        .rsplit(['/', '\\'])
+                        .next()
+                        .unwrap_or(&library.path),
+                    library.root_collapsed,
+                    &library.collapsed,
+                    &library.filter,
+                )
+            };
+            let y = self.tree_start() + row as i32 * 22;
+            if let Some(cat) = cat {
+                if let Some(i) = entry {
+                    let e = &doc.archive.entries[*i];
+                    let selected = active && *i == self.selected;
+                    o.canvas.rect(
+                        0,
+                        y,
+                        l,
+                        22,
+                        if selected { c::AMBER_DEEP } else { c::GM_900 },
+                    );
+                    icon(
+                        &mut o.canvas,
+                        46,
+                        y + 3,
+                        GROUPS[*cat].2,
+                        if selected { c::AMBER } else { c::INK_MUTED },
+                    );
+                    text_fit(
+                        &mut o.canvas,
+                        68,
+                        y + 16,
+                        l - 94,
+                        &e.name,
+                        if selected { c::AMBER } else { c::INK },
+                    );
+                    if doc.entry_changed(e) {
+                        o.canvas.rect(l - 13, y + 9, 5, 5, c::AMBER);
+                    }
+                    o.hit(
+                        [0, y, l, 22],
+                        if active {
+                            Action::Entry(*i)
+                        } else {
+                            Action::LibraryEntry(*id, *i)
+                        },
+                    );
+                } else {
+                    o.canvas.rect(0, y, l, 22, c::GM_800);
+                    chevron(
+                        &mut o.canvas,
+                        24,
+                        y + 7,
+                        !collapsed[*cat] || !filter.is_empty(),
+                    );
+                    icon(&mut o.canvas, 40, y + 3, GROUPS[*cat].2, c::INK_MUTED);
+                    label_fit(&mut o.canvas, 62, y + 16, l - 104, GROUPS[*cat].0, c::INK);
+                    badge(&mut o.canvas, l - 36, y + 3, GROUPS[*cat].1);
+                    o.hit(
+                        [0, y, l, 22],
+                        if active {
+                            Action::Category(*cat)
+                        } else {
+                            Action::LibraryCategory(*id, *cat)
+                        },
+                    );
+                }
+            } else {
+                o.canvas
+                    .rect(0, y, l, 22, if active { c::GM_700 } else { c::GM_900 });
+                chevron(&mut o.canvas, 8, y + 8, !root_collapsed);
+                icon(
+                    &mut o.canvas,
                     24,
-                    y + 6,
-                    !self.collapsed[*cat] || !self.filter.is_empty(),
+                    y + 3,
+                    Icon::Lib,
+                    if active { c::STEEL } else { c::INK_MUTED },
                 );
-                icon(d, 40, y + 2, GROUPS[*cat].2, c::INK_MUTED);
-                label_fit(d, 62, y + 15, l - 144, GROUPS[*cat].0, c::INK);
                 text_fit(
-                    d,
-                    l - 75,
-                    y + 15,
-                    32,
-                    &format!("{}", counts[*cat]),
+                    &mut o.canvas,
+                    46,
+                    y + 16,
+                    l - 92,
+                    path,
+                    if active { c::INK } else { c::INK_MUTED },
+                );
+                text_fit(
+                    &mut o.canvas,
+                    l - 39,
+                    y + 16,
+                    35,
+                    &format!("{}", doc.archive.entries.len()),
                     c::INK_MUTED,
                 );
-                badge(d, l - 36, y + 2, GROUPS[*cat].1);
-                o.hit([0, y, l, 20], Action::Category(*cat));
+                if doc.dirty() {
+                    o.canvas.rect(l - 49, y + 9, 5, 5, c::AMBER);
+                }
+                o.hit([22, y, l - 22, 22], Action::Library(*id));
+                o.hit([0, y, 22, 22], Action::LibraryToggle(*id));
             }
         }
         o.canvas.line(0, h - 51, l, h - 51, c::GM_1000);
@@ -2639,6 +2639,7 @@ impl App {
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();
+        self.smoke_library_moves();
         self.smoke_material_tools();
         self.smoke_advanced_tools();
         self.smoke_render_and_brush();

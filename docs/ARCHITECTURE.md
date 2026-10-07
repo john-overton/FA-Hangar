@@ -224,8 +224,9 @@ file. Library IDs remain stable when the active document is swapped with a
 parked one. Each document owns its saved baseline and undo/redo history, camera,
 selection, field group and palette override. Save As rejects a path owned by
 another open file. Closing the application considers every document's dirty
-state. Limits are eight open documents and 256 MiB of stored resource data;
-shared clipboard/history buffers can outlive a closed document.
+state. There is no fixed document-count or aggregate stored-byte cap; available
+memory and per-archive format limits apply. Shared clipboard/history buffers can
+outlive a closed document.
 
 A resource copy snapshots the source and other open LIBs. The source owns its
 local names; other providers must agree on stored bytes or the review fails
@@ -362,3 +363,20 @@ buttons; its destructive action is scoped to the pending close dialog.
    game acceptance even though its bounded pose matrices pass.
 5. Reconcile the user's Windows results for each baseline/edited candidate,
    including launch points, slew arcs, skin orientation, LOD and damage states.
+
+
+## Multi-LIB outliner and moves (0.8.1)
+
+One scrollable row sequence contains every LIB root, category and visible entry.
+Stable library IDs keep ordering independent of active-document swapping. Root
+collapse state belongs to each document; wheel scrolling covers the whole tree.
+Opening another LIB retains the current dirty document and its history.
+The workspace tabs have a separate background tray, borders and selected accent.
+
+Dropping opens a review with explicit scope and copy/move choices. A move
+validates source snapshots and target collision decisions, retains the known
+shared dependency closure in its source, and copies dependencies from additional
+providers. Both document drafts must validate before either is assigned.
+The histories remain per document; source and target each have one undo step.
+Moving the final entries may empty the source in memory, while the existing
+nonempty LIB save contract remains in force.

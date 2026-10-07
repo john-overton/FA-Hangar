@@ -16,7 +16,7 @@ properties, and Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields s
 saved values beside current values, with amber edits and reset controls.
 Windows uses Tahoma for interface labels and Lucida Console for resource data.
 
-Version 0.8 adds ship/ground-vehicle NT fields and station tools, SH state-switch
+Version 0.8.1 adds collapsible multi-LIB trees, reviewed copy/move drops, no fixed\nopen-LIB count cap, and distinct workspace tabs.\nVersion 0.8 adds ship/ground-vehicle NT fields and station tools, SH state-switch
 preview and part placement, a viewport brush that crosses panels, corrected
 camera handedness and skin composition, and clickable discard controls.
 Version 0.7 adds an editable envelope table, automatic textures for supported
@@ -35,7 +35,7 @@ read-only, history still works for the current session.
 
 ## What works
 
-- Browse folders/drives and reopen recent LIBs. Open up to eight LIBs together,
+- Browse folders/drives and reopen recent LIBs. Open multiple LIBs together without a fixed count cap,
   switching through outliner roots without discarding edits. Each LIB retains
   selection, camera, definition group and undo history. File > New empty LIB
   provides a destination for assembling resources.
@@ -276,9 +276,19 @@ Open documents also provide dependency names for package checks. Unique model,
 texture and palette resources can be previewed from other open LIBs. References
 link to a unique open provider and list observed users in other open LIBs; the
 editor does not guess among conflicting providers or infer game load order.
-The workspace limits stored resources to 256 MiB across eight documents. Undo
-and copy snapshots retain shared source buffers, so actual memory usage can be
-higher. No automatic writes occur when switching libraries or preparing copies.
+The number of open LIBs is limited by available memory rather than an editor
+count cap. Each archive retains its format/size checks. Undo and copy snapshots
+share immutable payload buffers but also consume memory. No automatic writes occur when switching libraries or preparing copies.
+
+Each LIB has a collapse arrow in the scrollable outliner. Expanded inactive
+LIBs show their categories and resources too. Drag an entry onto another LIB
+root or one of its rows to review a transfer. Choose **Item only** or **Object
+and linked files**, then **Copy** or **Move**; resolve any name collisions before
+applying. Move removes the selected source item and its unshared linked entries.
+Known shared dependencies remain in the source, and files supplied by other
+open LIBs are copied. Both documents update together in memory; each has its
+own undo step. Files change only when saved. An emptied source remains an empty
+editor document; the LIB writer requires at least one entry to save it.
 
 ## Paint a livery
 

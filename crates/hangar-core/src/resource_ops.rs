@@ -70,6 +70,63 @@ impl Plan {
         doc.transaction(entries, &self.removals)
     }
 }
+/// Apply a reviewed cross-document move atomically in memory. Shared dependencies
+/// remain in the source; each document retains one independent undo step.
+pub fn move_between(
+    source: &mut Document,
+    target: &mut Document,
+    plan: &Plan,
+    root: &str,
+) -> Result<usize> {
+    let root = root.to_ascii_uppercase();
+    let mut removals = BTreeSet::new();
+    for item in &plan.items {
+        let Some(i) = source.archive.find(&item.entry.name) else {
+            continue;
+        };
+        if !source.archive.entries[i].same_storage(&item.entry) {
+            return Err(invalid("Source LIB changed; rebuild the move review"));
+        }
+        if item.choice == Choice::TakeSource
+            || target
+                .archive
+                .find(&item.entry.name)
+                .is_some_and(|i| same(&target.archive.entries[i], &item.entry))
+        {
+            removals.insert(item.entry.name.clone());
+        }
+    }
+    if !removals.contains(&root) {
+        return Err(invalid(
+            "Take the selected source item (or an identical target) before moving it",
+        ));
+    }
+    let mut index = crate::dependencies::Index::default();
+    index.update(&source.archive);
+    loop {
+        let shared: Vec<_> = removals
+            .iter()
+            .filter(|name| {
+                **name != root && index.incoming(name).any(|user| !removals.contains(user))
+            })
+            .cloned()
+            .collect();
+        if shared.is_empty() {
+            break;
+        }
+        for name in shared {
+            removals.remove(&name);
+        }
+    }
+    let mut new_source = source.clone();
+    let mut new_target = target.clone();
+    plan.apply(&mut new_target)?;
+    let removals: Vec<_> = removals.into_iter().collect();
+    new_source.transaction(Vec::new(), &removals)?;
+    *source = new_source;
+    *target = new_target;
+    Ok(removals.len())
+}
 fn same(a: &Entry, b: &Entry) -> bool {
     // Compare stored representations without decompressing arbitrary collisions.
     a.same_storage(b) || (a.flag() == b.flag() && a.stored() == b.stored())
@@ -459,5 +516,84 @@ mod tests {
             .is_err());
         assert!(!doc.dirty());
         assert_eq!(doc.archive.bytes().unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod move_tests {
+    use super::*;
+    fn fixture(shared: bool) -> Archive {
+        let mut a = Archive::empty();
+        a.entries.push(
+            Entry::new(
+                "ONE.OT",
+                b"[brent's_relocatable_format]\nstring \"DEMO.SH\"\nend\n".to_vec(),
+            )
+            .unwrap(),
+        );
+        a.entries
+            .push(Entry::new("DEMO.SH", crate::model::demo_textured()).unwrap());
+        a.entries
+            .push(Entry::new("DEMO.PIC", crate::picture::demo()).unwrap());
+        if shared {
+            a.entries.push(
+                Entry::new(
+                    "OTHER.OT",
+                    b"[brent's_relocatable_format]\nstring \"DEMO.SH\"\nend\n".to_vec(),
+                )
+                .unwrap(),
+            );
+        }
+        a
+    }
+    #[test]
+    fn move_keeps_shared_dependency_closure_and_both_histories() {
+        let mut source = Document::new(fixture(true));
+        let original = source.archive.bytes().unwrap();
+        let mut target = Document::new(Archive::empty());
+        let plan = transfer(&source.archive, &target.archive, "ONE.OT", true).unwrap();
+        assert_eq!(
+            move_between(&mut source, &mut target, &plan, "ONE.OT").unwrap(),
+            1
+        );
+        assert!(source.archive.find("ONE.OT").is_none());
+        assert!(source.archive.find("DEMO.SH").is_some());
+        assert!(source.archive.find("DEMO.PIC").is_some());
+        assert_eq!(target.archive.entries.len(), 3);
+        assert!(source.undo());
+        assert!(target.undo());
+        assert_eq!(source.archive.bytes().unwrap(), original);
+        assert!(target.archive.entries.is_empty());
+        let mut source = Document::new(fixture(false));
+        let plan = transfer(&source.archive, &target.archive, "ONE.OT", true).unwrap();
+        assert_eq!(
+            move_between(&mut source, &mut target, &plan, "ONE.OT").unwrap(),
+            3
+        );
+        assert!(source.archive.entries.is_empty());
+    }
+    #[test]
+    fn move_is_atomic_on_stale_source_target_and_skipped_root() {
+        let mut source = Document::new(fixture(false));
+        let mut target = Document::new(Archive::empty());
+        let plan = transfer(&source.archive, &target.archive, "ONE.OT", false).unwrap();
+        target
+            .transaction(
+                vec![Entry::new("ONE.OT", b"changed".to_vec()).unwrap()],
+                &[],
+            )
+            .unwrap();
+        let before = source.archive.bytes().unwrap();
+        let target_before = target.archive.bytes().unwrap();
+        assert!(move_between(&mut source, &mut target, &plan, "ONE.OT").is_err());
+        assert_eq!(source.archive.bytes().unwrap(), before);
+        assert_eq!(target.archive.bytes().unwrap(), target_before);
+        let mut plan = transfer(&source.archive, &target.archive, "ONE.OT", false).unwrap();
+        plan.items[0].choice = Choice::KeepTarget;
+        assert!(move_between(&mut source, &mut target, &plan, "ONE.OT").is_err());
+        plan.items[0].choice = Choice::TakeSource;
+        source.replace(0, b"new source".to_vec()).unwrap();
+        assert!(move_between(&mut source, &mut target, &plan, "ONE.OT").is_err());
+        assert_eq!(target.archive.bytes().unwrap(), target_before);
     }
 }
