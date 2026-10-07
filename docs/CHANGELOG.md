@@ -43,6 +43,12 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   relocation table padded across a page when `.reloc` is the last section.
   Retail FA_2 shapes always place `$$DOSX` after `.reloc` and were not
   affected.
+- SH reading covers the whole CODE section: every record, embedded x86 stub,
+  import and trampoline is accounted for, and moving parts (gear, flaps,
+  rudder, speed brake, hook, bay doors, afterburner, swing wing, canards) are
+  identified by the game variable that drives them. Stored part angles now
+  show in the preview. The Linux CLI gains `--shape-inventory`,
+  `--shape-pose` and stub census checks for manual analysis.
 
 ## 0.8.2
 

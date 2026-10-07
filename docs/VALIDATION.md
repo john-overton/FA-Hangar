@@ -314,3 +314,23 @@ cross-builds with PE audits pass: 689,664 bytes (32-bit) and 805,376 bytes
 (64-bit), the same 59 reviewed imports and no runtime DLLs. Windows
 interaction and original-game checks remain pending.
 
+
+## Unreleased SH inventory and part census
+
+A read-only `--shape-inventory` run over the user's retail LIBs: 1,274 of the
+1,275 SH entries in FA_2.LIB and all 7 in swpatch.lib decode with no opaque
+spans, and every recorded SH pointer lands on a record start (for example all
+48,821 `06` and 15,155 `0C/0E/10` relative pointers). FA_1.LIB and FA_4B.LIB
+contain no SH entries. The `38` operand does not behave as a pointer under any
+base tried (46 of 64,981 hit a record start) and remains unverified.
+
+151 shapes carry part bindings. Every gear, flap, brake, rudder, hook, bay,
+afterburner, canard and swing-wing stub matches a recognised toggle or
+transform pattern; the 101 unrecognised stubs are ship/radar turrets, insect
+wings, launcher counts, effects and ejection logic. Flaps, rudders, brakes,
+hooks and afterburners select alternate pre-modelled meshes; gear, swing
+wings, canards and bay doors write C4 rotation words. Gear transforms vary
+only in shift (1: 401 stubs, 2: 16, 3: 15), negation and the rotation word;
+pivots are per-aircraft. Posed A-10 and F/A-18 gear retract in plausible
+directions in the preview. This is preview plausibility, not original-game
+verification.
