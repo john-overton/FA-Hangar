@@ -1027,9 +1027,17 @@ impl App {
             self.menu = Some(n.parse().map_err(|_| "Menu number")?);
             return Ok(());
         }
-        if name == "paint-model" {
+        if name == "assign-texture" {
+            return self.snapshot_assign();
+        }
+        if name == "paint-model" || name == "paint-side" {
             self.mode = Mode::Model;
             self.act(Action::ModelPaint);
+            if name == "paint-side" {
+                // Side view (numpad 3), as for checking tail panels.
+                self.yaw = 90;
+                self.pitch = 0;
+            }
             return Ok(());
         }
         if name == "animation" {

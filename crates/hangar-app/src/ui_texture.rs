@@ -611,7 +611,8 @@ impl App {
             let names = self.face_texture_names(&faces);
             for (name, n) in names.iter().take(4) {
                 let shown = if name.is_empty() { "Untextured" } else { name };
-                o.info(s, "Texture", shown, &view::count(*n, "face", "faces"));
+                let value = format!("{shown} \u{b7} {}", view::count(*n, "face", "faces"));
+                o.info(s, "Texture", &value, "");
             }
             if names.len() > 4 {
                 o.info(s, "Texture", &format!("{} more", names.len() - 4), "");
@@ -697,6 +698,287 @@ fn describe(names: &[(String, usize)]) -> String {
     }
 }
 
+#[cfg(not(windows))]
+impl App {
+    /// Snapshot workspace `assign-texture`: Edit Mesh on the selected SH (the
+    /// synthetic kit in the demo) with its first textured face selected and
+    /// the Assign texture dialog open on the first other PIC.
+    pub fn snapshot_assign(&mut self) -> Result<()> {
+        if self.path.starts_with("Synthetic") {
+            self.doc.transaction(
+                vec![
+                    Entry::new("KIT.SH", hangar_core::shape_testkit::demo_textured_kit())?,
+                    Entry::new("KIT.PIC", picture::demo())?,
+                    Entry::new("WIDE.PIC", raw_pic(64, 32, 3))?,
+                ],
+                &[],
+            )?;
+            self.doc.mark_saved();
+            let at = self.doc.archive.find("KIT.SH").ok_or("Kit missing")?;
+            self.select_entry(at);
+        }
+        self.mode = Mode::Model;
+        self.textured = true;
+        if !self.mesh_edit {
+            self.act(Action::MeshMode);
+        }
+        self.select_mode(true);
+        let model = self.model.as_ref().ok_or("Select an SH")?;
+        let face = model
+            .faces
+            .iter()
+            .find(|f| f.sub & 4 != 0 && !f.texture.is_empty())
+            .ok_or("No textured face")?;
+        let current = full(&face.texture);
+        self.ed.mesh_faces = vec![face.offset];
+        self.sync_face_vertices();
+        self.act(Action::FaceTexture(TEX_ASSIGN));
+        let pick = self
+            .ed
+            .assign
+            .pics
+            .iter()
+            .position(|(n, _)| *n != current)
+            .ok_or("No other PIC")?;
+        self.assign_pick(pick);
+        Ok(())
+    }
+    /// Manual real-data check (`--face-texture-check`): on each SH, pick up
+    /// to four textured faces of the vertical tail (normal along the right
+    /// axis, highest centres), clone their PIC through the Mesh menu action,
+    /// paint the copy, and check coverage, bindings, face count, the moved
+    /// and the unmoved faces, then Use shape texture and its undo. The
+    /// painted edits stay and the LIB is written create-new to `output`.
+    pub fn check_face_textures(&mut self, names: &[String], output: &str) -> Result<String> {
+        use hangar_core::shape_geometry::Geometry;
+        let mut out = String::new();
+        for name in names {
+            let entry = self.doc.archive.find(name).ok_or("SH not found")?;
+            self.select_entry(entry);
+            self.mode = Mode::Model;
+            self.textured = true;
+            self.ed.pose.clear();
+            self.refresh();
+            if !self.mesh_edit {
+                self.act(Action::MeshMode);
+            }
+            self.select_mode(true);
+            let before = self.doc.archive.entries[entry].read()?;
+            let g0 = Geometry::parse(&before)?;
+            let m0 = self.model.clone().ok_or("No model")?;
+            // Tail: the rearmost 30% of the length; fins reach highest.
+            let (aft, fore) = m0.vertices.iter().fold((i32::MAX, i32::MIN), |(a, b), v| {
+                (a.min(v.point[1]), b.max(v.point[1]))
+            });
+            let tail = aft + (fore - aft) * 3 / 10;
+            let top = |f: &model::Face| -> i32 {
+                f.indices
+                    .iter()
+                    .map(|i| m0.vertices[*i].point[2])
+                    .max()
+                    .unwrap_or(0)
+            };
+            let centre = |f: &model::Face, k: usize| -> i32 {
+                f.indices
+                    .iter()
+                    .map(|i| m0.vertices[*i].point[k])
+                    .sum::<i32>()
+                    / f.indices.len().max(1) as i32
+            };
+            let mut fins: Vec<(i32, usize)> = m0
+                .faces
+                .iter()
+                .filter(|f| f.sub & 4 != 0 && !f.texture.is_empty())
+                .filter(|f| f.normal.is_some_and(|n| n[0].abs() >= 30000))
+                .filter(|f| centre(f, 1) <= tail)
+                .map(|f| (top(f), f.offset))
+                .collect();
+            fins.sort_unstable_by(|a, b| b.cmp(a));
+            let source = m0
+                .faces
+                .iter()
+                .find(|f| fins.first().is_some_and(|(_, o)| *o == f.offset))
+                .map(|f| full(&f.texture))
+                .ok_or("No textured tail face")?;
+            let picked: Vec<usize> = fins
+                .iter()
+                .map(|(_, o)| *o)
+                .filter(|o| self.face_texture_names(&[*o]).first().map(|x| &x.0) == Some(&source))
+                .take(4)
+                .collect();
+            self.ed.mesh_faces = picked.clone();
+            self.sync_face_vertices();
+            let source_entry = self.doc.archive.find(&source).ok_or("Source PIC missing")?;
+            let source_bytes = self.doc.archive.entries[source_entry].read()?;
+            self.face_texture_action(TEX_CLONE);
+            let to = self
+                .prompt
+                .as_ref()
+                .filter(|p| matches!(p.kind, PromptKind::FaceClone))
+                .map(|p| p.value.clone())
+                .ok_or_else(|| format!("{name}: {}", self.status))?;
+            self.key(Key::Enter, false, false);
+            if !self.status.starts_with("Cloned") {
+                return Err(format!("{name}: {}", self.status));
+            }
+            let assigned = self.ed.mesh_faces.clone();
+            let after = self.doc.archive.entries[entry].read()?;
+            let g1 = Geometry::parse(&after)?;
+            let m1 = self.model.clone().ok_or("No model")?;
+            let moved = m1
+                .faces
+                .iter()
+                .filter(|f| assigned.contains(&f.offset) && f.texture == to)
+                .count();
+            let others = m0
+                .faces
+                .iter()
+                .filter(|f| !picked.contains(&f.offset))
+                .all(|f| {
+                    m1.faces.iter().any(|g| {
+                        g.offset - g1.inventory.code_start == f.offset - g0.inventory.code_start
+                            && g.texture == f.texture
+                            && g.uv == f.uv
+                    })
+                });
+            let runs = hangar_core::shape_texture::assignments(&g1).len();
+            out += &format!(
+                "{name}: cloned {source} to {to} for {} tail faces ({moved} draw from it, {runs} continuation{}); SH {} -> {} bytes\n",
+                picked.len(),
+                if runs == 1 { "" } else { "s" },
+                before.len(),
+                after.len()
+            );
+            let coverage = g1.inventory.contiguous()
+                && g1.inventory.opaque_bytes() == g0.inventory.opaque_bytes();
+            let bindings = g1.inventory.bindings == g0.inventory.bindings
+                && g1.inventory.stubs.len() == g0.inventory.stubs.len();
+            out += &format!(
+                "  inventory {} ({} opaque bytes), bindings {} ({}), faces {} -> {}, other faces unchanged: {others}\n",
+                if coverage { "complete" } else { "CHANGED" },
+                g1.inventory.opaque_bytes(),
+                if bindings { "unchanged" } else { "CHANGED" },
+                g1.inventory.bindings.len(),
+                m0.faces.len(),
+                m1.faces.len()
+            );
+            if !coverage
+                || !bindings
+                || !others
+                || moved != picked.len()
+                || m1.faces.len() != m0.faces.len()
+            {
+                return Err(format!("{name}: assignment check failed\n{out}"));
+            }
+            // Paint the copy at the UV centre of each assigned face, Panel
+            // lock on: one stroke, one undo step.
+            self.act(Action::ModelPaint);
+            self.paint_lock = true;
+            let copy = self.doc.archive.find(&to).ok_or("Copy missing")?;
+            let pic = Pic::parse(&self.doc.archive.entries[copy].read()?)?;
+            self.brush = 249;
+            self.brush_radius = 7;
+            self.mouse = [0, 0];
+            for offset in &assigned {
+                let model = self.model_for_paint().ok_or("No model")?;
+                let face = model
+                    .faces
+                    .iter()
+                    .position(|f| f.offset == *offset)
+                    .ok_or("Assigned face lost")?;
+                let uv = &model.faces[face].uv;
+                let n = uv.len().max(1) as i32;
+                let centre = [
+                    uv.iter().map(|p| p[0]).sum::<i32>() / n,
+                    pic.height as i32 - 1 - uv.iter().map(|p| p[1]).sum::<i32>() / n,
+                ];
+                // A new face starts a new dab rather than a line from the last.
+                if let Some(s) = &mut self.stroke {
+                    s.last = None;
+                }
+                self.paint_model_hit(face, centre);
+            }
+            self.finish_stroke();
+            let painted = self.doc.archive.find(&to).ok_or("Copy missing")?;
+            let changed = self.doc.archive.entries[painted].read()?;
+            let src_now = self.doc.archive.entries
+                [self.doc.archive.find(&source).ok_or("Source lost")?]
+            .read()?;
+            out += &format!(
+                "  painted {to}: {} pixels changed; {source} {}\n",
+                Pic::parse(&changed)?
+                    .pixels
+                    .iter()
+                    .zip(&pic.pixels)
+                    .filter(|(a, b)| a != b)
+                    .count(),
+                if src_now == source_bytes {
+                    "unchanged"
+                } else {
+                    "CHANGED"
+                }
+            );
+            if src_now != source_bytes {
+                return Err(format!("{name}: the source PIC changed\n{out}"));
+            }
+            // Use shape texture, compare every drawn face, then undo it.
+            self.act(Action::ModelPaint);
+            self.act(Action::MeshMode);
+            self.select_mode(true);
+            self.ed.mesh_faces = assigned.clone();
+            self.sync_face_vertices();
+            let kept = self.doc.archive.bytes()?;
+            self.face_texture_action(TEX_RESTORE);
+            let back = self.doc.archive.entries[entry].read()?;
+            let drawn = |b: &[u8]| -> Result<Vec<DrawnFace>> {
+                let cs = Geometry::parse(b)?.inventory.code_start;
+                let mut v: Vec<_> = Model::parse(b)?
+                    .faces
+                    .iter()
+                    .map(|f| (f.offset - cs, f.texture.clone(), f.uv.clone(), f.sub))
+                    .collect();
+                v.sort_unstable();
+                Ok(v)
+            };
+            let same = drawn(&back)? == drawn(&before)?;
+            let sites = picked.iter().all(|o| {
+                let (a, b) = (o - g0.inventory.code_start, o);
+                let gb = Geometry::parse(&back).ok();
+                gb.is_some_and(|g| {
+                    let cs = g.inventory.code_start;
+                    g.face_at(cs + a)
+                        .map(|i| &back[cs + a..cs + a + g.faces[i].len])
+                        == g0.face_at(*b).map(|i| &before[*b..*b + g0.faces[i].len])
+                })
+            });
+            self.act(Action::Undo);
+            let undone = self.doc.archive.bytes()? == kept;
+            out += &format!(
+                "  Use shape texture: drawn faces identical to the original {same}, original records back in place {sites}; undo restores the assigned bytes {undone}\n"
+            );
+            if !same || !sites || !undone {
+                return Err(format!("{name}: reverse round trip failed\n{out}"));
+            }
+            if self.mesh_edit {
+                self.act(Action::MeshMode);
+            }
+        }
+        crate::platform::write_new(output, &self.doc.archive.bytes()?)?;
+        let reopened = Archive::parse(crate::platform::read(output)?)?;
+        out += &format!(
+            "Wrote {output}: {} entries; reopened and every SH re-parses: {}\n",
+            reopened.entries.len(),
+            names.iter().all(|n| reopened
+                .find(n)
+                .and_then(|i| reopened.entries[i].read().ok())
+                .is_some_and(|b| Model::parse(&b).is_ok()))
+        );
+        Ok(out)
+    }
+}
+/// A drawn face by CODE offset: texture, UVs and content flags.
+#[cfg(not(windows))]
+type DrawnFace = (usize, String, Vec<[i32; 2]>, u8);
 /// A raw indexed PIC with a full 6-bit palette, for smoke fixtures.
 fn raw_pic(w: usize, h: usize, seed: u8) -> Vec<u8> {
     let mut b = vec![0; 64 + w * h + 768];
