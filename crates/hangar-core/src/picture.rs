@@ -316,54 +316,57 @@ impl Pic {
     }
     /// Portable PNG with an uncompressed zlib stream; preserves alpha for span holes.
     pub fn png(&self, base: &[[u8; 3]; 256]) -> Vec<u8> {
-        fn crc(b: &[u8]) -> u32 {
-            let mut c = !0u32;
-            for x in b {
-                c ^= *x as u32;
-                for _ in 0..8 {
-                    c = (c >> 1) ^ if c & 1 != 0 { 0xedb88320 } else { 0 };
-                }
-            }
-            !c
-        }
-        fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], bytes: &[u8]) {
-            out.extend((bytes.len() as u32).to_be_bytes());
-            let at = out.len();
-            out.extend(tag);
-            out.extend(bytes);
-            out.extend(crc(&out[at..]).to_be_bytes());
-        }
-        let rgba = self.rgba(base);
-        let mut raw = Vec::with_capacity(rgba.len() + self.height);
-        for row in rgba.chunks_exact(self.width * 4) {
-            raw.push(0);
-            raw.extend(row);
-        }
-        let mut z = vec![0x78, 0x01];
-        let mut a = 1u32;
-        let mut b = 0u32;
-        for (i, block) in raw.chunks(65535).enumerate() {
-            z.push(u8::from((i + 1) * 65535 >= raw.len()));
-            let len = block.len() as u16;
-            z.extend(len.to_le_bytes());
-            z.extend((!len).to_le_bytes());
-            z.extend(block);
-            for x in block {
-                a = (a + *x as u32) % 65521;
-                b = (b + a) % 65521;
-            }
-        }
-        z.extend(((b << 16) | a).to_be_bytes());
-        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
-        let mut h = Vec::new();
-        h.extend((self.width as u32).to_be_bytes());
-        h.extend((self.height as u32).to_be_bytes());
-        h.extend([8, 6, 0, 0, 0]);
-        chunk(&mut out, b"IHDR", &h);
-        chunk(&mut out, b"IDAT", &z);
-        chunk(&mut out, b"IEND", &[]);
-        out
+        rgba_png(self.width, self.height, &self.rgba(base))
     }
+}
+/// RGBA rows as a portable PNG with an uncompressed zlib stream.
+pub fn rgba_png(width: usize, height: usize, rgba: &[u8]) -> Vec<u8> {
+    fn crc(b: &[u8]) -> u32 {
+        let mut c = !0u32;
+        for x in b {
+            c ^= *x as u32;
+            for _ in 0..8 {
+                c = (c >> 1) ^ if c & 1 != 0 { 0xedb88320 } else { 0 };
+            }
+        }
+        !c
+    }
+    fn chunk(out: &mut Vec<u8>, tag: &[u8; 4], bytes: &[u8]) {
+        out.extend((bytes.len() as u32).to_be_bytes());
+        let at = out.len();
+        out.extend(tag);
+        out.extend(bytes);
+        out.extend(crc(&out[at..]).to_be_bytes());
+    }
+    let mut raw = Vec::with_capacity(rgba.len() + height);
+    for row in rgba.chunks_exact(width * 4) {
+        raw.push(0);
+        raw.extend(row);
+    }
+    let mut z = vec![0x78, 0x01];
+    let mut a = 1u32;
+    let mut b = 0u32;
+    for (i, block) in raw.chunks(65535).enumerate() {
+        z.push(u8::from((i + 1) * 65535 >= raw.len()));
+        let len = block.len() as u16;
+        z.extend(len.to_le_bytes());
+        z.extend((!len).to_le_bytes());
+        z.extend(block);
+        for x in block {
+            a = (a + *x as u32) % 65521;
+            b = (b + a) % 65521;
+        }
+    }
+    z.extend(((b << 16) | a).to_be_bytes());
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut h = Vec::new();
+    h.extend((width as u32).to_be_bytes());
+    h.extend((height as u32).to_be_bytes());
+    h.extend([8, 6, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &h);
+    chunk(&mut out, b"IDAT", &z);
+    chunk(&mut out, b"IEND", &[]);
+    out
 }
 /// Width of every texture retail SH shapes draw from.
 pub const TEXTURE_WIDTH: usize = 256;

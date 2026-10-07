@@ -2085,3 +2085,433 @@ impl App {
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
     }
 }
+#[cfg(not(windows))]
+fn isqrt(n: u128) -> u128 {
+    if n < 2 {
+        return n;
+    }
+    let mut x = 1u128 << (128 - n.leading_zeros()).div_ceil(2);
+    loop {
+        let y = (x + n / x) / 2;
+        if y >= x {
+            return x;
+        }
+        x = y;
+    }
+}
+/// Texels per source unit (Q16) along a face's vertical and horizontal
+/// in-plane axes, from its largest fan triangle. Vertical is the up axis
+/// projected onto the face (forward for faces lying flat); horizontal runs
+/// across it. Their ratio is the face's stretch.
+#[cfg(not(windows))]
+pub(super) fn face_density(points: &[[i32; 3]], uv: &[[i32; 2]]) -> Option<[u64; 2]> {
+    let n = points.len();
+    if n < 3 || uv.len() != n {
+        return None;
+    }
+    let sub = |a: [i32; 3], b: [i32; 3]| -> [i128; 3] {
+        core::array::from_fn(|k| b[k] as i128 - a[k] as i128)
+    };
+    let cross = |a: [i128; 3], b: [i128; 3]| -> [i128; 3] {
+        [
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        ]
+    };
+    let dot = |a: [i128; 3], b: [i128; 3]| -> i128 { (0..3).map(|k| a[k] * b[k]).sum() };
+    let j = (1..n - 1).max_by_key(|j| {
+        let c = cross(sub(points[0], points[*j]), sub(points[0], points[j + 1]));
+        dot(c, c)
+    })?;
+    let (e1, e2) = (sub(points[0], points[j]), sub(points[0], points[j + 1]));
+    let du =
+        |k: usize| -> [i128; 2] { [(uv[k][0] - uv[0][0]) as i128, (uv[k][1] - uv[0][1]) as i128] };
+    let (d1, d2) = (du(j), du(j + 1));
+    let normal = cross(e1, e2);
+    let (g11, g12, g22) = (dot(e1, e1), dot(e1, e2), dot(e2, e2));
+    let det = g11 * g22 - g12 * g12;
+    if det == 0 {
+        return None;
+    }
+    let small = |v: [i128; 3]| -> Option<[i128; 3]> {
+        let m = v.iter().map(|x| x.abs()).max()?;
+        (m != 0).then(|| v.map(|x| x * 1024 / m))
+    };
+    let nn = dot(normal, normal);
+    let up = if normal[2].pow(2) * 100 > nn * 81 {
+        [0, 1, 0]
+    } else {
+        [0, 0, 1]
+    };
+    let n_small = small(normal)?;
+    let un = dot(up, n_small);
+    let ns = dot(n_small, n_small);
+    let vertical = small(core::array::from_fn(|k| up[k] * ns - n_small[k] * un))?;
+    let horizontal = small(cross(n_small, vertical))?;
+    let density = |d: [i128; 3]| -> u64 {
+        let (r1, r2) = (dot(d, e1), dot(d, e2));
+        let (a, b) = (g22 * r1 - g12 * r2, g11 * r2 - g12 * r1);
+        let t: [i128; 2] = core::array::from_fn(|k| a * d1[k] + b * d2[k]);
+        let len = isqrt((t[0] * t[0] + t[1] * t[1]) as u128);
+        let unit = isqrt(dot(d, d) as u128);
+        (len * 65536 / (det as u128 * unit).max(1)) as u64
+    };
+    Some([density(vertical), density(horizontal)])
+}
+/// "3.1" for a Q16 value.
+#[cfg(not(windows))]
+fn q16(v: u64) -> String {
+    density_text(v.min(u32::MAX as u64) as u32)
+}
+#[cfg(not(windows))]
+impl App {
+    /// Manual real-data check (`--remap-check`): on each SH, a stretch
+    /// census of the textured faces (texels per unit along each face's
+    /// vertical and horizontal axes), then Remap from view with Bake on the
+    /// most stretched side-facing faces from the side they face, through
+    /// the panel selection and the dialog. Checks the retail texture
+    /// layout, CODE coverage, bindings and stubs, every other face, the
+    /// re-parse and the stretch after; renders the side view before and
+    /// after and the new PIC as PNG; reverses with Use shape texture and
+    /// undoes that. The remaps stay and the LIB is written create-new.
+    pub fn check_remap(&mut self, out: &str, names: &[String]) -> Result<String> {
+        use hangar_core::shape_geometry::Geometry;
+        if !self.palette_loaded {
+            return Err("The LIB has no PALETTE.PAL".into());
+        }
+        let mut report = String::new();
+        for name in names {
+            let entry = self.doc.archive.find(name).ok_or("SH not found")?;
+            self.select_entry(entry);
+            self.mode = Mode::Model;
+            self.textured = true;
+            self.ed.pose.clear();
+            self.refresh();
+            let m0 = self.model.clone().ok_or("Not a decodable SH")?;
+            let before = self.doc.archive.entries[entry].read()?;
+            let g0 = Geometry::parse(&before)?;
+            let (lo, hi) = m0
+                .vertices
+                .iter()
+                .fold(([i32::MAX; 3], [i32::MIN; 3]), |(l, h), v| {
+                    (
+                        core::array::from_fn(|k| l[k].min(v.point[k])),
+                        core::array::from_fn(|k| h[k].max(v.point[k])),
+                    )
+                });
+            let points = |f: &model::Face| -> Vec<[i32; 3]> {
+                f.indices.iter().map(|i| m0.vertices[*i].point).collect()
+            };
+            let centre = |f: &model::Face| -> [i32; 3] {
+                let p = points(f);
+                core::array::from_fn(|k| p.iter().map(|q| q[k]).sum::<i32>() / p.len() as i32)
+            };
+            // Census: (stretch Q16, face index, [vertical, horizontal]).
+            let mut census: Vec<(u64, usize, [u64; 2])> = m0
+                .faces
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.sub & 4 != 0 && !f.texture.is_empty())
+                .filter_map(|(i, f)| {
+                    let d = face_density(&points(f), &f.uv)?;
+                    let (big, small) = (d[0].max(d[1]), d[0].min(d[1]).max(1));
+                    Some((big * 65536 / small, i, d))
+                })
+                .collect();
+            // UVs collapsed to a line or a point (a colour swatch mapping,
+            // under 0.05 texels per unit across) are counted, not ranked.
+            let swatches = census.iter().filter(|c| c.2[0].min(c.2[1]) < 3277).count();
+            census.retain(|c| c.2[0].min(c.2[1]) >= 3277);
+            census.sort_unstable_by(|a, b| b.cmp(a));
+            let tag = |f: &model::Face| -> &'static str {
+                let c = centre(f);
+                let side = f.normal.is_some_and(|n| n[0].abs() >= 29490);
+                if side && c[1] <= lo[1] + (hi[1] - lo[1]) * 35 / 100 && c[2] >= (lo[2] + hi[2]) / 2
+                {
+                    "tail fin"
+                } else if side && c[1] >= (lo[1] + hi[1]) / 2 {
+                    "forward side (intake/nose)"
+                } else if side {
+                    "side"
+                } else {
+                    ""
+                }
+            };
+            let stretched = census.iter().filter(|c| c.0 >= 3 << 15).count();
+            report += &format!(
+                "{name}: {} textured faces measured ({swatches} more map a line or point of the PIC), {stretched} stretched 1.5x or more; worst:\n",
+                census.len()
+            );
+            for (s, i, d) in census.iter().take(12) {
+                let f = &m0.faces[*i];
+                report += &format!(
+                    "  {:X} {} {:?} n {:?}: {} texels/unit vertical, {} horizontal, stretch {}x {}\n",
+                    f.offset,
+                    full(&f.texture),
+                    centre(f),
+                    f.normal.unwrap_or([0; 3]),
+                    q16(d[0]),
+                    q16(d[1]),
+                    q16(*s),
+                    tag(f)
+                );
+            }
+            for label in ["tail fin", "forward side (intake/nose)"] {
+                if let Some((s, i, d)) = census.iter().find(|(_, i, _)| tag(&m0.faces[*i]) == label)
+                {
+                    let f = &m0.faces[*i];
+                    report += &format!(
+                        "  worst {label}: {:X} at {:?}: {} vertical, {} horizontal, stretch {}x\n",
+                        f.offset,
+                        centre(f),
+                        q16(d[0]),
+                        q16(d[1]),
+                        q16(*s)
+                    );
+                }
+            }
+            // The most stretched side faces of one side and one texture,
+            // tail fins and forward sides first.
+            let mut side: Vec<&(u64, usize, [u64; 2])> = census
+                .iter()
+                .filter(|(s, i, _)| {
+                    *s >= 3 << 15 && m0.faces[*i].normal.is_some_and(|n| n[0].abs() >= 29490)
+                })
+                .collect();
+            side.sort_unstable_by_key(|(s, i, _)| {
+                (
+                    core::cmp::Reverse(tag(&m0.faces[*i]) != "side"),
+                    core::cmp::Reverse(*s),
+                )
+            });
+            let first = side.first().ok_or("No stretched side-facing face")?;
+            let right = m0.faces[first.1].normal.is_some_and(|n| n[0] > 0);
+            let texture = m0.faces[first.1].texture.clone();
+            let mut picked: Vec<usize> = side
+                .iter()
+                .filter(|(_, i, _)| {
+                    let f = &m0.faces[*i];
+                    f.texture == texture && f.normal.is_some_and(|n| (n[0] > 0) == right)
+                })
+                .map(|(_, i, _)| *i)
+                .take(4)
+                .collect();
+            // Side view from the side the faces face.
+            self.yaw = if right { 90 } else { 270 };
+            self.pitch = 0;
+            self.frame();
+            self.zoom = 170;
+            self.ed.mesh_faces.clear();
+            self.selected_face = None;
+            let png = |_: &App, file: &str, bytes: Vec<u8>| -> Result<String> {
+                let path = format!("{out}/{file}");
+                crate::platform::write_new(&path, &bytes)?;
+                Ok(path)
+            };
+            let stem = name.trim_end_matches(".SH");
+            report += &format!(
+                "  before: {}\n",
+                png(
+                    self,
+                    &format!("{stem}-before.png"),
+                    picture::rgba_png(640, 400, &self.render_rgba(640, 400))
+                )?
+            );
+            let mut refused = Vec::new();
+            let to = loop {
+                if picked.is_empty() {
+                    return Err(format!("{name}: every candidate was refused: {refused:?}"));
+                }
+                self.ed.mesh_faces.clear();
+                for (k, f) in picked.iter().enumerate() {
+                    self.panel_click(Some(*f), k > 0);
+                }
+                self.face_texture_action(TEX_REMAP);
+                let Some(p) = self
+                    .prompt
+                    .as_ref()
+                    .filter(|p| matches!(p.kind, PromptKind::RemapView))
+                else {
+                    // Drop the face the refusal names and try again.
+                    let at = self.status.split("Face at ").nth(1).and_then(|s| {
+                        usize::from_str_radix(s.split(':').next()?.split(' ').next()?, 16).ok()
+                    });
+                    refused.push(self.status.clone());
+                    match at.and_then(|o| picked.iter().position(|f| m0.faces[*f].offset == o)) {
+                        Some(k) => {
+                            picked.remove(k);
+                            continue;
+                        }
+                        None => return Err(format!("{name}: {}", self.status)),
+                    }
+                };
+                let to = p.value.clone();
+                let (size, used) = (self.ed.remap.size, self.ed.remap.used);
+                self.key(Key::Enter, false, false);
+                if !self.status.starts_with("Remapped") {
+                    let status = self.status.clone();
+                    self.key(Key::Escape, false, false);
+                    let at = status.split("Face at ").nth(1).and_then(|s| {
+                        usize::from_str_radix(s.split(':').next()?.split(' ').next()?, 16).ok()
+                    });
+                    refused.push(status.clone());
+                    match at.and_then(|o| picked.iter().position(|f| m0.faces[*f].offset == o)) {
+                        Some(k) => {
+                            picked.remove(k);
+                            continue;
+                        }
+                        None => return Err(format!("{name}: {status}")),
+                    }
+                }
+                report += &format!(
+                    "  remapped {} faces of {} from the {} side to {to}: {} x {} at {} texels/unit\n  {}\n",
+                    picked.len(),
+                    full(&texture),
+                    if right { "right" } else { "left" },
+                    size[0],
+                    size[1],
+                    density_text(used),
+                    self.status
+                );
+                for f in &picked {
+                    let s = census.iter().find(|c| c.1 == *f).map_or(0, |c| c.0);
+                    report += &format!(
+                        "    {:X} {} at {:?}, stretch {}x\n",
+                        m0.faces[*f].offset,
+                        match tag(&m0.faces[*f]) {
+                            "" => "face",
+                            t => t,
+                        },
+                        centre(&m0.faces[*f]),
+                        q16(s)
+                    );
+                }
+                break to;
+            };
+            for r in &refused {
+                report += &format!("  refused first: {r}\n");
+            }
+            let moved = self.panel_offsets();
+            let after = self.doc.archive.entries[entry].read()?;
+            let g1 = Geometry::parse(&after)?;
+            let m1 = self.model.clone().ok_or("No model after the remap")?;
+            let pic_at = self.doc.archive.find(&to).ok_or("New PIC missing")?;
+            let pic_bytes = self.doc.archive.entries[pic_at].read()?;
+            let retail = picture::is_retail_texture(&pic_bytes);
+            let coverage = g1.inventory.contiguous()
+                && g1.inventory.opaque_bytes() == g0.inventory.opaque_bytes();
+            let bindings = g1.inventory.bindings == g0.inventory.bindings
+                && g1.inventory.stubs.len() == g0.inventory.stubs.len();
+            let (cs0, cs1) = (g0.inventory.code_start, g1.inventory.code_start);
+            let originals: Vec<usize> = picked.iter().map(|f| m0.faces[*f].offset - cs0).collect();
+            let others = m0
+                .faces
+                .iter()
+                .filter(|f| !originals.contains(&(f.offset - cs0)))
+                .all(|f| {
+                    m1.faces.iter().any(|g| {
+                        g.offset - cs1 == f.offset - cs0 && g.texture == f.texture && g.uv == f.uv
+                    })
+                });
+            let on_new = m1
+                .faces
+                .iter()
+                .filter(|f| moved.contains(&f.offset) && f.texture == to)
+                .count();
+            let reparsed = Model::parse(&after).is_ok();
+            report += &format!(
+                "  {to}: retail layout {retail} ({} bytes); inventory {} ({} opaque bytes), bindings {} ({}), faces {} -> {}, {on_new} on {to}, other faces unchanged {others}, re-parse {reparsed}\n",
+                pic_bytes.len(),
+                if coverage { "complete" } else { "CHANGED" },
+                g1.inventory.opaque_bytes(),
+                if bindings { "unchanged" } else { "CHANGED" },
+                g1.inventory.bindings.len(),
+                m0.faces.len(),
+                m1.faces.len()
+            );
+            for f in m1.faces.iter().filter(|f| moved.contains(&f.offset)) {
+                let p: Vec<[i32; 3]> = f.indices.iter().map(|i| m1.vertices[*i].point).collect();
+                if let Some(d) = face_density(&p, &f.uv) {
+                    let (big, small) = (d[0].max(d[1]), d[0].min(d[1]).max(1));
+                    report += &format!(
+                        "    {:X} now {} vertical, {} horizontal, stretch {}x\n",
+                        f.offset,
+                        q16(d[0]),
+                        q16(d[1]),
+                        q16(big * 65536 / small)
+                    );
+                }
+            }
+            if !retail
+                || !coverage
+                || !bindings
+                || !others
+                || !reparsed
+                || on_new != picked.len()
+                || m1.faces.len() != m0.faces.len()
+            {
+                return Err(format!("{name}: remap check failed\n{report}"));
+            }
+            report += &format!(
+                "  remapped panels selected: {}\n",
+                png(
+                    self,
+                    &format!("{stem}-panels.png"),
+                    picture::rgba_png(640, 400, &self.render_rgba(640, 400))
+                )?
+            );
+            self.ed.mesh_faces.clear();
+            self.selected_face = None;
+            report += &format!(
+                "  after: {}\n  new PIC: {}\n",
+                png(
+                    self,
+                    &format!("{stem}-after.png"),
+                    picture::rgba_png(640, 400, &self.render_rgba(640, 400))
+                )?,
+                png(
+                    self,
+                    &format!("{stem}-{}.png", to.trim_end_matches(".PIC")),
+                    Pic::parse(&pic_bytes)?.png(&self.base_palette)
+                )?
+            );
+            // Use shape texture returns every drawn face; undo keeps the remap.
+            let kept = self.doc.archive.bytes()?;
+            self.ed.mesh_faces = moved.clone();
+            self.face_texture_action(TEX_RESTORE);
+            let back = self.doc.archive.entries[entry].read()?;
+            let drawn = |b: &[u8]| -> Result<Vec<DrawnFace>> {
+                let cs = Geometry::parse(b)?.inventory.code_start;
+                let mut v: Vec<_> = Model::parse(b)?
+                    .faces
+                    .iter()
+                    .map(|f| (f.offset - cs, f.texture.clone(), f.uv.clone(), f.sub))
+                    .collect();
+                v.sort_unstable();
+                Ok(v)
+            };
+            let same = drawn(&back)? == drawn(&before)?;
+            self.act(Action::Undo);
+            let undone = self.doc.archive.bytes()? == kept;
+            report += &format!(
+                "  Use shape texture: every drawn face as before {same}; undo restores the remap {undone}\n"
+            );
+            if !same || !undone {
+                return Err(format!("{name}: reverse round trip failed\n{report}"));
+            }
+        }
+        let lib = format!("{out}/REMAP.LIB");
+        crate::platform::write_new(&lib, &self.doc.archive.bytes()?)?;
+        let reopened = Archive::parse(crate::platform::read(&lib)?)?;
+        report += &format!(
+            "Wrote {lib}: {} entries; reopened, every SH re-parses: {}\n",
+            reopened.entries.len(),
+            names.iter().all(|n| reopened
+                .find(n)
+                .and_then(|i| reopened.entries[i].read().ok())
+                .is_some_and(|b| Model::parse(&b).is_ok()))
+        );
+        Ok(report)
+    }
+}

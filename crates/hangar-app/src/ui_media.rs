@@ -738,6 +738,15 @@ impl App {
             Some((f.faces[i], f.uv[i]))
         }
     }
+    /// The textured view as RGBA rows, for real-data checks.
+    #[cfg(not(windows))]
+    pub(super) fn render_rgba(&self, w: usize, h: usize) -> Vec<u8> {
+        self.render_model(w, h)
+            .pixels
+            .iter()
+            .flat_map(|p| [(p >> 16) as u8, (p >> 8) as u8, *p as u8, 255])
+            .collect()
+    }
     /// The colour the main viewport draws at `(x, y)`, for smoke checks.
     pub(super) fn model_pixel(&self, x: i32, y: i32) -> Option<u32> {
         let (l, top) = (self.left() + 1, 54);
