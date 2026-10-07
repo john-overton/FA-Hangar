@@ -322,6 +322,8 @@ enum PromptKind {
     FaceClone,
     /// The Assign texture dialog (`ed.assign`); the value filters PIC names.
     AssignTexture,
+    /// The Remap from view dialog (`ed.remap`); the value is the new PIC name.
+    RemapView,
     /// The Replace color dialog (`replace.dialog`).
     ReplaceColor,
     CloseLibrary,
@@ -1732,6 +1734,7 @@ impl App {
                         PromptKind::TransferReview => self.apply_transfer(),
                         PromptKind::FaceClone => self.clone_face_texture(&p.value),
                         PromptKind::AssignTexture => self.apply_assign(),
+                        PromptKind::RemapView => self.apply_remap(&p.value),
                         PromptKind::ReplaceColor => self.apply_replace(),
                         PromptKind::Isolate => (|| {
                             let to = p.value.trim().to_ascii_uppercase();
@@ -2114,7 +2117,7 @@ impl App {
             Key::Enter=>self.edit_field(self.field_selected),
             Key::Backspace=>{if let Some(t)=self.number_under_mouse(){self.number_reset(t);}},
             Key::Delete=>{let r=self.delete_entry();self.result(r);},
-            Key::Escape=>{self.graft_library=None;self.resource_drag=None;self.ed.mesh_box=None;self.ed.box_armed=false;},
+            Key::Escape=>{self.graft_library=None;self.resource_drag=None;self.ed.mesh_box=None;self.ed.box_armed=false;if matches!(self.mode,Mode::Model|Mode::Media)&&!self.mesh_edit&&!self.animation_tool{self.clear_panels();}},
             Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform, X/Y/Z toggles axis lock | Tab edit mode: 1 vertices, 3 faces, A all, B box, L part, X delete, F face, Shift+D duplicate, E extrude, Alt+N flip".into(),
             _=>{}
         }
@@ -2297,18 +2300,33 @@ impl App {
             && y > 130
             && y < self.dock_y()
         {
+            // Panels: Shift+click adds or removes and never paints; a plain
+            // click paints with a paint tool on, else selects one panel.
             if let Some((face, uv)) = self.model_hit(x, y) {
                 self.hp_tool = false;
-                self.selected_face = Some(face);
                 self.textured = true;
                 self.perspective = false;
+                if shift {
+                    self.panel_click(Some(face), true);
+                    return;
+                }
+                self.selected_face = Some(face);
                 if self.model_pick(face, uv) {
                     return;
                 }
                 if self.model_paint {
                     self.paint_model_hit(face, uv);
+                } else {
+                    self.panel_click(Some(face), false);
                 }
                 return;
+            }
+            if !self.model_paint
+                && !self.hp_tool
+                && self.in_viewport(x, y)
+                && !self.layout().hits.iter().any(|h| h.contains(x, y))
+            {
+                self.panel_click(None, shift);
             }
         }
         if button == 1
@@ -2372,6 +2390,10 @@ impl App {
             .map(|h| h.action);
         if let Some(view::Action::Number(t)) = action {
             self.number_press(t, x);
+            return;
+        }
+        if let Some(view::Action::PanelPick(rect)) = action {
+            self.preview_click(rect, x, y, shift);
             return;
         }
         if let Some(action) = action {

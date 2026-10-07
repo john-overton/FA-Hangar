@@ -335,6 +335,11 @@ impl App {
                 )
                 .enabled(faces),
                 Item::new(
+                    "Remap selected panels from view\u{2026}",
+                    Action::FaceTexture(texture_ui::TEX_REMAP),
+                )
+                .enabled(faces),
+                Item::new(
                     "Use shape texture",
                     Action::FaceTexture(texture_ui::TEX_RESTORE),
                 )
@@ -1047,6 +1052,11 @@ impl App {
                     ),
                     None => view::count(self.ed.parts.len(), "part", "parts"),
                 }
+            } else if !self.panel_offsets().is_empty() {
+                format!(
+                    "{} selected",
+                    view::count(self.panel_offsets().len(), "panel", "panels")
+                )
             } else if writable {
                 "editable static mesh".into()
             } else {

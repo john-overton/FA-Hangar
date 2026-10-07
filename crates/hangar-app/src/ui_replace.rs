@@ -393,10 +393,15 @@ impl App {
         });
     }
     /// Paint, Mesh menu and Face textures action: open the dialog on the
-    /// selected faces' panels in Edit Mesh, else on the whole texture.
+    /// selected faces' panels in Edit Mesh or with panels selected, else on
+    /// the whole texture.
     pub(super) fn open_replace_dialog(&mut self) {
         self.finish_stroke();
-        let panels = self.mesh_edit && self.mode == Mode::Model && !self.texture_faces().is_empty();
+        let panels = if self.mesh_edit && self.mode == Mode::Model {
+            !self.texture_faces().is_empty()
+        } else {
+            !self.panel_offsets().is_empty()
+        };
         self.replace.dialog = Some(Dialog {
             scope: if panels { SCOPE_PANELS } else { SCOPE_WHOLE },
             ..Default::default()

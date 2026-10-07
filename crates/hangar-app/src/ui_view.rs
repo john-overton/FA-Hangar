@@ -140,6 +140,11 @@ pub(super) enum Action {
     AssignMode(u8),
     /// Assign texture dialog: projection plane Auto, Top, Side, Front.
     AssignPlane(u8),
+    /// Remap from view dialog: Bake current look (0) or Blank (1).
+    RemapFill(u8),
+    /// Click on a model preview drawn in `rect` (Paint workspace): pick a
+    /// panel, Shift adds or removes (handled in `App::pointer`).
+    PanelPick([i32; 4]),
     Hardpoints,
     StationSlew(bool),
     HardpointVisibility,
@@ -391,6 +396,11 @@ impl App {
             Action::AssignPick(i) => self.assign_pick(i),
             Action::AssignMode(mode) => self.assign_mode(mode),
             Action::AssignPlane(plane) => self.ed.assign.plane = plane.min(3),
+            Action::RemapFill(fill) => self.remap_fill(fill),
+            Action::PanelPick(rect) => {
+                let [x, y] = self.mouse;
+                self.preview_click(rect, x, y, false);
+            }
             Action::RepairPanels => {
                 let result = self.repair_panels();
                 self.result(result);
@@ -402,7 +412,22 @@ impl App {
             Action::MeshMode => {
                 self.finish_stroke();
                 self.animation_tool = false;
+                // One face selection: panels picked outside Edit Mesh enter
+                // it in face select, and Edit Mesh's faces stay selected.
+                if self.mesh_edit && !self.ed.face_select {
+                    let faces = self.selected_faces();
+                    self.ed.mesh_faces = self
+                        .model
+                        .as_ref()
+                        .map(|m| faces.iter().map(|f| m.faces[*f].offset).collect())
+                        .unwrap_or_default();
+                } else if !self.mesh_edit && !self.panel_offsets().is_empty() {
+                    self.ed.face_select = true;
+                }
                 self.mesh_edit = !self.mesh_edit;
+                if self.mesh_edit && self.ed.face_select {
+                    self.sync_face_vertices();
+                }
                 self.ed.mesh_pending = None;
                 self.ed.mesh_box = None;
                 self.ed.box_armed = false;
@@ -1521,6 +1546,12 @@ impl App {
             } else if self
                 .prompt
                 .as_ref()
+                .is_some_and(|p| matches!(p.kind, PromptKind::RemapView))
+            {
+                self.remap_dialog(&mut out);
+            } else if self
+                .prompt
+                .as_ref()
                 .is_some_and(|p| matches!(p.kind, PromptKind::ReplaceColor))
             {
                 self.replace_dialog(&mut out);
@@ -2615,11 +2646,13 @@ impl App {
         }
         if self.dock == 3 && self.context_model.is_some() {
             self.draw_model(o, x, y + top, w, h - top);
+            let rect = [x, y + top, w, h - top];
+            o.hit(rect, Action::PanelPick(rect));
             o.canvas.styled(
                 x + space::SPACE_3,
                 y + top + 16,
                 &fit(
-                    "Live model \u{b7} MMB orbit \u{b7} wheel zoom",
+                    "Live model \u{b7} click selects panels, Shift adds \u{b7} MMB orbit \u{b7} wheel zoom",
                     w - 24,
                     Style::ValueSm,
                 ),
@@ -2917,6 +2950,7 @@ impl App {
         self.smoke_edit_mode();
         self.smoke_parts_panel();
         self.smoke_face_textures();
+        self.smoke_panels();
         self.smoke_replace();
         self.demo();
         self.width = 1280;

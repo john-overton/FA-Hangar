@@ -4,12 +4,16 @@
 use super::view::{Action, Icon, Layout};
 use super::widgets::{pane, Btn, Tone};
 use super::*;
+use hangar_core::shape_remap as remap;
 use hangar_core::shape_texture::{self as tex, Plane, UvMode};
 use theme::{metric as m, space};
 
 pub(super) const TEX_CLONE: u8 = 0;
 pub(super) const TEX_ASSIGN: u8 = 1;
 pub(super) const TEX_RESTORE: u8 = 2;
+pub(super) const TEX_REMAP: u8 = 3;
+/// Remap dialog fills.
+const FILLS: [&str; 2] = ["Bake current look", "Blank"];
 /// Why the per-face actions are disabled without a selection.
 pub(super) const NO_FACES: &str = "Select faces in Edit Mesh or pick a face to paint";
 /// List rows shown in the Assign texture dialog.
@@ -38,6 +42,26 @@ pub(super) struct AssignDraft {
     /// Whether every face carries UVs (Keep and Scale need them).
     pub textured: bool,
 }
+/// The Remap from view dialog: the faces, the camera they were seen with
+/// and the planned sheet.
+#[derive(Default)]
+pub(super) struct RemapDraft {
+    pub entry: usize,
+    pub faces: Vec<usize>,
+    pub yaw: i32,
+    pub pitch: i32,
+    pub pose: model::Pose,
+    /// Requested density (Q16 texels per unit) and the planned sheet.
+    pub density: u32,
+    pub size: [u32; 2],
+    /// Texels the panels span inside the sheet.
+    pub span: [u32; 2],
+    pub used: u32,
+    /// 0 Bake current look, 1 Blank.
+    pub fill: u8,
+    /// Where the faces draw from now, for the status.
+    pub from: String,
+}
 /// Hangar assignment faces of one shape entry, cached by storage.
 #[derive(Default)]
 pub(super) struct AssignedCache(core::cell::RefCell<Option<(Entry, Vec<usize>)>>);
@@ -50,7 +74,7 @@ pub(super) fn full(name: &str) -> String {
 }
 impl App {
     /// File offsets of the faces the texture actions act on: the Edit Mesh
-    /// selection, or the face picked for painting.
+    /// selection, else the selected panels, else the face picked for painting.
     pub(super) fn texture_faces(&self) -> Vec<usize> {
         let Some(model) = self.model_for_paint() else {
             return Vec::new();
@@ -62,10 +86,80 @@ impl App {
                 .filter_map(|f| model.faces.get(*f).map(|f| f.offset))
                 .collect();
         }
+        let panels = self.panel_offsets();
+        if !panels.is_empty() {
+            return panels;
+        }
         self.selected_face
             .and_then(|i| model.faces.get(i))
             .map(|f| vec![f.offset])
             .unwrap_or_default()
+    }
+    /// The selected panels outside Edit Mesh: the shared face selection
+    /// (`EditState::mesh_faces`), as offsets the shown model draws.
+    pub(super) fn panel_offsets(&self) -> Vec<usize> {
+        let Some(model) = self.model_for_paint() else {
+            return Vec::new();
+        };
+        self.ed
+            .mesh_faces
+            .iter()
+            .filter(|o| model.faces.iter().any(|f| f.offset == **o))
+            .copied()
+            .collect()
+    }
+    /// Model face indices of the selected panels, for drawing.
+    pub(super) fn panel_indices(&self) -> Vec<usize> {
+        let Some(model) = self.model_for_paint() else {
+            return Vec::new();
+        };
+        let mut picked = self.ed.mesh_faces.clone();
+        picked.sort_unstable();
+        (0..model.faces.len())
+            .filter(|f| picked.binary_search(&model.faces[*f].offset).is_ok())
+            .collect()
+    }
+    /// A panel click outside Edit Mesh: a face replaces the selection, with
+    /// Shift it is added or removed; empty space clears (Shift keeps it).
+    pub(super) fn panel_click(&mut self, face: Option<usize>, shift: bool) {
+        let Some(offset) =
+            face.and_then(|i| self.model_for_paint()?.faces.get(i).map(|f| f.offset))
+        else {
+            if !shift {
+                self.clear_panels();
+            }
+            return;
+        };
+        if !shift {
+            self.ed.mesh_faces = vec![offset];
+            self.selected_face = face;
+        } else if let Some(at) = self.ed.mesh_faces.iter().position(|o| *o == offset) {
+            self.ed.mesh_faces.remove(at);
+            let last = self.ed.mesh_faces.last().copied();
+            self.selected_face = last.and_then(|o| {
+                self.model_for_paint()?
+                    .faces
+                    .iter()
+                    .position(|f| f.offset == o)
+            });
+        } else {
+            self.ed.mesh_faces.push(offset);
+            self.selected_face = face;
+        }
+        self.status = format!(
+            "{} selected | Shift+click adds or removes, Esc clears",
+            view::count(self.panel_offsets().len(), "panel", "panels")
+        );
+    }
+    /// Esc or a click on empty space: no panel selected.
+    pub(super) fn clear_panels(&mut self) {
+        let had = !self.ed.mesh_faces.is_empty() || self.selected_face.is_some();
+        self.ed.mesh_faces.clear();
+        self.mesh_vertices.clear();
+        self.selected_face = None;
+        if had {
+            self.status = "Selection cleared".into();
+        }
     }
     /// Texture name (as `X.PIC`, empty when untextured) of each face offset
     /// in the shown model, with how many faces use it.
@@ -246,6 +340,7 @@ impl App {
                     axis: 0,
                 });
             }
+            TEX_REMAP => self.open_remap(entry, faces)?,
             _ => {
                 let source = self.doc.archive.entries[entry].read()?;
                 let restored = tex::restore_texture_assignment(&source, &faces)?;
@@ -265,6 +360,7 @@ impl App {
     }
     /// Reselect faces by their new offsets after a texture edit.
     fn after_texture_edit(&mut self, faces: &[usize]) {
+        let panels = !self.ed.mesh_faces.is_empty();
         self.refresh();
         if self.mesh_edit && self.mode == Mode::Model {
             self.ed.face_select = true;
@@ -274,6 +370,10 @@ impl App {
             self.selected_face = faces
                 .first()
                 .and_then(|o| model.faces.iter().position(|f| f.offset == *o));
+            // The selected panels follow their faces to the new offsets.
+            if panels {
+                self.ed.mesh_faces = faces.to_vec();
+            }
         }
     }
     /// Clone the selected faces' PIC to `to` and draw those faces from it,
@@ -608,6 +708,14 @@ impl App {
     pub(super) fn face_texture_pane(&self, o: &mut Layout, s: &mut widgets::Stack, whole: bool) {
         let faces = self.texture_faces();
         if self.pane(o, s, pane::MESH_TEXTURE, "Face textures", Icon::Textured) {
+            if !faces.is_empty() {
+                o.info(
+                    s,
+                    "Selected",
+                    &view::count(faces.len(), "panel", "panels"),
+                    "",
+                );
+            }
             let names = self.face_texture_names(&faces);
             for (name, n) in names.iter().take(4) {
                 let shown = if name.is_empty() { "Untextured" } else { name };
@@ -620,7 +728,7 @@ impl App {
             let assigned = self.assigned_offsets();
             let any_assigned = faces.iter().any(|f| assigned.contains(f));
             let clone_ok = !faces.is_empty() && self.shared_texture(&faces).is_ok();
-            let items: [(&str, Action, bool, bool); 3] = [
+            let items: [(&str, Action, bool, bool); 4] = [
                 (
                     "Clone texture for selected faces",
                     Action::FaceTexture(TEX_CLONE),
@@ -630,6 +738,12 @@ impl App {
                 (
                     "Assign texture\u{2026}",
                     Action::FaceTexture(TEX_ASSIGN),
+                    !faces.is_empty(),
+                    false,
+                ),
+                (
+                    "Remap selected panels from view\u{2026}",
+                    Action::FaceTexture(TEX_REMAP),
                     !faces.is_empty(),
                     false,
                 ),
@@ -677,6 +791,253 @@ impl App {
             o.stack_notice(s, Tone::Neutral, &note);
         }
         o.panel_end(s);
+    }
+}
+/// "3.1" for a Q16 density.
+fn density_text(q16: u32) -> String {
+    let t = (q16 as u64 * 10 + 32768) >> 16;
+    format!("{}.{}", t / 10, t % 10)
+}
+impl App {
+    /// The pose the shown model is drawn in: the preview pose in the Model
+    /// workspace, neutral for a Paint workspace context model.
+    fn shown_pose(&self) -> model::Pose {
+        if self.model.is_some() {
+            self.ed.pose.clone()
+        } else {
+            model::Pose::new()
+        }
+    }
+    /// Plan the layout from the current view and open the Remap dialog.
+    fn open_remap(&mut self, entry: usize, faces: Vec<usize>) -> Result<()> {
+        let model = self.model_for_paint().ok_or(NO_FACES)?;
+        let density = tex::atlas_density(model).unwrap_or(tex::DEFAULT_DENSITY);
+        let pose = self.shown_pose();
+        let source = self.doc.archive.entries[entry].read()?;
+        let view = remap::View {
+            yaw: self.yaw,
+            pitch: self.pitch,
+            pose: &pose,
+        };
+        let plan = remap::remap_plan(&source, &faces, &view, tex::Fit::Density(density))?;
+        let names = self.face_texture_names(&plan.faces);
+        let stem = names
+            .iter()
+            .find(|(n, _)| !n.is_empty())
+            .map(|(n, _)| n.clone())
+            .unwrap_or_else(|| self.doc.archive.entries[entry].name.clone());
+        let suggestion = self.private_texture_name(&stem);
+        let n = plan.faces.len();
+        let span = [0, 1].map(|k| {
+            let all = plan.uv.iter().flatten().map(|p| p[k]);
+            (all.clone().max().unwrap_or(0) - all.min().unwrap_or(0)).max(0) as u32
+        });
+        self.ed.remap = RemapDraft {
+            span,
+            entry,
+            faces: plan.faces,
+            yaw: self.yaw,
+            pitch: self.pitch,
+            pose,
+            density,
+            size: plan.size,
+            used: plan.density,
+            fill: 0,
+            from: describe(&names),
+        };
+        self.prompt = Some(Prompt {
+            kind: PromptKind::RemapView,
+            title: format!(
+                "Remap {} from view",
+                view::count(n, "selected panel", "selected panels")
+            ),
+            value: suggestion,
+            axis: 0,
+        });
+        Ok(())
+    }
+    pub(super) fn remap_fill(&mut self, fill: u8) {
+        self.ed.remap.fill = fill.min(1);
+    }
+    /// Enter in the Remap dialog: the SH and the new PIC in one undo step.
+    pub(super) fn apply_remap(&mut self, name: &str) -> Result<()> {
+        let to = name.trim().to_ascii_uppercase();
+        if !to.ends_with(".PIC") || !self.texture_name_free(&to) {
+            return Err("Choose an unused PIC name".into());
+        }
+        hangar_core::archive::validate_name(&to)?;
+        let d = &self.ed.remap;
+        let model = self.model_for_paint().ok_or(NO_FACES)?;
+        // What the faces draw now, painted strokes included.
+        // The new texture holds game-palette indices, like retail skins.
+        if !self.palette_loaded {
+            return Err("Load the game PALETTE.PAL before remapping panels".into());
+        }
+        let mut textures = BTreeMap::new();
+        for f in model.faces.iter().filter(|f| d.faces.contains(&f.offset)) {
+            if f.sub & 4 == 0 || f.texture.is_empty() {
+                continue;
+            }
+            let key = remap::texture_key(&f.texture);
+            let pic = self.texture_for(&f.texture).ok_or_else(|| {
+                format!("{key} is outside the active LIB; copy or open its owner first")
+            })?;
+            textures.insert(key, pic.clone());
+        }
+        let view = remap::View {
+            yaw: d.yaw,
+            pitch: d.pitch,
+            pose: &d.pose,
+        };
+        let fill = if d.fill == 1 {
+            remap::Fill::Blank
+        } else {
+            remap::Fill::Bake
+        };
+        let source = self.doc.archive.entries[d.entry].read()?;
+        let r = remap::remap_from_view(
+            &source,
+            &d.faces,
+            &to,
+            &view,
+            tex::Fit::Density(d.density),
+            fill,
+            &remap::Sources {
+                textures: &textures,
+                palette: &self.base_palette,
+            },
+        )?;
+        let (n, from, entry) = (d.faces.len(), d.from.clone(), d.entry);
+        let shape = self.doc.archive.entries[entry].name.clone();
+        self.doc.transaction(
+            vec![Entry::new(&shape, r.shape)?, Entry::new(&to, r.picture)?],
+            &[],
+        )?;
+        self.after_texture_edit(&r.faces);
+        self.status = format!(
+            "Remapped {} from the view to {to}, {} \u{d7} {} at {} texels per unit, {} {from}. One undo step.",
+            view::count(n, "panel", "panels"),
+            r.size[0],
+            r.size[1],
+            density_text(r.density),
+            if fill == remap::Fill::Bake {
+                "baked from"
+            } else {
+                "blank, was"
+            }
+        );
+        Ok(())
+    }
+    /// The Remap from view dialog: name, planned size, fill and Remap.
+    pub(super) fn remap_dialog(&self, o: &mut Layout) {
+        use widgets::{baseline, notice};
+        let Some(p) = self.prompt.as_ref() else {
+            return;
+        };
+        let d = &self.ed.remap;
+        let w = (self.width - 48).min(520);
+        let h = super::view::DIALOG_HEAD
+            + space::SPACE_3
+            + m::ROW_H
+            + 26
+            + space::SPACE_2
+            + 2 * m::ROW_H
+            + space::SPACE_2
+            + m::BUTTON_H
+            + space::SPACE_3
+            + 2 * m::ROW_H
+            + m::ROW_H
+            + space::SPACE_2
+            + m::BUTTON_H
+            + 2 * space::SPACE_4;
+        let h = h.min(self.height - 24);
+        let rect = [(self.width - w) / 2, (self.height - h) / 2, w, h];
+        o.hits.clear();
+        let [bx, mut y, bw, _] = self.dialog_frame(o, rect, &p.title);
+        let label = |o: &mut Layout, y: i32, text: &str| {
+            o.canvas.styled(
+                bx,
+                baseline(y, m::ROW_H, Style::Label),
+                text,
+                c::INK_MUTED,
+                Style::Label,
+            );
+        };
+        let half = bw / 3;
+        label(o, y, "New PIC name");
+        y += m::ROW_H;
+        self.dialog_input(o, [bx, y, bw, 26], &p.value);
+        y += 26 + space::SPACE_2;
+        let rows = [
+            (
+                "Size",
+                format!(
+                    "{} \u{d7} {} px, panels {} \u{d7} {}",
+                    d.size[0], d.size[1], d.span[0], d.span[1]
+                ),
+            ),
+            (
+                "Density",
+                format!("{} texels per unit, square", density_text(d.used)),
+            ),
+        ];
+        for (k, v) in rows {
+            label(o, y, k);
+            o.canvas.styled(
+                bx + half,
+                baseline(y, m::ROW_H, Style::Value),
+                &fit(&v, bw - half, Style::Value),
+                c::INK,
+                Style::Value,
+            );
+            y += m::ROW_H;
+        }
+        y += space::SPACE_2;
+        label(o, y, "Fill");
+        let fills: Vec<(Btn, Action)> = FILLS
+            .iter()
+            .enumerate()
+            .map(|(k, t)| {
+                (
+                    Btn::new(t).on(d.fill as usize == k),
+                    Action::RemapFill(k as u8),
+                )
+            })
+            .collect();
+        o.segmented([bx + half, y, bw - half, m::BUTTON_H], &fills);
+        y += m::BUTTON_H + space::SPACE_3;
+        notice(
+            &mut o.canvas,
+            bx,
+            y,
+            bw,
+            Tone::Neutral,
+            &fit(
+                "Laid out as this view shows them. Orbit first so the panels face you.",
+                bw - 32,
+                Style::Label,
+            ),
+        );
+        if let Some(error) = self.status.strip_prefix("Error: ") {
+            let ey = y + 2 * m::ROW_H;
+            o.canvas
+                .icon(bx, ey + 2, Icon::Warning, c::DANGER, c::GM_800);
+            o.canvas.styled(
+                bx + m::ICON + space::SPACE_1,
+                baseline(ey, m::ROW_H, Style::Label),
+                &fit(error, bw - m::ICON - space::SPACE_1, Style::Label),
+                c::DANGER,
+                Style::Label,
+            );
+        }
+        self.dialog_actions(
+            o,
+            rect,
+            &[],
+            Some("Cancel"),
+            Some(Btn::new("Remap").primary()),
+            Action::Apply,
+        );
     }
 }
 fn d_mode(mode: UvMode) -> usize {
@@ -1366,6 +1727,361 @@ impl App {
             a.key(Key::Escape, false, false);
             assert!(a.prompt.is_none());
         }
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+    }
+}
+/// Every hit region inside the window and apart from the others.
+fn hits_apart(a: &mut App, what: &str) {
+    let (w, h) = (a.width, a.height);
+    let hits = a.layout().hits;
+    for (i, x) in hits.iter().enumerate() {
+        let [hx, hy, hw, hh] = x.rect;
+        assert!(
+            hx >= 0 && hy >= 0 && hx + hw <= w && hy + hh <= h,
+            "{what} at {w}x{h}"
+        );
+        for y in &hits[i + 1..] {
+            let [yx, yy, yw, yh] = y.rect;
+            assert!(
+                hx >= yx + yw || yx >= hx + hw || hy >= yy + yh || yy >= hy + hh,
+                "overlapping {what} controls at {w}x{h}"
+            );
+        }
+    }
+}
+impl App {
+    /// Root faces the raster picks at their own centres, below the header.
+    fn smoke_visible(&self, textured: bool) -> Vec<(usize, [i32; 2])> {
+        let m = self.model_for_paint().unwrap();
+        (0..m.faces.len())
+            .filter(|f| m.faces[*f].group.is_none() && (m.faces[*f].sub & 4 != 0) == textured)
+            .filter_map(|f| {
+                let face = &m.faces[f];
+                let n = face.indices.len() as i32;
+                let c: [i32; 3] = core::array::from_fn(|k| {
+                    face.indices
+                        .iter()
+                        .map(|i| m.vertices[*i].point[k])
+                        .sum::<i32>()
+                        / n
+                });
+                let p = self.hp_project(c)?;
+                (self.in_viewport(p[0], p[1])
+                    && p[1] > 130
+                    && self.model_hit(p[0], p[1]).map(|(g, _)| g) == Some(f))
+                .then_some((f, p))
+            })
+            .collect()
+    }
+    fn smoke_offset(&self, f: usize) -> usize {
+        self.model_for_paint().unwrap().faces[f].offset
+    }
+    /// A point in the viewport over no face and no control.
+    fn smoke_empty(&mut self) -> [i32; 2] {
+        let hits = self.layout().hits;
+        let candidates = [
+            [self.left() + 60, 150],
+            [self.right() - 60, self.dock_y() - 30],
+            [self.left() + 60, self.dock_y() - 30],
+        ];
+        candidates
+            .into_iter()
+            .find(|[x, y]| {
+                self.in_viewport(*x, *y)
+                    && self.model_hit(*x, *y).is_none()
+                    && !hits.iter().any(|h| h.contains(*x, *y))
+            })
+            .expect("An empty viewport point")
+    }
+    fn smoke_pic(&self, name: &str) -> Pic {
+        let at = self.doc.archive.find(name).unwrap();
+        Pic::parse(&self.doc.archive.entries[at].read().unwrap()).unwrap()
+    }
+    fn smoke_tap(&mut self, action: &dyn Fn(Action) -> bool) {
+        let r = self.smoke_find(action);
+        self.chrome_click(r);
+    }
+    /// Panel selection outside Edit Mesh and Remap from view, through the
+    /// rendered viewport and controls: click, Shift+click add and remove,
+    /// Esc and empty space clear, the brush paints on a plain click only,
+    /// the selection feeds Replace color's Selected panels, Remap with each
+    /// fill (retail texture layout, faces drawn from it, undo to the exact
+    /// bytes), the edge-on refusal, painting the new PIC only, Edit Mesh
+    /// carrying the selection, the Paint workspace preview, and the dialog
+    /// at both window sizes.
+    #[inline(never)]
+    pub(super) fn smoke_panels(&mut self) {
+        let mut a = texture_app();
+        // Game-palette indices: KIT.PIC's own colours as the base palette,
+        // so a baked index reads back unchanged.
+        let kit = a.smoke_pic("KIT.PIC");
+        a.palette_override = Some(Box::new(kit.colors(&a.base_palette)));
+        a.refresh();
+        let original = a.doc.archive.bytes().unwrap();
+        let faces = a.smoke_visible(true);
+        assert!(faces.len() >= 3, "three textured panels in view");
+        let [(f1, p1), (f2, p2), (_, p3)] = [faces[0], faces[1], faces[2]];
+        let (o1, o2) = (a.smoke_offset(f1), a.smoke_offset(f2));
+        // A click picks one panel; Shift+click adds, then removes.
+        a.smoke_press(p1[0], p1[1], false);
+        assert_eq!(a.panel_offsets(), vec![o1]);
+        a.smoke_press(p2[0], p2[1], true);
+        assert_eq!(a.panel_offsets(), vec![o1, o2]);
+        assert!(a.status.starts_with("2 panels selected"), "{}", a.status);
+        assert!(super::media::shows_text(&mut a, "2 panels selected"));
+        assert_eq!(a.texture_faces(), vec![o1, o2]);
+        // Amber-deep fill inside, amber edges, with no paint tool on.
+        let fill = a.model_pixel(p2[0], p2[1]);
+        assert!(fill == Some(c::AMBER_DEEP.0) || fill == Some(c::AMBER.0));
+        a.smoke_press(p2[0], p2[1], true);
+        assert_eq!(a.panel_offsets(), vec![o1]);
+        assert_eq!(a.selected_face, Some(f1));
+        a.key(Key::Escape, false, false);
+        assert!(a.panel_offsets().is_empty() && a.selected_face.is_none());
+        a.smoke_press(p1[0], p1[1], false);
+        a.smoke_press(p2[0], p2[1], true);
+        let e = a.smoke_empty();
+        a.smoke_press(e[0], e[1], false);
+        assert!(a.panel_offsets().is_empty(), "empty space clears");
+        assert!(!a.doc.dirty());
+        // With the brush on, Shift+click still selects and never paints; a
+        // plain click paints and keeps the selection; edges only.
+        a.smoke_press(p1[0], p1[1], false);
+        a.smoke_press(p2[0], p2[1], true);
+        a.act(Action::ModelPaint);
+        assert!(a.model_paint);
+        a.smoke_press(p3[0], p3[1], true);
+        assert_eq!(a.panel_offsets().len(), 3);
+        a.smoke_press(p3[0], p3[1], true);
+        assert_eq!(a.panel_offsets(), vec![o1, o2]);
+        assert!(!a.doc.dirty(), "Shift+click never paints");
+        assert_ne!(a.model_pixel(p2[0], p2[1]), Some(c::AMBER_DEEP.0));
+        a.brush = 5;
+        a.smoke_press(p1[0], p1[1], false);
+        assert!(a.status.starts_with("Paint stroke applied"), "{}", a.status);
+        assert_eq!(
+            a.panel_offsets(),
+            vec![o1, o2],
+            "painting keeps the selection"
+        );
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        a.act(Action::ModelPaint);
+        assert!(!a.model_paint);
+        // Replace color opens on Selected panels: only their footprint changes.
+        let m = a.model_for_paint().unwrap();
+        let uv = [m.faces[f1].uv.clone(), m.faces[f2].uv.clone()];
+        assert!([f1, f2].iter().all(|f| m.faces[*f].texture == "KIT.PIC"));
+        let (_, t) = a.model_hit(p1[0], p1[1]).unwrap();
+        let from = kit.pixels[t[1] as usize * 32 + t[0] as usize];
+        a.smoke_tap(&|x| matches!(x, Action::ReplaceDialog));
+        assert_eq!(
+            a.replace.dialog.as_ref().map(|d| d.scope),
+            Some(replace_ui::SCOPE_PANELS),
+            "{}",
+            a.status
+        );
+        a.smoke_tap(&|x| matches!(x, Action::ReplaceSlot(0)));
+        a.smoke_tap(&move |x| matches!(x, Action::ReplaceSwatch(i) if i == from));
+        a.smoke_tap(&|x| matches!(x, Action::ReplaceSlot(1)));
+        a.smoke_tap(&move |x| matches!(x, Action::ReplaceSwatch(i) if i == from ^ 0x80));
+        a.smoke_tap(&|x| matches!(x, Action::Apply));
+        assert!(a.status.starts_with("Replaced"), "{}", a.status);
+        let region = picture::footprint(32, 32, &[uv[0].as_slice(), uv[1].as_slice()]).unwrap();
+        let after = a.smoke_pic("KIT.PIC").pixels;
+        let changed: Vec<usize> = (0..1024).filter(|i| after[*i] != kit.pixels[*i]).collect();
+        assert!(!changed.is_empty() && changed.iter().all(|i| region[*i]));
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // Remap from the right side: the box side and the fin face +x.
+        a.key(Key::Escape, false, false);
+        a.key(Key::Char('3'), false, false);
+        assert_eq!((a.yaw, a.pitch), (90, 0));
+        let m = a.model_for_paint().unwrap();
+        let side: Vec<(usize, [i32; 2])> = a
+            .smoke_visible(true)
+            .into_iter()
+            .filter(|(f, _)| m.faces[*f].normal.is_some_and(|n| n[0] > 30000))
+            .collect();
+        assert!(side.len() >= 2, "box side and fin");
+        let pick = |a: &mut App| {
+            a.smoke_press(side[0].1[0], side[0].1[1], false);
+            a.smoke_press(side[1].1[0], side[1].1[1], true);
+            assert_eq!(a.panel_offsets().len(), 2);
+        };
+        pick(&mut a);
+        // The look before: indices at points across both panels.
+        let samples: Vec<[i32; 2]> = side
+            .iter()
+            .take(2)
+            .flat_map(|(_, p)| {
+                [-6, -3, 0, 3, 6].into_iter().flat_map(move |dx| {
+                    [-2, 0, 2].into_iter().map(move |dy| [p[0] + dx, p[1] + dy])
+                })
+            })
+            .collect();
+        let look = |a: &App| -> Vec<Option<u8>> {
+            samples
+                .iter()
+                .map(|p| {
+                    let (f, uv) = a.model_hit(p[0], p[1])?;
+                    let pic = a.texture_for(&a.model_for_paint()?.faces[f].texture)?;
+                    Some(pic.pixels[uv[1] as usize * pic.width + uv[0] as usize])
+                })
+                .collect()
+        };
+        let before = look(&a);
+        a.smoke_tap(&|x| matches!(x, Action::FaceTexture(TEX_REMAP)));
+        assert!(
+            matches!(
+                a.prompt.as_ref().map(|p| &p.kind),
+                Some(PromptKind::RemapView)
+            ),
+            "{}",
+            a.status
+        );
+        assert_eq!(a.prompt.as_ref().unwrap().value, "KITT1.PIC");
+        let size = a.ed.remap.size;
+        assert_eq!(size[0], 256, "SH textures are 256 wide");
+        assert!(super::media::shows_text(
+            &mut a,
+            &format!("{} \u{d7} {} px", size[0], size[1])
+        ));
+        // The panels span the layout's aspect: 80 units by 20 from the side.
+        let span = a.ed.remap.span;
+        assert!(
+            (span[0] as i64 * 20 - span[1] as i64 * 80).abs() <= 2 * 80,
+            "{span:?}"
+        );
+        for (w, h) in [(800, 600), (1280, 800)] {
+            a.width = w;
+            a.height = h;
+            hits_apart(&mut a, "Remap dialog");
+            for fill in [0, 1] {
+                assert!(a
+                    .chrome_hit(&|x| matches!(x, Action::RemapFill(k) if k == fill))
+                    .is_some());
+            }
+            assert!(a.chrome_hit(&|x| matches!(x, Action::Apply)).is_some());
+            assert!(a.chrome_hit(&|x| matches!(x, Action::Cancel)).is_some());
+        }
+        a.smoke_tap(&|x| matches!(x, Action::Apply));
+        assert!(a.prompt.is_none(), "{}", a.status);
+        assert!(
+            a.status
+                .starts_with("Remapped 2 panels from the view to KITT1.PIC, 256"),
+            "{}",
+            a.status
+        );
+        assert_eq!(a.doc.changed_count(), 2, "the SH and the new PIC");
+        let at = a.doc.archive.find("KITT1.PIC").unwrap();
+        let bytes = a.doc.archive.entries[at].read().unwrap();
+        assert!(picture::is_retail_texture(&bytes));
+        let new = a.smoke_pic("KITT1.PIC");
+        assert_eq!([new.width as u32, new.height as u32], size);
+        assert!(
+            a.doc.archive.find("KITT1.ORG").is_none(),
+            "no backup until painted"
+        );
+        assert!(
+            a.textures.contains_key("KITT1.PIC"),
+            "renders from the copy"
+        );
+        let m = a.model_for_paint().unwrap();
+        let moved = a.panel_offsets();
+        assert_eq!(moved.len(), 2, "the selection follows the faces");
+        assert!(moved.iter().all(|o| m
+            .faces
+            .iter()
+            .any(|f| f.offset == *o && f.texture == "KITT1.PIC")));
+        let now = look(&a);
+        let same = before.iter().zip(&now).filter(|(x, y)| x == y).count();
+        assert!(same * 10 >= before.len() * 8, "{before:?} {now:?}");
+        let remapped = a.doc.archive.bytes().unwrap();
+        // Painting the remapped panel changes only the new PIC.
+        a.act(Action::ModelPaint);
+        a.brush = 7;
+        let p = side[0].1;
+        a.smoke_press(p[0], p[1], false);
+        assert!(a.status.starts_with("Paint stroke applied"), "{}", a.status);
+        assert_ne!(a.smoke_pic("KITT1.PIC").pixels, new.pixels);
+        assert_eq!(a.smoke_pic("KIT.PIC").pixels, kit.pixels);
+        assert!(a.doc.archive.find("KITT1.ORG").is_some());
+        assert!(a.doc.archive.find("KIT.ORG").is_none());
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), remapped);
+        a.act(Action::ModelPaint);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original, "one undo step");
+        // Blank: the whole sheet takes the panels' dominant index.
+        pick(&mut a);
+        a.smoke_tap(&|x| matches!(x, Action::FaceTexture(TEX_REMAP)));
+        a.smoke_tap(&|x| matches!(x, Action::RemapFill(1)));
+        assert_eq!(a.ed.remap.fill, 1);
+        a.key(Key::Enter, false, false);
+        assert!(a.status.contains("blank, was KIT.PIC"), "{}", a.status);
+        let blank = a.smoke_pic("KITT1.PIC");
+        assert!(blank.pixels.iter().all(|x| *x == blank.pixels[0]));
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), original);
+        // Seen from the front the panels are edge-on: refused, no change.
+        pick(&mut a);
+        a.key(Key::Char('1'), false, false);
+        a.smoke_tap(&|x| matches!(x, Action::FaceTexture(TEX_REMAP)));
+        assert!(a.prompt.is_none());
+        assert!(
+            a.status.contains("turn the view to face the panel"),
+            "{}",
+            a.status
+        );
+        assert!(!a.doc.dirty());
+        // Edit Mesh takes the same faces in face select, Mesh menu included.
+        a.act(Action::MeshMode);
+        assert!(a.mesh_edit && a.ed.face_select);
+        assert_eq!(a.texture_faces().len(), 2);
+        a.yaw = 90;
+        a.smoke_menu_pick(chrome::MENU_MESH, &|x| {
+            matches!(x, Action::FaceTexture(TEX_REMAP))
+        });
+        assert!(
+            matches!(
+                a.prompt.as_ref().map(|p| &p.kind),
+                Some(PromptKind::RemapView)
+            ),
+            "{}",
+            a.status
+        );
+        a.key(Key::Escape, false, false);
+        a.act(Action::MeshMode);
+        assert_eq!(a.panel_offsets().len(), 2, "back out with the faces");
+        // Paint workspace: the model preview picks panels too.
+        a.key(Key::Escape, false, false);
+        let kit_entry = a.doc.archive.find("KIT.PIC").unwrap();
+        a.open_texture(kit_entry);
+        assert!(a.mode == Mode::Media);
+        let rect = a
+            .chrome_hit(&|x| matches!(x, Action::PanelPick(_)))
+            .expect("the Paint workspace model preview");
+        let mut found: Vec<(usize, [i32; 2])> = Vec::new();
+        'scan: for y in (rect[1] + 20..rect[1] + rect[3]).step_by(9) {
+            for x in (rect[0] + 4..rect[0] + rect[2]).step_by(9) {
+                if let Some((f, _)) = a.preview_hit(rect, x, y) {
+                    if !found.iter().any(|(g, _)| *g == f) {
+                        found.push((f, [x, y]));
+                        if found.len() == 2 {
+                            break 'scan;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(found.len(), 2, "two panels in the preview");
+        a.smoke_press(found[0].1[0], found[0].1[1], false);
+        a.smoke_press(found[1].1[0], found[1].1[1], true);
+        assert_eq!(a.panel_offsets().len(), 2);
+        assert!(super::media::shows_text(&mut a, "Remap 2 panels from view"));
+        a.key(Key::Escape, false, false);
+        assert!(a.panel_offsets().is_empty());
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
     }
 }

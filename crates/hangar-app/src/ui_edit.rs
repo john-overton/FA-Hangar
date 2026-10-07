@@ -64,6 +64,8 @@ pub(super) struct EditState {
     pub mesh_pending: Option<Pending>,
     /// The Assign texture dialog.
     pub assign: super::texture_ui::AssignDraft,
+    /// The Remap from view dialog.
+    pub remap: super::texture_ui::RemapDraft,
     /// Faces drawn from Hangar texture assignments in the shown shape.
     pub assigned: super::texture_ui::AssignedCache,
 }
@@ -118,15 +120,21 @@ impl App {
     }
     /// Reselect by stored offset after the model was rebuilt.
     pub(super) fn repick(&mut self, offsets: &[usize]) {
+        // Selected faces (Edit Mesh face select and the panels picked
+        // outside it) keep the offsets the shown model still draws.
+        let mut drawn: Vec<usize> = self
+            .model_for_paint()
+            .map(|m| m.faces.iter().map(|f| f.offset).collect())
+            .unwrap_or_default();
+        drawn.sort_unstable();
+        self.ed
+            .mesh_faces
+            .retain(|o| drawn.binary_search(o).is_ok());
         let Some(model) = &self.model else {
             self.mesh_vertices.clear();
-            self.ed.mesh_faces.clear();
             return;
         };
         if self.ed.face_select {
-            self.ed
-                .mesh_faces
-                .retain(|o| model.faces.iter().any(|f| f.offset == *o));
             self.sync_face_vertices();
             return;
         }

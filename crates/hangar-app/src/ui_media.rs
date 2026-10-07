@@ -420,10 +420,13 @@ impl App {
             .cloned();
         let entry = self.model_entry.or(self.context_entry);
         let face = self.selected_face;
+        // The selected panels stay selected on the opened texture's model.
+        let panels = core::mem::take(&mut self.ed.mesh_faces);
         self.select_entry(index);
         self.context_model = m.map(Box::new);
         self.context_entry = entry;
         self.selected_face = face;
+        self.ed.mesh_faces = panels;
         self.refresh();
         self.mode = Mode::Media;
         self.dock = 3;
@@ -640,9 +643,23 @@ impl App {
                 }
             }
         }
-        if self.mode == Mode::Model && (self.mesh_edit || self.animation_tool) {
+        // Selected faces: amber edges and an amber-deep fill. Outside Edit
+        // Mesh and Parts the selected panels fill only while no paint tool is
+        // on, so strokes stay visible.
+        let editing = self.mode == Mode::Model && (self.mesh_edit || self.animation_tool);
+        let (selection, fill) = if editing {
+            (self.selected_faces(), true)
+        } else {
+            let painting = if self.mode == Mode::Model {
+                self.model_paint
+            } else {
+                self.paint_enabled
+            };
+            (self.panel_indices(), !painting)
+        };
+        if !selection.is_empty() {
             let mut picked = vec![false; m.faces.len()];
-            for f in self.selected_faces() {
+            for f in selection {
                 if let Some(p) = picked.get_mut(f) {
                     *p = true;
                 }
@@ -663,7 +680,11 @@ impl App {
                             || [i - 1, i + 1, i - w, i + w]
                                 .iter()
                                 .any(|j| frame.faces[*j] != frame.faces[i]);
-                        out[i] = if edge { c::AMBER.0 } else { c::AMBER_DEEP.0 };
+                        if edge {
+                            out[i] = c::AMBER.0;
+                        } else if fill {
+                            out[i] = c::AMBER_DEEP.0;
+                        }
                     }
                 }
                 frame.pixels = out;
@@ -692,11 +713,19 @@ impl App {
         blit(o, [x, y, w, h], &frame.pixels, rw, rh);
     }
     pub(super) fn model_hit(&self, x: i32, y: i32) -> Option<(usize, [i32; 2])> {
-        let l = self.left() + 1;
-        let top = 54;
-        let w = self.right() - self.left() - 2;
-        let h = self.dock_y() - 54;
-        if x < l || y < top || x >= l + w || y >= top + h {
+        let rect = [
+            self.left() + 1,
+            54,
+            self.right() - self.left() - 2,
+            self.dock_y() - 54,
+        ];
+        self.preview_hit(rect, x, y)
+    }
+    /// The face and texel under `(x, y)` in a model view drawn by
+    /// `draw_model` into `rect`: the raster's face buffer, as drawn.
+    pub(super) fn preview_hit(&self, rect: [i32; 4], x: i32, y: i32) -> Option<(usize, [i32; 2])> {
+        let [l, top, w, h] = rect;
+        if w <= 0 || h <= 0 || x < l || y < top || x >= l + w || y >= top + h {
             return None;
         }
         let rw = (w as usize).min(512);
@@ -708,6 +737,26 @@ impl App {
         } else {
             Some((f.faces[i], f.uv[i]))
         }
+    }
+    /// The colour the main viewport draws at `(x, y)`, for smoke checks.
+    pub(super) fn model_pixel(&self, x: i32, y: i32) -> Option<u32> {
+        let (l, top) = (self.left() + 1, 54);
+        let (w, h) = (self.right() - self.left() - 2, self.dock_y() - 54);
+        if x < l || y < top || x >= l + w || y >= top + h {
+            return None;
+        }
+        let rw = (w as usize).min(512);
+        let rh = (h as usize * rw / w as usize).max(1);
+        let f = self.render_model(rw, rh);
+        Some(
+            f.pixels[((y - top) as usize * f.h / h as usize) * f.w
+                + (x - l) as usize * f.w / w as usize],
+        )
+    }
+    /// A click on the Paint workspace's model preview selects panels.
+    pub(super) fn preview_click(&mut self, rect: [i32; 4], x: i32, y: i32, shift: bool) {
+        let face = self.preview_hit(rect, x, y).map(|(f, _)| f);
+        self.panel_click(face, shift);
     }
     pub(super) fn paint_model_hit(&mut self, face: usize, mut uv: [i32; 2]) {
         if self.selected_face != Some(face) {
@@ -1171,6 +1220,19 @@ impl App {
                     );
                 }
             }
+            let panels = self.panel_offsets().len();
+            if panels > 0 {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.button_ex(
+                        rect,
+                        Btn::new(&format!(
+                            "Remap {} from view\u{2026}",
+                            view::count(panels, "panel", "panels")
+                        )),
+                        Action::FaceTexture(texture_ui::TEX_REMAP),
+                    );
+                }
+            }
             if self.pic.is_some() {
                 if let Some(note) = &self.original_note {
                     original_rows(o, &mut s, note);
@@ -1261,6 +1323,7 @@ impl App {
                 if let Some(rect) = o.wide(&mut s, 150) {
                     self.draw_model(o, rect[0], rect[1], rect[2], rect[3]);
                     o.zoom_rect = Some(rect);
+                    o.hit(rect, Action::PanelPick(rect));
                 }
             }
             o.panel_end(&mut s);
