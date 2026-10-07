@@ -321,9 +321,38 @@ impl App {
         a.select_entry(a.doc.archive.find("DEMO.NT").unwrap());
         assert_eq!(a.hp_context.as_ref().unwrap().stations.len(), 2);
         a.act(Action::Hardpoints);
-        a.act(Action::StationSlew);
+        let find = |a: &App, predicate: &dyn Fn(Action) -> bool| {
+            a.layout()
+                .hits
+                .into_iter()
+                .rev()
+                .find(|h| predicate(h.action))
+                .map(|h| h.rect)
+                .expect("Station control missing")
+        };
+        let press = |a: &mut App, r: [i32; 4], dx: i32| {
+            let (x, y) = (r[0] + r[2] / 2, r[1] + r[3] / 2);
+            a.motion(x, y, false);
+            a.click(x, y, 1, true);
+            a.motion(x + dx, y, false);
+            a.click(x + dx, y, 1, false);
+        };
+        let slew = find(&a, &|x| matches!(x, Action::StationSlew(true)));
+        press(&mut a, slew, 0);
         assert!(a.hp_slew);
-        a.station_value(6, "15000").unwrap();
+        // The heading limit is a NumberField: a click types the exact value.
+        use super::widgets::NumberTarget;
+        let limit = find(&a, &|x| {
+            matches!(x, Action::Number(NumberTarget::Station(6)))
+        });
+        press(&mut a, limit, 0);
+        assert!(a.prompt.is_some());
+        a.key(Key::Char('a'), true, false);
+        for ch in "15000".chars() {
+            a.key(Key::Char(ch), false, false);
+        }
+        a.key(Key::Enter, false, false);
+        assert!(a.prompt.is_none(), "{}", a.status);
         assert_eq!(
             a.hp_context
                 .as_ref()
@@ -337,6 +366,33 @@ impl App {
             "15000"
         );
         a.act(Action::Undo);
+        // The X location is an axis-coloured vector NumberField: scrub, then
+        // Backspace returns the operand on disk; undo restores each step.
+        a.doc.mark_saved();
+        a.refresh();
+        let before = a.doc.archive.bytes().unwrap();
+        let t = NumberTarget::Station(1);
+        let x0 = a.number_spec(t).unwrap().value;
+        let field = find(&a, &|x| matches!(x, Action::Number(n) if n == t));
+        assert!(a.layout().canvas.commands.iter().any(|d| matches!(d,
+            Draw::Text(_, _, s, color, _) if s == "X" && *color == c::AXIS_X.0)));
+        press(&mut a, field, 12);
+        assert_eq!(a.number_spec(t).unwrap().value, x0 + 6);
+        assert_eq!(
+            a.hp_context.as_ref().unwrap().stations[0].position[0] as i64,
+            x0 + 6
+        );
+        a.motion(field[0] + field[2] / 2, field[1] + field[3] / 2, false);
+        a.key(Key::Backspace, false, false);
+        assert_eq!(a.number_spec(t).unwrap().value, x0);
+        assert_eq!(a.doc.archive.bytes().unwrap(), before);
+        a.act(Action::Undo);
+        assert_eq!(a.number_spec(t).unwrap().value, x0 + 6);
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), before);
+        let next = find(&a, &|x| matches!(x, Action::HardpointStep(1)));
+        press(&mut a, next, 0);
+        assert_eq!(a.hp_selected, 1);
         let mut shape = model::demo_shape();
         let mut code = vec![0xc4, 0, 10, 0, 30, 0, 20, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0];
         code.extend(&shape[256..]);

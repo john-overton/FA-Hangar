@@ -1317,22 +1317,6 @@ impl Layout {
         );
         self.hit(rect, action);
     }
-    /// Vector field (`th-vec`): X, Y, Z NumberFields stacked, axis-coloured
-    /// labels. `rect` is the first component; returns the total height.
-    pub(super) fn vector(&mut self, rect: [i32; 4], parts: &[Number; 3]) -> i32 {
-        for (k, n) in parts.iter().enumerate() {
-            self.number(
-                [
-                    rect[0],
-                    rect[1] + k as i32 * m::FIELD_H,
-                    rect[2],
-                    m::FIELD_H,
-                ],
-                n,
-            );
-        }
-        3 * m::FIELD_H
-    }
 }
 /// Panel surface, keyline, chevron, icon and title over `rect`, cut to the
 /// visible `clip` rows. The header shows `gm-700` when hovered.

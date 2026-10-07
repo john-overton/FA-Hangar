@@ -81,7 +81,7 @@ pub(super) enum Action {
     PaintLock,
     Isolate,
     Hardpoints,
-    StationSlew,
+    StationSlew(bool),
     HardpointVisibility,
     HardpointSelect(usize),
     HardpointStep(i32),
@@ -784,7 +784,7 @@ impl App {
                 self.decal_active = false;
                 self.decal_draft = None;
             }
-            Action::StationSlew => self.hp_slew = !self.hp_slew,
+            Action::StationSlew(slew) => self.hp_slew = slew,
             Action::HardpointVisibility => self.hp_visible = !self.hp_visible,
             Action::HardpointSelect(i) => {
                 self.hp_selected = i;

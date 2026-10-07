@@ -1,4 +1,4 @@
-use super::view::{label_fit, text_fit, Action, Layout};
+use super::view::{text_fit, Action, Icon, Layout};
 use super::*;
 use hangar_core::hardpoints::{self, Station};
 
@@ -291,125 +291,186 @@ impl App {
         self.status = "Station updated / Ctrl+Z undo".into();
         Ok(())
     }
+    /// Control for station column `column`: a NumberField, or a text field
+    /// that opens the type prompt for `$hex` operands.
+    fn station_control(&self, o: &mut Layout, rect: [i32; 4], column: usize, label: &str) {
+        use super::widgets::{Number, NumberTarget};
+        let t = NumberTarget::Station(column);
+        match self.number_spec(t) {
+            Some(spec) => o.number(
+                rect,
+                &Number {
+                    target: t,
+                    spec,
+                    label,
+                    unit: "",
+                    locked: false,
+                    axis: (1..=3).contains(&column).then(|| column - 1),
+                },
+            ),
+            None => {
+                let value = self
+                    .hp_context
+                    .as_ref()
+                    .and_then(|c| {
+                        let s = c.stations.get(self.hp_selected)?;
+                        c.brf.fields.get(*s.fields.get(column)?)
+                    })
+                    .map_or(String::new(), |f| f.value.clone());
+                o.text_field(
+                    rect,
+                    &format!("{label} {value}"),
+                    false,
+                    Action::StationField(column),
+                );
+            }
+        }
+    }
     pub(super) fn hardpoint_inspector(&self, o: &mut Layout) {
-        let (r, w, h) = (self.right(), self.width - self.right(), self.height);
-        o.canvas
-            .label(r + 12, 44, "STATIONS / source coordinates", c::INK);
+        use super::widgets::{pane, Btn, Check};
+        use theme::{metric as m, space};
+        self.inspector_header(o, None);
+        let mut s = self.inspector_stack(m::MENUBAR_H + m::EDITOR_HEADER_H, 0);
         let Some(c) = &self.hp_context else {
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                85,
-                w - 24,
-                "Select an owning PT or NT object.",
-                c::INK_MUTED,
-            );
+            if self.pane(o, &mut s, pane::STATION, "Stations", Icon::Hardpoint) {
+                o.stack_notice(
+                    &mut s,
+                    super::widgets::Tone::Neutral,
+                    "Select the PT or NT that owns this shape to edit its stations.",
+                );
+            }
+            o.panel_end(&mut s);
+            o.stack_end(s);
             return;
         };
-        text_fit(
-            &mut o.canvas,
-            r + 12,
-            75,
-            w - 24,
-            &self.doc.archive.entries[c.entry].name,
-            c::STEEL,
-        );
-        o.button([r + 12, 88, 50, 24], "<", Action::HardpointStep(-1), false);
-        text_fit(
-            &mut o.canvas,
-            r + 72,
-            105,
-            w - 138,
-            &format!("HP {} / {}", self.hp_selected + 1, c.stations.len()),
-            c::AMBER,
-        );
-        o.button(
-            [self.width - 62, 88, 50, 24],
-            ">",
-            Action::HardpointStep(1),
-            false,
-        );
-        if let Some(s) = c.stations.get(self.hp_selected) {
-            let changed = |column: usize| {
-                let f = &c.brf.fields[s.fields[column]];
-                c.saved
-                    .as_ref()
-                    .and_then(|b| b.fields.iter().find(|old| old.label == f.label))
-                    .is_none_or(|old| old.value != f.value || old.kind != f.kind)
-            };
-            let pos = self.hp_drag.as_ref().map_or(s.position, |d| d.position);
-            for (k, label) in ["X", "Y", "Z"].iter().enumerate() {
-                o.button(
-                    [r + 12, 124 + k as i32 * 28, w - 24, 24],
-                    &format!("{label}  {}", pos[k]),
-                    Action::StationField(k + 1),
-                    changed(k + 1) || self.hp_drag.is_some(),
+        let station = c.stations.get(self.hp_selected);
+        if self.pane(o, &mut s, pane::STATION, "Station", Icon::Hardpoint) {
+            o.info(&mut s, "Owner", &self.doc.archive.entries[c.entry].name, "");
+            if let Some([x, y, w, h]) = o.wide(&mut s, m::BUTTON_H) {
+                o.button_ex(
+                    [x, y, h, h],
+                    Btn::icon(Icon::ChevronLeft),
+                    Action::HardpointStep(-1),
+                );
+                o.button_ex(
+                    [x + w - h, y, h, h],
+                    Btn::icon(Icon::ChevronRight),
+                    Action::HardpointStep(1),
+                );
+                let title = if c.stations.is_empty() {
+                    "No stations".to_string()
+                } else {
+                    format!("HP{} of {}", self.hp_selected + 1, c.stations.len())
+                };
+                let tw = text_width(&title, Style::Strong);
+                o.canvas.styled(
+                    x + (w - tw) / 2,
+                    super::widgets::baseline(y, h, Style::Strong),
+                    &title,
+                    c::AMBER,
+                    Style::Strong,
                 );
             }
-            for (row, (column, label)) in (if self.hp_slew {
-                [
-                    (4, "Heading"),
-                    (5, "Pitch"),
-                    (6, "Heading limit"),
-                    (7, "Pitch limit"),
-                ]
-            } else {
-                [
-                    (9, "Weight class"),
-                    (10, "Max items"),
-                    (11, "Location code"),
-                    (0, "Flags"),
-                ]
-            })
-            .iter()
-            .enumerate()
-            {
-                o.button(
-                    [r + 12, 212 + row as i32 * 28, w - 24, 24],
-                    &format!("{label}  {}", c.brf.fields[s.fields[*column]].value),
-                    Action::StationField(*column),
-                    changed(*column),
+            if let Some(st) = station {
+                o.stack_subhead(&mut s, "Location");
+                for (k, axis) in ["X", "Y", "Z"].iter().enumerate() {
+                    // Joined vector: three fields with no gap between them.
+                    if s.collapsed() {
+                        break;
+                    }
+                    if let Some(rect) = s.take(m::FIELD_H) {
+                        self.station_control(o, rect, k + 1, axis);
+                    }
+                }
+                s.gap(space::SPACE_1);
+                if let Some(rect) = o.prop(&mut s, "Store") {
+                    o.select(
+                        rect,
+                        Some(Icon::Weapon),
+                        st.store.as_deref().unwrap_or("None"),
+                        Action::StationField(12),
+                        false,
+                    );
+                }
+            }
+        }
+        o.panel_end(&mut s);
+        if station.is_some() {
+            if self.pane(o, &mut s, pane::STATION_DATA, "Station data", Icon::Sliders) {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.segmented(
+                        rect,
+                        &[
+                            (
+                                Btn::new("Loadout").on(!self.hp_slew),
+                                Action::StationSlew(false),
+                            ),
+                            (Btn::new("Slew").on(self.hp_slew), Action::StationSlew(true)),
+                        ],
+                    );
+                }
+                let rows = if self.hp_slew {
+                    [
+                        (4, "Heading"),
+                        (5, "Pitch"),
+                        (6, "Heading limit"),
+                        (7, "Pitch limit"),
+                    ]
+                } else {
+                    [
+                        (9, "Weight class"),
+                        (10, "Max items"),
+                        (11, "Location code"),
+                        (0, "Flags"),
+                    ]
+                };
+                for (column, label) in rows {
+                    if let Some(rect) = o.prop(&mut s, label) {
+                        self.station_control(o, rect, column, "");
+                    }
+                }
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.button_ex(rect, Btn::new("All station fields"), Action::StationFields);
+                }
+            }
+            o.panel_end(&mut s);
+        }
+        if self.pane(o, &mut s, pane::STATIONS, "Stations", Icon::Hardpoint) {
+            for (title, icon, action) in [
+                ("Add station", Icon::Plus, Action::HardpointAdd(false)),
+                ("Duplicate station", Icon::Plus, Action::HardpointAdd(true)),
+            ] {
+                if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                    o.button_ex(rect, Btn::new(title).with_icon(icon), action);
+                }
+            }
+            if let Some(rect) = o.wide(&mut s, m::BUTTON_H) {
+                o.button_ex(
+                    rect,
+                    Btn::new("Remove station")
+                        .with_icon(Icon::Close)
+                        .danger()
+                        .enabled(station.is_some()),
+                    Action::HardpointRemove,
                 );
             }
-            o.button(
-                [r + 12, 330, w - 24, 26],
-                &format!("Store: {}", s.store.as_deref().unwrap_or("(none)")),
-                Action::StationField(12),
-                changed(8),
-            );
+            if let Some(rect) = o.wide(&mut s, m::ROW_H) {
+                o.checkbox_row(
+                    rect,
+                    Some(Icon::Eye),
+                    "Show markers",
+                    "",
+                    if self.hp_visible {
+                        Check::On
+                    } else {
+                        Check::Off
+                    },
+                    Action::HardpointVisibility,
+                );
+            }
         }
-        o.button(
-            [r + 12, 364, w - 24, 24],
-            if self.hp_slew {
-                "Slew angles / limits (stored values)"
-            } else {
-                "Loadout / station flags"
-            },
-            Action::StationSlew,
-            self.hp_slew,
-        );
-        label_fit(
-            &mut o.canvas,
-            r + 12,
-            404,
-            w - 24,
-            "Click to switch loadout / slew fields.",
-            c::INK_MUTED,
-        );
-        o.button(
-            [r + 12, 420, w - 24, 24],
-            "All station fields / slew limits",
-            Action::StationFields,
-            false,
-        );
-        for (offset, title, action) in [
-            (146, "Add station", Action::HardpointAdd(false)),
-            (115, "Duplicate station", Action::HardpointAdd(true)),
-            (84, "Remove station", Action::HardpointRemove),
-            (53, "Hide / show markers", Action::HardpointVisibility),
-        ] {
-            o.button([r + 12, h - offset, w - 24, 24], title, action, false);
-        }
+        o.panel_end(&mut s);
+        o.stack_end(s);
     }
 }
 /// Bounding-box centre and largest extent (at least 1) of a model's vertices.
