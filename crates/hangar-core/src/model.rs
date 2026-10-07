@@ -551,54 +551,40 @@ impl Model {
                 "Geometry edits must preserve source record topology/provenance",
             ));
         }
-        if original
+        let moved: Vec<bool> = original
             .vertices
             .iter()
             .zip(&self.vertices)
-            .all(|(a, b)| a.offset == b.offset && a.point == b.point)
-        {
+            .map(|(a, b)| a.point != b.point)
+            .collect();
+        if !moved.contains(&true) {
             return Ok(source.to_vec());
         }
         let mut out = source.to_vec();
-        for v in &self.vertices {
+        for (v, _) in self.vertices.iter().zip(&moved).filter(|(_, m)| **m) {
             for (j, n) in v.point.iter().enumerate() {
                 out[v.offset + j * 2..v.offset + j * 2 + 2]
                     .copy_from_slice(&(*n as i16).to_le_bytes());
             }
         }
-        for f in &self.faces {
-            if f.sub & 0x60 == 0 {
+        // Only faces with a moved vertex own changed normal/centre bytes. Recompute from
+        // positions (never from a caller's cached normal) and keep the stored normal when
+        // every vertex triple is degenerate.
+        let mut updated = self.clone();
+        updated.refresh_normals(&original);
+        for (i, f) in updated.faces.iter().enumerate() {
+            let Some(normal) = f.normal else {
+                continue;
+            };
+            if !f.indices.iter().any(|v| moved[*v]) {
                 continue;
             }
-            let pts: Vec<_> = f.indices.iter().map(|i| self.vertices[*i].point).collect();
-            let a = pts[0];
-            let b = pts[1];
-            let c = pts[2];
-            let u = [
-                b[0] as i64 - a[0] as i64,
-                b[1] as i64 - a[1] as i64,
-                b[2] as i64 - a[2] as i64,
-            ];
-            let v = [
-                c[0] as i64 - a[0] as i64,
-                c[1] as i64 - a[1] as i64,
-                c[2] as i64 - a[2] as i64,
-            ];
-            let mut n = [
-                u[1] * v[2] - u[2] * v[1],
-                u[2] * v[0] - u[0] * v[2],
-                u[0] * v[1] - u[1] * v[0],
-            ];
-            // Rescale before squaring to avoid overflow for wide 16-bit triangles.
-            let max = n.iter().map(|n| n.abs()).max().unwrap().max(1);
-            for x in &mut n {
-                *x = *x * 32765 / max;
-            }
-            let mag = isqrt(n.iter().map(|x| (x * x) as u64).sum()).max(1) as i64;
+            // Stored order is right, up, forward; the model uses right, forward, up.
             for (j, axis) in [0, 2, 1].into_iter().enumerate() {
-                let val = (n[axis] * 32765 / mag) as i16;
-                out[f.offset + 5 + j * 2..f.offset + 7 + j * 2].copy_from_slice(&val.to_le_bytes());
+                out[f.offset + 5 + j * 2..f.offset + 7 + j * 2]
+                    .copy_from_slice(&(normal[axis] as i16).to_le_bytes());
             }
+            let pts = self.face_points(i);
             for (j, axis) in [0, 2, 1].into_iter().enumerate() {
                 let val = pts.iter().map(|p| p[axis] as i64).sum::<i64>() / pts.len() as i64;
                 if f.flags & 2 != 0 {
@@ -617,6 +603,69 @@ impl Model {
         Self::parse(&out)?;
         Ok(out)
     }
+    fn face_points(&self, face: usize) -> Vec<[i32; 3]> {
+        self.faces[face]
+            .indices
+            .iter()
+            .map(|i| self.vertices[*i].point)
+            .collect()
+    }
+    /// Update cached normals of faces whose vertices differ from `before`, exactly as
+    /// `write` stores them, so previews cull the same faces the written shape will.
+    pub fn refresh_normals(&mut self, before: &Model) {
+        for i in 0..self.faces.len() {
+            let f = &self.faces[i];
+            if f.normal.is_none()
+                || !f.indices.iter().any(|v| {
+                    before
+                        .vertices
+                        .get(*v)
+                        .is_none_or(|b| b.point != self.vertices[*v].point)
+                })
+            {
+                continue;
+            }
+            let stored = before.faces.get(i).and_then(|b| b.normal).or(f.normal);
+            self.faces[i].normal = face_normal(&self.face_points(i)).or(stored);
+        }
+    }
+}
+/// Unit normal (scale 32765) in model order right/forward/up, from the first
+/// non-degenerate vertex triple. Retail FA faces store (c-a)x(b-a): the opposite of
+/// the right-handed cross product for their vertex order. None if all are collinear.
+pub fn face_normal(points: &[[i32; 3]]) -> Option<[i32; 3]> {
+    let n = points.len();
+    let sub = |a: [i32; 3], b: [i32; 3]| -> [i64; 3] {
+        core::array::from_fn(|k| b[k] as i64 - a[k] as i64)
+    };
+    for a in 0..n {
+        for b in a + 1..n {
+            for c in b + 1..n {
+                let u = sub(points[a], points[b]);
+                let v = sub(points[a], points[c]);
+                let mut n = [
+                    v[1] * u[2] - v[2] * u[1],
+                    v[2] * u[0] - v[0] * u[2],
+                    v[0] * u[1] - v[1] * u[0],
+                ];
+                // Rescale before squaring to avoid overflow for wide 16-bit triangles.
+                let max = n.iter().map(|n| n.abs()).max().unwrap();
+                if max == 0 {
+                    continue;
+                }
+                for x in &mut n {
+                    *x = *x * 32765 / max;
+                }
+                let mag = isqrt(n.iter().map(|x| (x * x) as u64).sum()).max(1) as i64;
+                return Some(core::array::from_fn(|k| {
+                    ((n[k] * 32765 + n[k].signum() * mag / 2) / mag) as i32
+                }));
+            }
+        }
+    }
+    None
+}
+impl Model {
     /// Change only reviewed FC palette bytes, never geometry/links/relocations.
     /// Scope is untextured faces reached by this static-pose traversal.
     pub fn retarget_texture(source: &[u8], from: &str, to: &str) -> Result<(Vec<u8>, usize)> {
@@ -733,6 +782,10 @@ pub fn demo_shape() -> Vec<u8> {
         c.extend(face);
     }
     c.push(0);
+    module(c)
+}
+/// Minimal PL module around a synthetic CODE section (file offset 256).
+fn module(c: Vec<u8>) -> Vec<u8> {
     let mut b = vec![0; 256];
     b[..2].copy_from_slice(b"MZ");
     b[60..64].copy_from_slice(&64u32.to_le_bytes());
@@ -788,6 +841,113 @@ mod tests {
         b[256] = 0xff;
         b[257] = 0xff;
         assert!(Model::parse(&b).is_err());
+    }
+    /// FC with stored normal (right, up, forward words) and a byte or word centre.
+    fn lit_face(
+        sub: u8,
+        byte_centre: bool,
+        normal: [i16; 3],
+        centre: [i16; 3],
+        v: &[u8],
+    ) -> Vec<u8> {
+        let mut f = vec![0xfc, sub, if byte_centre { 2 } else { 0 }, 32, 0];
+        for n in normal {
+            f.extend(n.to_le_bytes());
+        }
+        for n in centre {
+            if byte_centre {
+                f.push(n as i8 as u8);
+            } else {
+                f.extend(n.to_le_bytes());
+            }
+        }
+        f.push(v.len() as u8);
+        f.extend(v);
+        f
+    }
+    fn lit_shape() -> Vec<u8> {
+        let mut c = vec![0x82, 0, 6, 0, 0, 0];
+        for p in [
+            [0i16, 0, 0],
+            [10, 0, 0],
+            [0, 10, 0],
+            [20, 0, 0],
+            [0, 0, 10],
+            [30, 0, 0],
+        ] {
+            for x in p {
+                c.extend(x.to_le_bytes());
+            }
+        }
+        // Deliberately stale stored values prove which faces are rewritten.
+        c.extend(lit_face(0x41, true, [1, 2, 3], [4, 5, 6], &[0, 1, 2]));
+        c.extend(lit_face(0x41, false, [1, 2, 3], [4, 5, 6], &[0, 3, 4]));
+        c.extend(lit_face(0x41, true, [7, 8, 9], [1, 2, 3], &[1, 2, 4]));
+        c.extend(lit_face(0x61, false, [11, 12, 13], [4, 5, 6], &[1, 3, 5]));
+        c.extend(lit_face(0x40, false, [1, 2, 3], [4, 5, 6], &[0, 1, 3, 2]));
+        c.push(0);
+        module(c)
+    }
+    fn face_bytes(b: &[u8], m: &Model, i: usize) -> Vec<u8> {
+        b[m.faces[i].offset..m.faces[i].end].to_vec()
+    }
+    fn words(b: &[u8], at: usize) -> [i16; 3] {
+        core::array::from_fn(|k| i16::from_le_bytes([b[at + k * 2], b[at + k * 2 + 1]]))
+    }
+    #[test]
+    fn write_updates_only_faces_with_moved_vertices() {
+        let b = lit_shape();
+        let m = Model::parse(&b).unwrap();
+        assert!(m.writable);
+        assert_eq!(m.faces.len(), 5);
+        assert_eq!(m.write(&b).unwrap(), b);
+        let mut edit = m.clone();
+        edit.vertices[0].point = [-5, 0, 0];
+        let out = edit.write(&b).unwrap();
+        let f = |i: usize| m.faces[i].offset;
+        // Face 0: plane up=0 wound (0,0)->(10,0)->(0,10); retail normal points down.
+        assert_eq!(words(&out, f(0) + 5), [0, -32765, 0]);
+        assert_eq!(&out[f(0) + 11..f(0) + 14], &[1, 0, 3]);
+        // Face 1: word centre, normal along +forward (stored third).
+        assert_eq!(words(&out, f(1) + 5), [0, 0, 32765]);
+        assert_eq!(words(&out, f(1) + 11), [5, 3, 0]);
+        // Faces 2 and 3 do not use vertex 0: every byte is unchanged.
+        assert_eq!(face_bytes(&out, &m, 2), face_bytes(&b, &m, 2));
+        assert_eq!(face_bytes(&out, &m, 3), face_bytes(&b, &m, 3));
+        // Face 4: first three vertices are collinear; the next triple decides.
+        assert_eq!(words(&out, f(4) + 5), [0, -32765, 0]);
+        assert_eq!(words(&out, f(4) + 11), [6, 0, 2]);
+        let changed: Vec<_> = (0..b.len()).filter(|i| b[*i] != out[*i]).collect();
+        assert!(changed
+            .iter()
+            .all(
+                |i| (m.vertices[0].offset..m.vertices[0].offset + 6).contains(i)
+                    || [0, 1, 4]
+                        .iter()
+                        .any(|n| (f(*n) + 5..m.faces[*n].end).contains(i))
+            ));
+        let reread = Model::parse(&out).unwrap();
+        assert_eq!(reread.vertices[0].point, [-5, 0, 0]);
+        assert_eq!(reread.faces[0].normal, Some([0, 0, -32765]));
+    }
+    #[test]
+    fn degenerate_faces_keep_stored_normals_and_byte_centres_are_bounded() {
+        let b = lit_shape();
+        let m = Model::parse(&b).unwrap();
+        let mut edit = m.clone();
+        edit.vertices[1].point = [11, 0, 0];
+        let out = edit.write(&b).unwrap();
+        let at = m.faces[3].offset;
+        assert_eq!(words(&out, at + 5), [11, 12, 13]);
+        assert_eq!(words(&out, at + 11), [20, 0, 0]);
+        let mut edit = m.clone();
+        edit.vertices[0].point = [400, 0, 0];
+        assert!(edit.write(&b).unwrap_err().contains("byte width"));
+        assert_eq!(face_normal(&[[0, 0, 0], [1, 0, 0], [2, 0, 0]]), None);
+        assert_eq!(
+            face_normal(&[[0, 0, 0], [30000, 0, 0], [0, 30000, 0]]),
+            Some([0, 0, -32765])
+        );
     }
 }
 

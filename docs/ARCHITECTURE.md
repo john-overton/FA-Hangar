@@ -142,7 +142,11 @@ SH vertex writing accepts the understood static subset of vertex buffers,
 faces, texture/fog selection, relative jumps and source strings. A spatial header, other control-flow,
 vertex-normal record or any other skipped record marks the pose read-only.
 The writer preserves record sizes, rejects coordinate/byte-center overflow,
-and updates face centers/normals where present. General aircraft do not qualify.
+and updates centers/normals only of faces whose vertices moved. Centers are the
+truncated vertex average; normals are unit vectors (32765) from the first
+non-degenerate vertex triple with retail winding (c-a)x(b-a) in right/forward/up
+order, stored right/up/forward. A face with no such triple keeps its stored
+normal. General aircraft do not qualify.
 The synthetic demo is an editor fixture, not a proven game-loadable aircraft.
 
 A complete SH writer must preserve every branch, LOD, state switch, local

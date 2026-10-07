@@ -5,6 +5,14 @@ the root [`Cargo.toml`](../Cargo.toml). What was verified for each version is
 recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
+## Unreleased
+
+- SH geometry writes now update the stored normal and centre only of faces
+  whose vertices moved; every other face keeps its bytes. Recomputed normals
+  use the winding found in retail shapes (previously they were written
+  inverted), skip collinear leading vertices, and keep the stored normal when
+  a face has no non-degenerate vertex triple.
+
 ## 0.8.2
 
 Corrects generated-panel SH layout and provides repair for older painted LIBs
