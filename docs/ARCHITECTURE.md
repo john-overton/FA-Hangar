@@ -839,9 +839,10 @@ name; a private name without the ID keeps its name. `.ORG` companions follow
 their PICs. Every BRF/module entry in the LIB is rewritten through the same
 bounded slot rules as resource rename, so the self reference and other
 objects' references follow. Refusals: a new name already present (and not
-leaving), longer than 8.3, two names colliding, a slot too small, or a
-name-derived HUD that is shared. The plan applies as one transaction, with
-stale-entry checks; undo restores the exact bytes and a same-ID rename is
+leaving), longer than 8.3, two names colliding, a slot too small, a
+name-derived HUD that is shared, or a BRF/module whose references cannot be
+read but whose bytes name a renamed file. The plan applies as one
+transaction, with stale-entry checks; undo restores the exact bytes and a same-ID rename is
 empty. Missions and unparsed text are not rewritten; the review counts the
 ones that name the aircraft and warns that other LIBs are not searched.
 Same-stem files with no stored link (`F14.PTS`, `F14.HUD`) keep their names.

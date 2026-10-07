@@ -598,7 +598,7 @@ Formatting, strict Clippy, all tests and the smoke test pass. `App` was
 over the 4 KiB frame the x86_64 build cannot probe; the export review's
 unresolved-name state moved into a box (3,808 bytes) and the build links.
 Collecting name sets into a `BTreeSet` pulled in the stable sort; the names
-are inserted one by one. The PE audit reports 1,342,464 bytes (32-bit) and
-1,536,512 bytes (64-bit) with the same 60 reviewed imports. Neither aircraft
+are inserted one by one. The PE audit reports 1,343,488 bytes (32-bit) and
+1,537,536 bytes (64-bit) with the same 60 reviewed imports. Neither aircraft
 has been listed or flown in the original game yet; steps are in
 WINDOWS-TEST.md.

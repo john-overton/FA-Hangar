@@ -415,7 +415,8 @@ the aircraft's own `F14.PT` string), module filenames and texture names, each
 within its stored slot. The review refuses, listing why, when a new name is
 already in the LIB, does not fit an 8.3 name, or does not fit the compiled
 slot that stores it, or when the HUD the game finds by the aircraft's name is
-shared with another aircraft. Choose a shorter or different ID.
+shared with another aircraft, or when a definition Hangar cannot read names
+a renamed file. Choose a shorter or different ID.
 
 The review warns: **Missions and other LIBs that refer to F14.PT by name
 will not find the renamed aircraft.** It also counts the missions and other

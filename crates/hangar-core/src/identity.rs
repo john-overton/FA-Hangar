@@ -563,10 +563,22 @@ pub fn rename(archive: &Archive, aircraft: &str, new_id: &str) -> Result<Rename>
             Err(error) => out.refusals.push(error),
         }
     }
+    // A resource whose references cannot be read must not name a renamed file.
     for name in &own.unreadable {
-        out.notes.push(format!(
-            "{name}: references could not be read; it is not rewritten"
-        ));
+        let bytes = archive
+            .find(name)
+            .and_then(|i| archive.entries[i].read().ok());
+        match all
+            .iter()
+            .find(|(old, _)| bytes.as_ref().is_none_or(|b| mentions(b, old)))
+        {
+            Some((old, _)) => out.refusals.push(format!(
+                "{name}: its references cannot be read and it may name {old}"
+            )),
+            None => out.notes.push(format!(
+                "{name}: references could not be read; it names no renamed file"
+            )),
+        }
     }
     // Same-stem files no stored reference ties to the aircraft keep their names.
     for e in &archive.entries {
@@ -975,6 +987,19 @@ mod tests {
             plan.refusals
                 .iter()
                 .any(|r| r.contains("DEMOX.PIC exceeds a compiled filename slot (8 bytes)")),
+            "{:?}",
+            plan.refusals
+        );
+        // A definition whose references cannot be read must not name a renamed file.
+        let mut a = fixture();
+        let bad = b"[brent's_relocatable_format]\nstring \"DEMO_C.SH\"\nbogus x\nend\n";
+        a.entries.push(Entry::new("BAD.OT", bad.to_vec()).unwrap());
+        let plan = rename(&a, "DEMO.PT", "NEO").unwrap();
+        assert!(
+            plan.refusals
+                .iter()
+                .any(|r| r
+                    .contains("BAD.OT: its references cannot be read and it may name DEMO_C.SH")),
             "{:?}",
             plan.refusals
         );
