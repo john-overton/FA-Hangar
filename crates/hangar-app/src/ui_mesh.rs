@@ -1,5 +1,5 @@
-//! Initial SH edit-mode tools and transactional panel texture creation.
-use super::view::{border, label_fit, text_fit, Action, Layout};
+//! Edit Mesh vertex drags and transactional panel texture creation.
+use super::view::Action;
 use super::*;
 use hangar_core::shape_edit;
 pub(super) struct PanelPlan {
@@ -36,7 +36,6 @@ impl App {
         if let Some(repaired) = shape_edit::repair_panel_layout(&source)? {
             let panels = repaired.panels;
             self.doc.replace(entry, repaired.shape)?;
-            self.animation_state.clear();
             self.refresh();
             self.status = format!(
                 "Repaired {panels} generated panels / painted PICs preserved / one undo step"
@@ -142,29 +141,6 @@ impl App {
         self.panel_draft = Some(Box::new(plan));
         self.painting = true;
         Ok(())
-    }
-    pub(super) fn mesh_overlay(&self, o: &mut Layout) {
-        if !self.mesh_edit {
-            return;
-        }
-        let Some(model) = self.preview.as_ref().or(self.model.as_ref()) else {
-            return;
-        };
-        for (i, v) in model.vertices.iter().enumerate() {
-            let Some([x, y]) = self.hp_project(v.point) else {
-                continue;
-            };
-            if x < self.left() + 40 || x >= self.right() - 8 || y < 60 || y >= self.dock_y() - 10 {
-                continue;
-            }
-            let selected = self.mesh_vertices.contains(&i);
-            let c = if selected { c::AMBER } else { c::STEEL };
-            o.canvas.rect(x - 2, y - 2, 5, 5, c);
-            if selected {
-                border(&mut o.canvas, x - 4, y - 4, 9, 9, c);
-            }
-            o.hit([x - 5, y - 5, 11, 11], Action::MeshVertex(i));
-        }
     }
     pub(super) fn mesh_select(&mut self, i: usize) {
         self.mesh_vertices = vec![i];
@@ -288,17 +264,22 @@ impl App {
             {
                 return Err("Shape changed during drag".into());
             }
-            let bytes =
-                shape_edit::move_vertices(&d.original.read()?, &self.mesh_vertices, d.delta)?;
-            self.doc.replace(d.entry, bytes)?;
-            self.refresh();
-            self.status = "Vertices moved / one undo step".into();
+            let moved = d.model.transform_selection(
+                Transform::Translate(d.delta),
+                Some(&self.mesh_vertices),
+                [0; 3],
+            )?;
+            let n = self.commit_points(&d.model, &moved)?;
+            self.status = format!(
+                "{} moved / one undo step",
+                view::count(n, "stored vertex", "stored vertices")
+            );
         }
         Ok(())
     }
     /// Why vertex edits are unavailable, if they are.
     pub(super) fn mesh_blocked(&self) -> Option<String> {
-        let model = self.model.as_ref()?;
+        self.model.as_ref()?;
         if self.model_entry.is_none() {
             let owner = self
                 .external_model
@@ -315,7 +296,7 @@ impl App {
                 "Shape is stored in {owner}; switch to that LIB to edit vertices"
             ));
         }
-        (!model.writable).then(|| model.reason.clone())
+        None
     }
     pub(super) fn mesh_transform_prompt(&mut self, op: char) {
         if let Some(reason) = self.mesh_blocked() {
@@ -327,128 +308,6 @@ impl App {
             return;
         }
         self.transform_prompt(op);
-    }
-    /// A selects every vertex, or clears a complete selection.
-    pub(super) fn mesh_toggle_all(&mut self) {
-        let n = self.model.as_ref().map_or(0, |m| m.vertices.len());
-        if self.mesh_vertices.len() >= n {
-            self.mesh_vertices.clear();
-        } else {
-            self.mesh_vertices = (0..n).collect();
-        }
-    }
-    pub(super) fn mesh_inspector(&self, o: &mut Layout) {
-        let (r, w, h) = (self.right(), self.width - self.right(), self.height);
-        o.canvas
-            .label(r + 12, 44, "SH EDIT MODE / source records", c::INK);
-        let Some(model) = &self.model else {
-            return;
-        };
-        label_fit(
-            &mut o.canvas,
-            r + 12,
-            77,
-            w - 24,
-            &format!(
-                "{} vertices / {} faces",
-                model.vertices.len(),
-                model.faces.len()
-            ),
-            c::INK,
-        );
-        label_fit(
-            &mut o.canvas,
-            r + 12,
-            103,
-            w - 24,
-            &format!("{} decoded records", model.records.len()),
-            c::STEEL,
-        );
-        o.button(
-            [r + 12, 122, w - 24, 24],
-            "Select all / none (A)",
-            Action::MeshAll,
-            false,
-        );
-        if let Some(i) = self
-            .mesh_vertices
-            .first()
-            .copied()
-            .filter(|i| *i < model.vertices.len())
-        {
-            let vertex = &self.preview.as_ref().unwrap_or(model).vertices[i];
-            text_fit(
-                &mut o.canvas,
-                r + 12,
-                174,
-                w - 24,
-                &format!("Vertex {} / {} selected", i + 1, self.mesh_vertices.len()),
-                c::AMBER,
-            );
-            for k in 0..3 {
-                text_fit(
-                    &mut o.canvas,
-                    r + 12,
-                    202 + k as i32 * 26,
-                    w - 24,
-                    &format!("{}  {}", ['X', 'Y', 'Z'][k], vertex.point[k]),
-                    c::INK,
-                );
-            }
-            text_fit(
-                &mut o.canvas,
-                r + 12,
-                294,
-                w - 24,
-                &format!("Source +0x{:X}", vertex.offset),
-                c::INK_MUTED,
-            );
-        }
-        if model.writable {
-            o.button(
-                [r + 12, 330, w - 24, 26],
-                "Move selection (G, R, S)",
-                Action::MeshMove,
-                false,
-            );
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                386,
-                w - 24,
-                "Drag in orthographic view.",
-                c::INK_MUTED,
-            );
-            label_fit(
-                &mut o.canvas,
-                r + 12,
-                410,
-                w - 24,
-                "Normals/centers update on apply.",
-                c::INK_MUTED,
-            );
-        } else {
-            for (i, line) in super::dependencies_ui::wrap(&model.reason, ((w - 24) / 7) as usize)
-                .iter()
-                .take(7)
-                .enumerate()
-            {
-                label_fit(
-                    &mut o.canvas,
-                    r + 12,
-                    340 + i as i32 * 20,
-                    w - 24,
-                    line,
-                    c::AMBER,
-                );
-            }
-        }
-        o.button(
-            [r + 12, h - 56, w - 24, 26],
-            "Object mode (Tab)",
-            Action::MeshMode,
-            false,
-        );
     }
 }
 

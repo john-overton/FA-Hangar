@@ -34,10 +34,23 @@ pub(super) enum Action {
     CloseLibrary,
     DiscardChanges,
     Animation,
-    AnimationPart(i32),
-    PartPosition(usize),
-    AnimationState(usize),
-    AnimationReset,
+    /// Edit Mesh: vertex (false) or face (true) select mode.
+    SelectMode(bool),
+    /// Edit Mesh operation `edit_ui::OP_*`.
+    MeshOp(u8),
+    /// R/S pivot: median (false) or individual origins (true).
+    Pivot(bool),
+    /// Parts list row (index into `App::parts`, then static parts).
+    PartPick(usize),
+    /// Pose preset `animation_ui::PRESETS` index.
+    PosePreset(u8),
+    PoseReset,
+    /// Pose toggle: variable index and value.
+    PoseSet(u8, i32),
+    /// Open the options Select of the selected part's control.
+    PartMenu(usize),
+    /// Apply option `value` to the selected part's control.
+    PartValue(usize, i32),
     CopyResource,
     PasteResources,
     RenameResource(bool),
@@ -199,38 +212,6 @@ impl Layout {
     pub(super) fn hit(&mut self, rect: [i32; 4], action: Action) {
         self.hits.push(Hit { rect, action });
     }
-    pub(super) fn button(&mut self, rect: [i32; 4], title: &str, action: Action, active: bool) {
-        let [x, y, w, h] = rect;
-        let d = &mut self.canvas;
-        d.rect(
-            x,
-            y,
-            w,
-            h,
-            if active {
-                c::AMBER_DEEP
-            } else if self.mouse[0] >= x
-                && self.mouse[0] < x + w
-                && self.mouse[1] >= y
-                && self.mouse[1] < y + h
-            {
-                c::GM_600
-            } else {
-                c::GM_700
-            },
-        );
-        border(d, x, y, w, h, c::GM_1000);
-        d.line(x + 1, y + 1, x + w - 2, y + 1, c::GM_600);
-        label_fit(
-            d,
-            x + 9,
-            y + h / 2 + 4,
-            w - 16,
-            title,
-            if active { c::AMBER } else { c::INK },
-        );
-        self.hit(rect, action);
-    }
 }
 impl App {
     pub(super) fn act(&mut self, a: Action) {
@@ -322,7 +303,6 @@ impl App {
             Action::ModelPaint => {
                 self.finish_stroke();
                 self.animation_tool = false;
-                self.animation_state.clear();
                 self.preview = None;
                 self.mesh_edit = false;
                 self.hp_tool = false;
@@ -353,8 +333,10 @@ impl App {
             Action::MeshMode => {
                 self.finish_stroke();
                 self.animation_tool = false;
-                self.animation_state.clear();
                 self.mesh_edit = !self.mesh_edit;
+                self.ed.mesh_pending = None;
+                self.ed.mesh_box = None;
+                self.ed.box_armed = false;
                 self.mesh_drag = None;
                 self.model_paint = false;
                 self.paint_enabled = false;
@@ -424,7 +406,6 @@ impl App {
             Action::Mode(m) => {
                 if self.animation_tool {
                     self.animation_tool = false;
-                    self.animation_state.clear();
                     self.preview = None;
                 }
                 if m == Mode::Model && self.model.is_none() {
@@ -605,38 +586,15 @@ impl App {
                 _ => {}
             },
             Action::Animation => self.open_animation(),
-            Action::AnimationPart(step) => {
-                let n = self
-                    .preview
-                    .as_ref()
-                    .or(self.model.as_ref())
-                    .map_or(0, |m| m.parts.len());
-                if n > 0 {
-                    self.animation_part =
-                        (self.animation_part as i32 + step).rem_euclid(n as i32) as usize;
-                }
-            }
-            Action::PartPosition(axis) => self.part_position_prompt(axis),
-            Action::AnimationState(address) => {
-                self.prompt = Some(Prompt {
-                    kind: PromptKind::AnimationState(address),
-                    title: format!(
-                        "Preview state {address:08X}: integer value; the SH is not edited"
-                    ),
-                    value: self
-                        .animation_state
-                        .get(&address)
-                        .copied()
-                        .unwrap_or(0)
-                        .to_string(),
-                    axis: 0,
-                });
-            }
-            Action::AnimationReset => {
-                self.animation_state.clear();
-                let result = self.animation_preview();
-                self.result(result);
-            }
+            Action::SelectMode(face) => self.select_mode(face),
+            Action::MeshOp(op) => self.mesh_op(op),
+            Action::Pivot(individual) => self.ed.pivot_individual = individual,
+            Action::PartPick(i) => self.pick_part(i),
+            Action::PosePreset(n) => self.pose_preset(n),
+            Action::PoseReset => self.pose_reset(),
+            Action::PoseSet(var, value) => self.pose_set(var, value),
+            Action::PartMenu(k) => self.open_part_menu(k),
+            Action::PartValue(k, value) => self.part_value(k, value),
             Action::CloseLibrary => {
                 let result = self.close_library();
                 self.result(result);
@@ -773,7 +731,6 @@ impl App {
             }
             Action::Hardpoints => {
                 self.animation_tool = false;
-                self.animation_state.clear();
                 self.preview = None;
                 self.hp_tool = self.mode != Mode::Model || !self.hp_tool;
                 self.mode = Mode::Model;
@@ -857,7 +814,7 @@ impl App {
                     2 => self.hp_tool = false,
                     3 => {
                         self.animation_tool = false;
-                        self.animation_state.clear();
+                        self.ed.part_menu = None;
                         self.preview = None;
                     }
                     4 => self.act(Action::ModelPaint),
@@ -919,6 +876,62 @@ impl App {
         }
         if name == "animation" {
             self.open_animation();
+            return Ok(());
+        }
+        // Edit Mesh and Parts snapshots: the synthetic parts aircraft in the
+        // demo, else the opened SH, gear down with the first gear part picked.
+        if name == "edit" || name.starts_with("parts") || name == "edit-vertices" {
+            if self.path.starts_with("Synthetic") {
+                self.doc
+                    .replace(0, hangar_core::shape_testkit::demo_parts())?;
+                self.doc.mark_saved();
+                self.select_entry(0);
+            }
+            self.mode = Mode::Model;
+            self.textured = true;
+            self.flat = true;
+            self.yaw = 35;
+            self.pitch = 20;
+            self.pose_preset(0);
+            let gear = self
+                .ed
+                .parts
+                .iter()
+                .position(|p| p.role == hangar_core::shape_parts::Role::Gear)
+                .unwrap_or(0);
+            if name.starts_with("parts") {
+                self.open_animation();
+                // The first gear part whose direction flips in place.
+                let flip = (0..self.ed.parts.len()).find_map(|i| {
+                    let k = self.ed.parts[i].controls.iter().position(|c| {
+                        matches!(
+                            c.setting,
+                            hangar_core::shape_parts::Setting::Direction { .. }
+                        ) && c.allowed == hangar_core::shape_parts::Allowed::Either
+                    })?;
+                    Some((i, k))
+                });
+                self.pick_part(flip.map_or(gear, |(i, _)| i));
+                if name == "parts-settings" {
+                    if let Some((_, k)) = flip {
+                        let negated = self.ed.parts[self.ed.part_selected.unwrap_or(0)].controls[k]
+                            .setting
+                            == hangar_core::shape_parts::Setting::Direction {
+                                index: 0,
+                                negated: true,
+                            };
+                        self.act(Action::PartValue(k, i32::from(!negated)));
+                    }
+                    self.mouse = [self.right() + 20, 300];
+                    for _ in 0..80 {
+                        self.wheel(-1);
+                    }
+                }
+            } else {
+                self.act(Action::MeshMode);
+                self.pick_part(gear);
+                self.select_mode(name == "edit");
+            }
             return Ok(());
         }
         if name == "stations" {
@@ -1264,7 +1277,7 @@ impl App {
             } else if self
                 .prompt
                 .as_ref()
-                .is_some_and(|p| matches!(p.kind, PromptKind::BaseColor(_)))
+                .is_some_and(|p| matches!(p.kind, PromptKind::BaseColor(_) | PromptKind::FaceColor))
             {
                 self.color_dialog(&mut out);
             } else {
@@ -1627,6 +1640,15 @@ impl App {
         self.viewport_overlay(o, writable);
         if self.mesh_edit {
             self.mesh_overlay(o);
+        } else if self.animation_tool {
+            self.face_edges(o);
+            if let Some([x, y]) = self.part_origin().and_then(|p| self.hp_project(p)) {
+                if self.in_viewport(x, y) {
+                    chrome::ring(&mut o.canvas, x, y, 5, c::AMBER, c::AMBER_BRIGHT);
+                    o.canvas
+                        .styled(x + 8, y - 6, "Pivot", c::AMBER, Style::ValueSm);
+                }
+            }
         } else {
             self.hardpoint_overlay(o);
         }
@@ -2634,6 +2656,8 @@ impl App {
         self.smoke_paint_tools();
         self.smoke_originals();
         self.smoke_object_tools();
+        self.smoke_edit_mode();
+        self.smoke_parts_panel();
         self.demo();
         self.width = 1280;
         self.height = 800;
@@ -2777,7 +2801,7 @@ impl App {
     /// window sizes.
     pub(super) fn smoke_hit_geometry(&mut self) {
         for (w, h) in [(1280, 800), (800, 600)] {
-            for state in 0..20 {
+            for state in 0..25 {
                 self.libraries.clear();
                 self.demo();
                 self.width = w;
@@ -2881,6 +2905,40 @@ impl App {
                         self.refresh();
                         self.paste_resources().unwrap();
                         "transfer review"
+                    }
+                    20..=24 => {
+                        self.doc
+                            .replace(0, hangar_core::shape_testkit::demo_parts())
+                            .unwrap();
+                        self.doc.mark_saved();
+                        self.select_entry(0);
+                        self.mode = Mode::Model;
+                        self.pose_preset(0);
+                        if state >= 22 {
+                            self.open_animation();
+                            self.pick_part(0);
+                        } else {
+                            self.act(Action::MeshMode);
+                            self.pick_part(0);
+                            self.select_mode(state == 20);
+                        }
+                        match state {
+                            20 => {
+                                self.textured = true;
+                                self.ed.mesh_refusal = Some("A refusal reason from core".into());
+                                "edit faces"
+                            }
+                            21 => "edit vertices",
+                            22 => "parts",
+                            23 => {
+                                self.smoke_find(&|x| matches!(x, Action::PartMenu(3)));
+                                "part settings"
+                            }
+                            _ => {
+                                self.act(Action::PartValue(3, 0));
+                                "non-retail part setting"
+                            }
+                        }
                     }
                     _ => {
                         self.select_entry(1);

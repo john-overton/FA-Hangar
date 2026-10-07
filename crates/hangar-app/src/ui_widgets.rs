@@ -332,6 +332,8 @@ pub(super) struct Item<'a> {
     pub action: Option<Action>,
     /// The current choice (Select menus): amber label.
     pub on: bool,
+    /// A warn badge after the label ("Not seen in retail").
+    pub badge: Option<&'a str>,
 }
 impl<'a> Item<'a> {
     pub const fn new(label: &'a str, action: Action) -> Self {
@@ -341,6 +343,7 @@ impl<'a> Item<'a> {
             icon: None,
             action: Some(action),
             on: false,
+            badge: None,
         }
     }
     pub const fn sep() -> Self {
@@ -350,6 +353,7 @@ impl<'a> Item<'a> {
             icon: None,
             action: None,
             on: false,
+            badge: None,
         }
     }
     pub const fn key(mut self, key: &'a str) -> Self {
@@ -362,6 +366,10 @@ impl<'a> Item<'a> {
     }
     pub const fn on(mut self, on: bool) -> Self {
         self.on = on;
+        self
+    }
+    pub const fn badge(mut self, text: &'a str) -> Self {
+        self.badge = Some(text);
         self
     }
 }
@@ -377,7 +385,8 @@ pub(super) fn menu_size(items: &[Item]) -> (i32, i32) {
             continue;
         }
         h += m::MENU_ITEM_H;
-        let key = i.key.map_or(0, |k| keycap_width(k) + space::SPACE_4);
+        let key = i.key.map_or(0, |k| keycap_width(k) + space::SPACE_4)
+            + i.badge.map_or(0, |b| badge_width(b) + space::SPACE_2);
         let icon = if icons { m::ICON + space::SPACE_2 } else { 0 };
         w = w.max(2 * space::SPACE_3 + icon + text_width(i.label, Style::Label) + key + 2);
     }
@@ -547,6 +556,11 @@ pub(super) enum NumberTarget {
     /// Decal placement setting (`App::decal_setting` key 0..=4): centre X,
     /// centre Y, width, rotation, opacity. Draft-only, no on-disk value.
     Decal(u8),
+    /// Parts pose preview variable (index into `App::pose_vars`). Preview
+    /// only: never saved, never in undo.
+    Pose(u8),
+    /// Pivot component (right, forward, up) of the selected part.
+    Pivot(u8),
 }
 /// A number in stored units, fixed-point with `decimals` fractional digits.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -747,7 +761,18 @@ impl Layout {
                 tx += m::ICON + space::SPACE_2;
             }
             let key_w = item.key.map_or(0, keycap_width);
-            let room = x + w - space::SPACE_3 - key_w - tx - if key_w > 0 { 8 } else { 0 };
+            let badge_w = item.badge.map_or(0, |b| badge_width(b) + space::SPACE_2);
+            let room =
+                x + w - space::SPACE_3 - key_w - badge_w - tx - if key_w > 0 { 8 } else { 0 };
+            if let Some(b) = item.badge {
+                type_badge(
+                    &mut self.canvas,
+                    x + w - space::SPACE_3 - key_w - badge_w + space::SPACE_2,
+                    iy + (m::MENU_ITEM_H - m::BADGE_H) / 2,
+                    b,
+                    Tone::Warn,
+                );
+            }
             self.canvas.styled(
                 tx,
                 baseline(iy, m::MENU_ITEM_H, Style::Label),
@@ -1101,6 +1126,11 @@ pub(super) mod pane {
     pub const AUDIO: u8 = 25;
     pub const PREVIEW: u8 = 26;
     pub const DONOR: u8 = 27;
+    pub const MESH_SELECTION: u8 = 28;
+    pub const MESH_OPS: u8 = 29;
+    pub const PARTS: u8 = 30;
+    pub const POSE: u8 = 31;
+    pub const PART_SETTINGS: u8 = 32;
 }
 
 /// A panel between `panel_begin` and `panel_end`.
@@ -1475,6 +1505,8 @@ impl App {
                     group: true,
                 })
             }
+            NumberTarget::Pose(var) => self.pose_spec(var),
+            NumberTarget::Pivot(axis) => self.pivot_spec(axis),
             NumberTarget::Decal(key) => {
                 let p = self.decal_placement;
                 let (value, min, max) = match key {
@@ -1527,6 +1559,8 @@ impl App {
             }
             NumberTarget::Station(column) => self.station_value(column, &format!("{value}"))?,
             NumberTarget::Decal(key) => self.decal_setting(key, &format!("{value}"))?,
+            NumberTarget::Pose(var) => self.pose_commit(var, value),
+            NumberTarget::Pivot(axis) => self.pivot_commit(axis, value)?,
         }
         Ok(())
     }
@@ -1549,7 +1583,8 @@ impl App {
                     .find(|old| old.label == f.label)
                     .map(|old| old.value.clone())
             }
-            NumberTarget::Decal(_) => None,
+            NumberTarget::Pivot(axis) => self.pivot_spec(axis)?.disk.map(|v| v.to_string()),
+            NumberTarget::Decal(_) | NumberTarget::Pose(_) => None,
         }
     }
     /// Write the saved operand text back to a BRF-backed target, one undo step.
@@ -1590,7 +1625,13 @@ impl App {
                 }
                 self.refresh();
             }
-            NumberTarget::Decal(_) => return Err("No saved value to reset to".into()),
+            NumberTarget::Pivot(axis) => {
+                let v = text.parse::<i64>().map_err(|_| "Saved pivot")?;
+                self.pivot_commit(axis, v)?;
+            }
+            NumberTarget::Decal(_) | NumberTarget::Pose(_) => {
+                return Err("No saved value to reset to".into())
+            }
         }
         Ok(())
     }
@@ -1653,6 +1694,11 @@ impl App {
     }
     /// Backspace: back to the value in the file on disk.
     pub(super) fn number_reset(&mut self, t: NumberTarget) {
+        if let NumberTarget::Pose(var) = t {
+            // A pose input resets to "not set" (the neutral preview).
+            self.pose_clear(var);
+            return;
+        }
         match self.saved_text(t) {
             Some(text) => {
                 self.status.clear();
@@ -1679,6 +1725,8 @@ impl App {
                         .map_or("Value".into(), |f| f.label.clone()),
                     NumberTarget::Station(_) => format!("HP{} value", self.hp_selected + 1),
                     NumberTarget::Decal(_) => "Decal placement".into(),
+                    NumberTarget::Pose(_) => "Pose preview value (never saved)".into(),
+                    NumberTarget::Pivot(_) => "Part pivot in source units".into(),
                 },
                 value: format_number(spec.value, spec.decimals, false),
                 axis: 0,

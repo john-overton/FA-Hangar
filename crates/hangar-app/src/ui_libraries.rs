@@ -142,7 +142,7 @@ impl App {
         self.model_paint = false;
         self.mesh_edit = false;
         self.animation_tool = false;
-        self.animation_state.clear();
+        self.ed.pose.clear();
         self.mesh_vertices.clear();
         self.envelope_selected = 0;
         self.envelope_scroll = 0;
@@ -210,7 +210,7 @@ impl App {
         self.mesh_edit = false;
         self.mesh_vertices.clear();
         self.animation_tool = false;
-        self.animation_state.clear();
+        self.ed.pose.clear();
         self.hp_tool = false;
         self.hp_drag = None;
         self.mesh_drag = None;

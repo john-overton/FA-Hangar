@@ -560,6 +560,35 @@ impl App {
                 }
             }
         }
+        if self.mode == Mode::Model && (self.mesh_edit || self.animation_tool) {
+            let mut picked = vec![false; m.faces.len()];
+            for f in self.selected_faces() {
+                if let Some(p) = picked.get_mut(f) {
+                    *p = true;
+                }
+            }
+            let on = |i: usize| frame.faces[i] != usize::MAX && picked[frame.faces[i]];
+            if picked.iter().any(|p| *p) {
+                let mut out = frame.pixels.clone();
+                for y in 0..h {
+                    for x in 0..w {
+                        let i = y * w + x;
+                        if !on(i) {
+                            continue;
+                        }
+                        let edge = x == 0
+                            || y == 0
+                            || x + 1 == w
+                            || y + 1 == h
+                            || [i - 1, i + 1, i - w, i + w]
+                                .iter()
+                                .any(|j| frame.faces[*j] != frame.faces[i]);
+                        out[i] = if edge { c::AMBER.0 } else { c::AMBER_DEEP.0 };
+                    }
+                }
+                frame.pixels = out;
+            }
+        }
         if let Some(selected) = self.selected_face {
             for y in 1..h - 1 {
                 for x in 1..w - 1 {

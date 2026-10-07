@@ -15,6 +15,11 @@ pub(super) const MENU_VIEW: usize = 8;
 pub(super) const MENU_SHADING: usize = 9;
 /// The Model inspector's Shape Select.
 pub(super) const MENU_SHAPE: usize = 10;
+/// Edit Mesh header menus.
+pub(super) const MENU_SELECT: usize = 11;
+pub(super) const MENU_MESH: usize = 12;
+/// The options Select of a part setting (`App::part_menu`).
+pub(super) const MENU_PART: usize = 13;
 const TABS: [(&str, Mode); 6] = [
     ("Browse", Mode::Browse),
     ("Model", Mode::Model),
@@ -282,6 +287,36 @@ impl App {
                     .collect()
             }
             MENU_SHADING => self.shading_items(),
+            MENU_SELECT => vec![
+                Item::new("Vertex select", Action::SelectMode(false))
+                    .icon(Icon::Vertex)
+                    .key("1")
+                    .on(!self.ed.face_select),
+                Item::new("Face select", Action::SelectMode(true))
+                    .icon(Icon::Face)
+                    .key("3")
+                    .on(self.ed.face_select),
+                Item::sep(),
+                Item::new("All or none", Action::MeshAll).key("A"),
+                Item::new("Invert", Action::MeshOp(edit_ui::OP_INVERT)),
+                Item::new("Box select", Action::MeshOp(edit_ui::OP_BOX)).key("B"),
+                Item::new("Select linked part", Action::MeshOp(edit_ui::OP_LINKED)),
+            ],
+            MENU_MESH => vec![
+                Item::new("Move", Action::MeshMove).key("G"),
+                Item::new("Delete faces", Action::MeshOp(edit_ui::OP_DELETE)).key("X"),
+                Item::new("Flip normals", Action::MeshOp(edit_ui::OP_FLIP)).key("Alt+N"),
+                Item::new("Duplicate", Action::MeshOp(edit_ui::OP_DUPLICATE)).key("Shift+D"),
+                Item::new("Extrude", Action::MeshOp(edit_ui::OP_EXTRUDE)).key("E"),
+                Item::new("Make face", Action::MeshOp(edit_ui::OP_FACE)).key("F"),
+                Item::new("Add vertex at median", Action::MeshOp(edit_ui::OP_VERTEX)),
+                Item::sep(),
+                Item::new("Pivot: median", Action::Pivot(false)).on(!self.ed.pivot_individual),
+                Item::new("Pivot: individual origins", Action::Pivot(true))
+                    .on(self.ed.pivot_individual),
+                Item::sep(),
+                Item::new("New face colour", Action::MeshOp(edit_ui::OP_FACE_COLOR)),
+            ],
             _ => vec![
                 Item::new("Controls", Action::Help).key("F1"),
                 Item::new("Load synthetic demo", Action::Demo),
@@ -291,6 +326,21 @@ impl App {
     /// Run `f` over dropdown `menu`'s items; the Shape Select lists entry
     /// names owned here.
     fn with_menu<R>(&self, menu: usize, f: &mut dyn FnMut(&[Item]) -> R) -> R {
+        if menu == MENU_PART {
+            let options = self.part_menu_items();
+            let items: Vec<Item> = options
+                .iter()
+                .map(|(label, action, on, unseen)| {
+                    let item = Item::new(label, *action).on(*on);
+                    if *unseen {
+                        item.badge("Not seen in retail")
+                    } else {
+                        item
+                    }
+                })
+                .collect();
+            return f(&items);
+        }
         if menu != MENU_SHAPE {
             return f(&self.menu_items(menu));
         }
@@ -340,11 +390,17 @@ impl App {
                 let rect = self.shape_select_rect();
                 (rect[0], rect[1] + rect[3] + 1)
             }
+            MENU_PART => {
+                let rect = self.ed.part_menu.map_or([0; 4], |(_, r)| r);
+                (rect[0], rect[1] + rect[3] + 1)
+            }
             _ => {
                 let header = self.viewport_header_slots();
                 let rect = match menu {
                     MENU_MODE => header.mode,
                     MENU_VIEW => header.view,
+                    MENU_SELECT => header.select.unwrap_or(header.view),
+                    MENU_MESH => header.mesh.unwrap_or(header.view),
                     _ => header.overflow.unwrap_or(header.shading),
                 };
                 (rect[0], rect[1] + rect[3] + 1)
@@ -471,11 +527,21 @@ impl App {
         match self.mode {
             Mode::Model if self.mesh_edit => &[
                 ("G", "Move"),
-                ("R", "Rotate"),
                 ("S", "Scale"),
-                ("A", "Select all"),
-                ("Shift", "Extend"),
+                ("1", "Vertex"),
+                ("3", "Face"),
+                ("B", "Box"),
+                ("L", "Part"),
+                ("X", "Delete"),
+                ("E", "Extrude"),
+                ("F", "Make face"),
                 ("Tab", "Object mode"),
+            ],
+            Mode::Model if self.animation_tool => &[
+                ("LMB", "Pick part"),
+                ("MMB", "Orbit"),
+                ("Tab", "Edit mode"),
+                ("Ctrl+Z", "Undo setting"),
             ],
             Mode::Model => &[
                 ("G", "Move"),
@@ -578,6 +644,10 @@ pub(super) const SHADING: [(&str, Icon); 3] = [
 pub(super) struct HeaderSlots {
     pub mode: [i32; 4],
     pub view: [i32; 4],
+    /// Edit Mesh: the Select and Mesh menus and the vertex/face modes.
+    pub select: Option<[i32; 4]>,
+    pub mesh: Option<[i32; 4]>,
+    pub modes: Option<[i32; 4]>,
     pub visibility: [i32; 4],
     pub shading: [i32; 4],
     /// Set when the right group does not fit: one button opens it as a menu.
@@ -625,15 +695,35 @@ impl App {
             m::ICON_BUTTON,
             h,
         ];
-        let overflow = (visibility[0] < view[0] + view[2] + space::SPACE_2).then_some([
+        let mut end = view[0] + view[2];
+        let (mut select, mut mesh) = (None, None);
+        if self.mesh_edit {
+            let sw = Btn::new("Select").ghost().width();
+            let mw = Btn::new("Mesh").ghost().width();
+            select = Some([end + space::SPACE_1, y, sw, h]);
+            mesh = Some([end + 2 * space::SPACE_1 + sw, y, mw, h]);
+            end += 2 * space::SPACE_1 + sw + mw;
+        }
+        let overflow = (visibility[0] < end + space::SPACE_2).then_some([
             r - space::SPACE_1 - m::ICON_BUTTON,
             y,
             m::ICON_BUTTON,
             h,
         ]);
+        let limit = overflow.map_or(visibility[0], |o| o[0]) - space::SPACE_2;
+        let seg_modes = 2 * m::ICON_BUTTON + 2;
+        let modes = (self.mesh_edit && end + space::SPACE_2 + seg_modes <= limit).then_some([
+            end + space::SPACE_2,
+            y,
+            seg_modes,
+            h,
+        ]);
         HeaderSlots {
             mode,
             view,
+            select,
+            mesh,
+            modes,
             visibility,
             shading,
             overflow,
@@ -662,6 +752,33 @@ impl App {
             Btn::new("View").ghost().on(self.menu == Some(MENU_VIEW)),
             Action::Menu(MENU_VIEW),
         );
+        for (rect, label, menu) in [
+            (s.select, "Select", MENU_SELECT),
+            (s.mesh, "Mesh", MENU_MESH),
+        ] {
+            if let Some(rect) = rect {
+                o.button_ex(
+                    rect,
+                    Btn::new(label).ghost().on(self.menu == Some(menu)),
+                    Action::Menu(menu),
+                );
+            }
+        }
+        if let Some(rect) = s.modes {
+            o.segmented(
+                rect,
+                &[
+                    (
+                        Btn::icon(Icon::Vertex).on(!self.ed.face_select),
+                        Action::SelectMode(false),
+                    ),
+                    (
+                        Btn::icon(Icon::Face).on(self.ed.face_select),
+                        Action::SelectMode(true),
+                    ),
+                ],
+            );
+        }
         if let Some(rect) = s.overflow {
             o.button_ex(
                 rect,
@@ -830,7 +947,27 @@ impl App {
                     c::AMBER,
                     Style::ValueSm,
                 );
+                y += line;
             }
+        }
+        if !self.ed.pose.is_empty() {
+            let pose: Vec<String> = self
+                .ed
+                .pose
+                .iter()
+                .map(|(k, v)| format!("{}={v}", k.trim_start_matches("_PL")))
+                .collect();
+            d.styled(
+                x,
+                y,
+                &fit(
+                    &format!("Pose preview \u{b7} {}", pose.join(" ")),
+                    room,
+                    Style::ValueSm,
+                ),
+                c::AMBER,
+                Style::ValueSm,
+            );
         }
         let zoom = format!("zoom {}%", self.zoom);
         let zoom_w = text_width(&zoom, Style::ValueSm);
@@ -846,15 +983,20 @@ impl App {
             "{} \u{b7} {}",
             VIEWPORT_MODES[self.viewport_mode()].0,
             if self.mesh_edit {
-                if writable {
-                    "vertices"
-                } else {
-                    "inspect only"
+                self.selection_text()
+            } else if self.animation_tool {
+                match self.ed.part_selected {
+                    Some(_) => format!(
+                        "{} \u{b7} {}",
+                        view::count(self.ed.parts.len(), "part", "parts"),
+                        view::count(self.ed.mesh_faces.len(), "face", "faces")
+                    ),
+                    None => view::count(self.ed.parts.len(), "part", "parts"),
                 }
             } else if writable {
-                "editable static mesh"
+                "editable static mesh".into()
             } else {
-                "static preview"
+                "static preview".into()
             }
         );
         d.styled(

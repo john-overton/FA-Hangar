@@ -306,8 +306,8 @@ enum PromptKind {
     CloneReview,
     Recolor,
     BaseColor(bool),
-    PartPosition(usize),
-    AnimationState(usize),
+    /// Colour for new faces in Edit Mesh (the base colour dialog).
+    FaceColor,
     Isolate,
     CloseLibrary,
     ResourceName(bool),
@@ -377,11 +377,8 @@ pub struct App {
     hp_slew: bool,
     mesh_edit: bool,
     animation_tool: bool,
-    animation_state: BTreeMap<usize, i32>,
-    /// Import symbols when the state keys were chosen; keys are absolute addresses.
-    animation_symbols: BTreeMap<usize, String>,
-    animation_scroll: usize,
-    animation_part: usize,
+    /// Edit Mesh and Parts state, boxed to keep `App` small.
+    ed: Box<edit_ui::EditState>,
     mesh_vertices: Vec<usize>,
     mesh_drag: Option<Box<mesh_ui::MeshDrag>>,
     hp_visible: bool,
@@ -526,10 +523,7 @@ impl App {
             hp_slew: false,
             mesh_edit: false,
             animation_tool: false,
-            animation_state: BTreeMap::new(),
-            animation_symbols: BTreeMap::new(),
-            animation_scroll: 0,
-            animation_part: 0,
+            ed: Box::default(),
             mesh_vertices: Vec::new(),
             mesh_drag: None,
             hp_visible: false,
@@ -768,9 +762,11 @@ impl App {
         self.hp_tool = false;
         self.mesh_edit = false;
         self.animation_tool = false;
-        self.animation_state.clear();
-        self.animation_scroll = 0;
+        self.ed.pose.clear();
+        self.ed.part_selected = None;
         self.mesh_vertices.clear();
+        self.ed.mesh_faces.clear();
+        self.ed.mesh_refusal = None;
         self.decal_active = false;
         self.selected = index.min(self.doc.archive.entries.len().saturating_sub(1));
         self.collapsed[view::category_of(self.name())] = false;
@@ -816,7 +812,9 @@ impl App {
     }
     fn refresh(&mut self) {
         let camera = (self.zoom, self.pan, self.image_zoom, self.image_pan);
+        let picked = self.picked_offsets();
         self.refresh_data();
+        self.repick(&picked);
         self.original_note = self.compute_original_note();
         (self.zoom, self.pan, self.image_zoom, self.image_pan) = camera;
     }
@@ -934,7 +932,7 @@ impl App {
                             Err(e) => e,
                         };
                     } else if ext == "SH" {
-                        match Model::parse(&data) {
+                        match Model::with_pose(&data, &self.ed.pose) {
                             Ok(m) => {
                                 self.detail = if m.writable {
                                     "Static geometry: editable".into()
@@ -981,7 +979,7 @@ impl App {
         if let Some(name) = linked_shape {
             if let Some((id, index, entry)) = self.resolve_resource(&name) {
                 if let Ok(bytes) = entry.read() {
-                    if let Ok(model) = Model::parse(&bytes) {
+                    if let Ok(model) = Model::with_pose(&bytes, &self.ed.pose) {
                         self.model = Some(model);
                         if id == self.library_id {
                             self.model_entry = Some(index);
@@ -1011,19 +1009,9 @@ impl App {
                 }
             }
         }
-        let vertices = self.model.as_ref().map_or(0, |m| m.vertices.len());
-        self.mesh_vertices.retain(|i| *i < vertices);
         self.refresh_graft();
         self.refresh_hardpoints();
-        let reset = self.revalidate_animation_state();
-        if self.animation_tool {
-            if let Err(error) = self.animation_preview() {
-                self.preview = None;
-                self.status = error;
-            } else if reset {
-                self.status = "Preview states reset: the shape's import addresses changed".into();
-            }
-        }
+        self.refresh_parts();
         self.frame();
     }
     fn frame(&mut self) {
@@ -1443,11 +1431,13 @@ impl App {
                 return;
             }
         };
+        if self.mesh_edit && self.ed.mesh_pending.is_some() {
+            self.pending_preview(t);
+            return;
+        }
         if let Some(m) = &self.model {
             let result = if self.mesh_edit {
-                m.median(&self.mesh_vertices)
-                    .ok_or_else(|| "Select vertices first".to_string())
-                    .and_then(|pivot| m.transform_selection(t, Some(&self.mesh_vertices), pivot))
+                self.edit_transform(m, op, t)
             } else {
                 m.transformed(t)
             };
@@ -1461,33 +1451,50 @@ impl App {
         }
     }
     fn transform_prompt(&mut self, op: char) {
+        let pivot = if self.ed.pivot_individual && self.ed.face_select {
+            "each island's centre"
+        } else {
+            "the median point"
+        };
         let title = match (self.mesh_edit, op) {
-            (false, 'g') => "Move in source units",
-            (false, 'r') => "Rotate in degrees",
-            (false, _) => "Scale in percent",
-            (true, 'g') => "Move selected vertices in source units",
-            (true, 'r') => "Rotate selection about its median point in degrees",
-            (true, _) => "Scale selection about its median point in percent",
+            (false, 'g') => "Move in source units".into(),
+            (false, 'r') => "Rotate in degrees".into(),
+            (false, _) => "Scale in percent".into(),
+            (true, 'g') => match &self.ed.mesh_pending {
+                Some(p) => format!(
+                    "{} {}: move in source units, Enter applies, Esc cancels",
+                    if p.extrude { "Extrude" } else { "Duplicate" },
+                    view::count(p.faces.len(), "face", "faces")
+                ),
+                None => "Move selection in source units".into(),
+            },
+            (true, 'r') => format!("Rotate selection about {pivot} in degrees"),
+            (true, _) => format!("Scale selection about {pivot} in percent"),
         };
         self.prompt = Some(Prompt {
             kind: PromptKind::Transform(op),
-            title: title.into(),
+            title,
             value: String::new(),
             axis: 3,
         });
         self.transform_preview();
     }
-    fn apply_transform(&mut self) -> Result<()> {
+    fn apply_transform(&mut self, op: char, axis: usize, value: &str) -> Result<()> {
+        if self.mesh_edit && self.ed.mesh_pending.is_some() {
+            let t = self.transform_value(op, axis, value)?;
+            return self.apply_pending(t);
+        }
         let preview = self
             .preview
             .take()
             .ok_or_else(|| "Enter a valid transform value".to_string())?;
         if self.mesh_edit {
-            let entry = self.model_entry.ok_or("Open the SH owner before editing")?;
-            let bytes = preview.write(&self.doc.archive.entries[entry].read()?)?;
-            self.doc.replace(entry, bytes)?;
-            self.refresh();
-            self.status = "Selected vertices transformed | Ctrl+Z undo".into();
+            let before = self.model.clone().ok_or("No model")?;
+            let n = self.commit_points(&before, &preview)?;
+            self.status = format!(
+                "{} transformed / one undo step",
+                view::count(n, "stored vertex", "stored vertices")
+            );
         } else {
             let bytes = preview.write(&self.data)?;
             self.doc.replace(self.selected, bytes)?;
@@ -1582,6 +1589,7 @@ impl App {
                     }
                     self.prompt = None;
                     self.preview = None;
+                    self.ed.mesh_pending = None;
                     self.transfer_plan = None;
                     self.transfer_source = None;
                     self.transfer_move = false;
@@ -1699,9 +1707,10 @@ impl App {
                             self.status=format!("Cloned {to}; {n} decoded references updated. Other LOD/damage references retain original textures.");
                             Ok(())
                         })(),
-                        PromptKind::PartPosition(axis) => self.part_position(axis, &p.value),
-                        PromptKind::AnimationState(address) => {
-                            self.set_animation_state(address, &p.value)
+                        PromptKind::FaceColor => {
+                            self.ed.new_face_color = Some(self.brush);
+                            self.status = format!("New faces: flat colour {}", self.brush);
+                            Ok(())
                         }
                         PromptKind::BaseColor(face) => self.apply_base_color(face),
                         PromptKind::Recolor => {
@@ -1901,7 +1910,7 @@ impl App {
                             }
                             r
                         }
-                        PromptKind::Transform(_) => self.apply_transform(),
+                        PromptKind::Transform(op) => self.apply_transform(op, p.axis, &p.value),
                         PromptKind::Number(t) => self.number_typed(t, &p.value),
                     };
                     if let Err(e) = r {
@@ -1961,6 +1970,8 @@ impl App {
         }
         match key {
             Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'c'=>{let r=self.copy_resource();self.result(r);},'v'=>{let r=self.paste_resources();self.result(r);},'d'=>self.rename_prompt(true),'w'=>{let r=self.close_library();self.result(r);},'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
+            Key::Char(ch) if !ctrl&&self.mesh_edit&&self.mode==Mode::Model&&self.edit_key(ch,shift)=>{},
+            Key::Delete if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_op(edit_ui::OP_DELETE),
             Key::Char('h')|Key::Char('H')=>{let r=self.station_add(false,true);self.result(r);},
             Key::Char('a')|Key::Char('A') if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_toggle_all(),
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.mesh_edit&&self.mode==Mode::Model=>self.mesh_transform_prompt(ch.to_ascii_lowercase()),
@@ -1977,8 +1988,8 @@ impl App {
             Key::Enter=>self.edit_field(self.field_selected),
             Key::Backspace=>{if let Some(t)=self.number_under_mouse(){self.number_reset(t);}},
             Key::Delete=>{let r=self.delete_entry();self.result(r);},
-            Key::Escape=>{self.graft_library=None;self.resource_drag=None;},
-            Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform, X/Y/Z toggles axis lock | Tab edit mode: G/R/S act on selected vertices, Shift+click extends, A all/none".into(),
+            Key::Escape=>{self.graft_library=None;self.resource_drag=None;self.ed.mesh_box=None;self.ed.box_armed=false;},
+            Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform, X/Y/Z toggles axis lock | Tab edit mode: 1 vertices, 3 faces, A all, B box, L part, X delete, F face, Shift+D duplicate, E extrude, Alt+N flip".into(),
             _=>{}
         }
     }
@@ -2029,6 +2040,10 @@ impl App {
         if button == 1 && !down {
             if self.scrub.is_some() {
                 self.number_release();
+                return;
+            }
+            if self.ed.mesh_box.is_some() {
+                self.finish_box();
                 return;
             }
             if self.mesh_drag.is_some() {
@@ -2121,17 +2136,35 @@ impl App {
             && self.mode == Mode::Model
             && self.mesh_edit
         {
-            let vertex = self
+            let hit = self
                 .layout()
                 .hits
                 .into_iter()
                 .rev()
-                .find(|h| h.contains(x, y) && matches!(h.action, view::Action::MeshVertex(_)))
+                .find(|h| h.contains(x, y))
                 .map(|h| h.action);
-            if let Some(view::Action::MeshVertex(i)) = vertex {
-                self.mesh_press(i, shift);
-                return;
+            match hit {
+                Some(view::Action::MeshVertex(i)) if !self.ed.box_armed => {
+                    self.mesh_press(i, shift);
+                    return;
+                }
+                None | Some(view::Action::MeshVertex(_)) if self.in_viewport(x, y) => {
+                    self.edit_press(x, y, shift);
+                    return;
+                }
+                _ => {}
             }
+        }
+        if button == 1
+            && down
+            && self.prompt.is_none()
+            && self.mode == Mode::Model
+            && self.animation_tool
+            && self.in_viewport(x, y)
+            && !self.layout().hits.iter().any(|h| h.contains(x, y))
+        {
+            self.parts_click(x, y);
+            return;
         }
         if button == 1
             && down
@@ -2243,6 +2276,11 @@ impl App {
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
         if self.scrub.is_some() {
             self.number_motion(x, shift);
+            self.mouse = [x, y];
+            return;
+        }
+        if self.ed.mesh_box.is_some() {
+            self.box_motion(x, y);
             self.mouse = [x, y];
             return;
         }
@@ -2410,19 +2448,6 @@ impl App {
             self.zoom = (self.zoom + delta * 10).clamp(10, 1000);
             return;
         }
-        if self.animation_tool
-            && self.mode == Mode::Model
-            && self.mouse[0] >= self.right()
-            && self.mouse[1] >= 321
-        {
-            let hidden = self
-                .animation_addresses()
-                .len()
-                .saturating_sub(self.animation_rows());
-            self.animation_scroll =
-                (self.animation_scroll as i32 - delta * 3).clamp(0, hidden as i32) as usize;
-            return;
-        }
         if self.mouse[0] < self.left() {
             let count = self.library_rows().len();
             let rows = self.outliner_rows();
@@ -2559,8 +2584,10 @@ impl App {
                 d,
                 project(a),
                 project(b),
-                if n == 1 || (front && back) {
+                if (n == 1 || (front && back)) && !self.mesh_edit && !self.animation_tool {
                     c::AMBER
+                } else if n == 1 || (front && back) {
+                    c::INK_MUTED
                 } else {
                     c::GM_500
                 },
@@ -2657,3 +2684,6 @@ mod mesh_ui;
 
 #[path = "ui_animation.rs"]
 mod animation_ui;
+
+#[path = "ui_edit.rs"]
+mod edit_ui;

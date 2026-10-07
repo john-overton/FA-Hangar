@@ -615,6 +615,9 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
                 app.key(k, ctrl, shift);
             }
         }
+        // Alt+N (WM_SYSKEYDOWN, then its WM_SYSCHAR) flips normals in Edit Mesh.
+        0x104 if wp == 0x4e => app.alt_key('n'),
+        0x106 if wp == b'n' as usize || wp == b'N' as usize => return 0,
         0x102 => {
             if !ctrl && (32..127).contains(&wp) {
                 app.key(Key::Char(wp as u8 as char), false, shift);

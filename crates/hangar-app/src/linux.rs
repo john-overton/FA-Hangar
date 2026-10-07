@@ -346,6 +346,8 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                     let n = XLookupString(e, buf.as_mut_ptr(), 32, &mut sym, ptr::null_mut());
                     let ctrl = e.state & 4 != 0;
                     let shift = e.state & 1 != 0;
+                    // Mod1 (Alt): Alt+N flips normals in Edit Mesh.
+                    let alt = e.state & 8 != 0;
                     let key = match sym {
                         0xff0d | 0xff8d => Some(Key::Enter),
                         0xff1b => Some(Key::Escape),
@@ -359,7 +361,11 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                         0xffb0..=0xffb9 => Some(Key::Num((sym - 0xffb0) as u8)),
                         _ => None,
                     };
-                    if let Some(k) = key {
+                    if alt {
+                        if sym == b'n' as c_ulong || sym == b'N' as c_ulong {
+                            app.alt_key('n');
+                        }
+                    } else if let Some(k) = key {
                         app.key(k, ctrl, shift);
                     } else if ctrl && (32..127).contains(&sym) {
                         app.key(Key::Char(sym as u8 as char), true, shift);
