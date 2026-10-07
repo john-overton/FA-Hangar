@@ -53,7 +53,7 @@ the license and notices alongside the executable.
 
 The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
 build targets modern Windows. Each is a portable executable, currently
-under 850 KiB. Copy it to a writable location and run it. No installer or runtime
+under 1 MiB. Copy it to a writable location and run it. No installer or runtime
 DLL is required. Windows file paths are ASCII in this first version.
 
 **Windows 98/ME runtime compatibility remains unverified.** The executable
