@@ -165,7 +165,10 @@ fn originals(doc: &Document, report: &mut Report) {
         report.add(
             Level::Info,
             None,
-            format!("{count} stored original textures (.ORG); remove them for distribution builds"),
+            format!(
+                "{count} stored original texture{} (.ORG); remove them for distribution builds",
+                if count == 1 { "" } else { "s" }
+            ),
         );
     }
 }
@@ -408,7 +411,7 @@ mod tests {
         assert!(report
             .checks
             .iter()
-            .any(|c| c.message.contains("1 stored original textures")));
+            .any(|c| c.message.contains("1 stored original texture (.ORG)")));
         let mut small = vec![0; 128];
         for (at, n) in [(2, 8u32), (6, 8), (10, 64), (14, 64)] {
             small[at..at + 4].copy_from_slice(&n.to_le_bytes());

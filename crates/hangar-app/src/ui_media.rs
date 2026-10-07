@@ -1,5 +1,6 @@
 use super::view::{border, label_fit, text_fit, Action, Layout};
 use super::*;
+use hangar_core::originals;
 struct Frame {
     w: usize,
     h: usize,
@@ -91,6 +92,13 @@ impl App {
         }
         if self.stroke.is_none() {
             let r: Result<Stroke> = (|| {
+                let name = self.doc.archive.entries[entry].name.clone();
+                if originals::texture_of(&name).is_some() {
+                    return Err(format!(
+                        "{name} is a stored original and read-only; paint {} instead",
+                        originals::texture_of(&name).unwrap()
+                    ));
+                }
                 let bytes = self.doc.archive.entries[entry].read()?;
                 let pic = Pic::parse(&bytes)?;
                 if !pic.paintable {
@@ -101,43 +109,114 @@ impl App {
                         "Load the base .PAL before painting this partial-palette PIC".into(),
                     );
                 }
+                let erase = if self.eraser {
+                    Some(self.eraser_source(&name, &pic)?)
+                } else {
+                    None
+                };
                 Ok(Stroke {
                     entry,
-                    name: self.doc.archive.entries[entry].name.clone(),
+                    name,
                     original: Some(self.doc.archive.entries[entry].clone()),
                     bytes,
                     pic,
                     last: None,
+                    erase,
                 })
             })();
             match r {
                 Ok(s) => self.stroke = Some(s),
                 Err(e) => {
-                    self.status = format!("Error: {e}");
+                    // Eraser messages ("No stored original for X.PIC") read as status.
+                    self.status = if self.eraser {
+                        e
+                    } else {
+                        format!("Error: {e}")
+                    };
+                    return;
+                }
+            }
+        }
+        if self.eraser && self.stroke.as_ref().is_some_and(|s| s.erase.is_none()) {
+            let s = self.stroke.as_ref().unwrap();
+            match self.eraser_source(&s.name, &s.pic) {
+                Ok(source) => self.stroke.as_mut().unwrap().erase = Some(source),
+                Err(e) => {
+                    self.status = e;
                     return;
                 }
             }
         }
         self.painting = true;
+        let eraser = self.eraser;
         let s = self.stroke.as_mut().unwrap();
         let (px, py) = s.last.unwrap_or((x, y));
         let steps = x.abs_diff(px).max(y.abs_diff(py)).max(1);
         for step in 0..=steps {
             let xx = (px as i64 + (x as i64 - px as i64) * step as i64 / steps as i64) as usize;
             let yy = (py as i64 + (y as i64 - py as i64) * step as i64 / steps as i64) as usize;
-            if let Err(e) = s
-                .pic
-                .paint(&mut s.bytes, xx, yy, self.brush_radius, self.brush)
-            {
+            let painted = match s.erase.as_deref().filter(|_| eraser) {
+                Some(source) => s
+                    .pic
+                    .paint_from(&mut s.bytes, xx, yy, self.brush_radius, source),
+                None => s
+                    .pic
+                    .paint(&mut s.bytes, xx, yy, self.brush_radius, self.brush),
+            };
+            if let Err(e) = painted {
+                s.last = None;
                 self.status = format!("Error: {e}");
-                break;
+                return;
             }
         }
         s.last = Some((x, y));
-        self.status = format!(
-            "Painting index {} / release to commit one undo step",
-            self.brush
-        );
+        self.status = if eraser {
+            format!(
+                "Erasing {} to its original / release to commit one undo step",
+                s.name
+            )
+        } else {
+            format!(
+                "Painting index {} / release to commit one undo step",
+                self.brush
+            )
+        };
+    }
+    /// Eraser target pixels for `name`, matching `current`'s layout: the stored
+    /// original first, then a generated panel's face color, then the saved entry.
+    pub(super) fn eraser_source(&self, name: &str, current: &Pic) -> Result<Box<Pic>> {
+        let mismatch = |from: &str| {
+            format!("{from} has a different raster layout than {name}; use Restore texture")
+        };
+        if let Some(org) = originals::backup(&self.doc.archive, name) {
+            let pic = Box::new(Pic::parse(&org.read()?)?);
+            if !pic.same_layout(current) {
+                return Err(mismatch(&org.name));
+            }
+            return Ok(pic);
+        }
+        if let Some(color) = self.panel_color(name) {
+            let mut pic = Box::new(current.clone());
+            pic.pixels.fill(color);
+            return Ok(pic);
+        }
+        let current_entry = self
+            .doc
+            .archive
+            .find(name)
+            .map(|i| &self.doc.archive.entries[i]);
+        if let Some(saved) = self
+            .doc
+            .saved_entry(name)
+            .filter(|s| current_entry.is_none_or(|e| !s.same_storage(e)))
+        {
+            let pic = Box::new(Pic::parse(&saved.read()?)?);
+            if !pic.same_layout(current) {
+                return Err(mismatch("The saved entry"));
+            }
+            return Ok(pic);
+        }
+        Err(format!("No stored original for {name}"))
     }
     pub(super) fn paint_point(&mut self, x: i32, y: i32) {
         let Some((px, py)) = self.image_point(x, y) else {
@@ -148,7 +227,13 @@ impl App {
         };
         if self.pick_color {
             if let Some(p) = self.current_picture() {
-                self.brush = p.pixels[py * p.width + px];
+                let i = py * p.width + px;
+                if !p.mask[i] {
+                    self.status = "Transparent pixel / no color picked".into();
+                    return;
+                }
+                self.brush = p.pixels[i];
+                self.status = format!("Picked palette index {}", self.brush);
             }
             self.pick_color = false;
             return;
@@ -165,7 +250,8 @@ impl App {
             let mut strokes = core::mem::take(&mut self.stroke_parked);
             strokes.push(s);
             let plan = self.panel_draft.take();
-            let r = (|| {
+            let generated = strokes.iter().filter(|s| s.original.is_none()).count();
+            let r: Result<Option<Vec<String>>> = (|| {
                 let mut entries = Vec::new();
                 for s in strokes {
                     if let Some(original) = &s.original {
@@ -177,6 +263,24 @@ impl App {
                             .is_some_and(|e| e.same_storage(original))
                         {
                             return Err("Paint source changed; stroke cancelled".into());
+                        }
+                        // Erasing back to a known state reuses its exact storage.
+                        if original.read()? == s.bytes {
+                            continue;
+                        }
+                        let exact = self
+                            .doc
+                            .saved_entry(&s.name)
+                            .cloned()
+                            .into_iter()
+                            .chain(
+                                originals::backup(&self.doc.archive, &s.name)
+                                    .and_then(|o| o.renamed(&s.name).ok()),
+                            )
+                            .find(|e| e.read().is_ok_and(|b| b == s.bytes));
+                        if let Some(entry) = exact {
+                            entries.push(entry);
+                            continue;
                         }
                     } else if self.doc.archive.find(&s.name).is_some() {
                         return Err("Generated texture name changed; stroke cancelled".into());
@@ -195,7 +299,17 @@ impl App {
                     }
                     entries.push(Entry::new(&plan.original.name, plan.shape)?);
                 }
-                self.doc.transaction(entries, &[])
+                if entries.is_empty() {
+                    return Ok(None);
+                }
+                let entries = self.with_originals(entries);
+                let kept: Vec<_> = entries
+                    .iter()
+                    .filter(|e| self.doc.archive.find(&e.name).is_none())
+                    .filter_map(|e| originals::texture_of(&e.name).map(|_| e.name.clone()))
+                    .collect();
+                self.doc.transaction(entries, &[])?;
+                Ok(Some(kept))
             })();
             self.painting = false;
             self.refresh();
@@ -203,8 +317,20 @@ impl App {
             self.model_paint = model_paint;
             self.selected_face = face;
             match r {
-                Ok(()) => {
-                    self.status = "Paint stroke applied / Ctrl+Z undo / Package LIB to save".into()
+                Ok(None) => self.status = "Stroke changed no pixels / nothing changed".into(),
+                Ok(Some(kept)) => {
+                    let mut status = String::from("Paint stroke applied");
+                    if generated > 0 {
+                        status.push_str(&format!(
+                            " / {generated} flat panel{} converted to new textures",
+                            if generated == 1 { "" } else { "s" }
+                        ));
+                    }
+                    if !kept.is_empty() {
+                        status.push_str(&format!(" / original kept as {}", kept.join(", ")));
+                    }
+                    status.push_str(" / Ctrl+Z undo");
+                    self.status = status;
                 }
                 Err(e) => self.status = format!("Error: {e}"),
             }
@@ -464,6 +590,19 @@ impl App {
         }
         self.selected_face = Some(face);
         if uv[0] < 0 || uv[1] < 0 {
+            let named = self
+                .model_for_paint()
+                .and_then(|m| m.faces.get(face))
+                .is_some_and(|f| f.sub & 4 != 0 && !f.texture.is_empty() && !f.uv.is_empty());
+            if named {
+                // Its PIC is not loaded from any open LIB; never try to generate one.
+                self.status = "Texture is outside the active LIB; copy/open its owner first".into();
+                return;
+            }
+            if self.eraser {
+                self.status = "Flat-color panel / nothing painted to erase".into();
+                return;
+            }
             if let Err(error) = self.start_generated_stroke(face) {
                 self.status = error;
                 return;
@@ -549,9 +688,10 @@ impl App {
                     c::LINE_STRONG,
                 );
             }
+            // selected_face indexes the draft/preview model when one is active.
             if let Some(f) = self
                 .selected_face
-                .and_then(|i| self.context_model.as_ref().and_then(|m| m.faces.get(i)))
+                .and_then(|i| self.model_for_paint().and_then(|m| m.faces.get(i)))
             {
                 if f.uv.len() == f.indices.len() {
                     for j in 0..f.uv.len() {
@@ -581,13 +721,18 @@ impl App {
                 72,
                 w - 32,
                 &format!(
-                    "{} x {} / {}",
+                    "{} x {} / {}{}",
                     p.width,
                     p.height,
                     if p.palette.len() == 256 || self.palette_loaded {
                         "Indexed palette"
                     } else {
                         "Palette missing: grayscale preview"
+                    },
+                    if originals::texture_of(self.name()).is_some() {
+                        " / read-only"
+                    } else {
+                        ""
                     }
                 ),
                 c::INK_MUTED,
@@ -664,6 +809,10 @@ impl App {
         let bottom = self.height - 24;
         o.canvas.rect(r + 1, 26, w - 1, 28, c::GM_700);
         o.canvas.label(r + 12, 44, "Livery / media", c::INK);
+        if let Some(pic) = originals::texture_of(self.name()) {
+            self.original_inspector(o, &pic);
+            return;
+        }
         if self.pic.is_some() || self.model_for_paint().is_some() || self.name().ends_with(".PAL") {
             let tab = (w - 24) / 3;
             for (i, title) in ["Paint", "Materials", "Decals"].iter().enumerate() {
@@ -785,22 +934,57 @@ impl App {
                 Action::PaintLock,
                 self.paint_lock,
             );
+            y += 30;
+            let half = (w - 26) / 2;
+            o.button(
+                [r + 10, y, half, 24],
+                "Brush",
+                Action::PaintToggle,
+                self.model_paint && !self.eraser,
+            );
+            o.button(
+                [r + 16 + half, y, w - 26 - half, 24],
+                "Eraser",
+                Action::Eraser,
+                self.model_paint && self.eraser,
+            );
             y += 32;
         }
         if self.pic.is_some() {
+            // Widths fit "Pick color" at the 800 px minimum window.
+            let (brush, erase) = ((w - 32) * 26 / 100, (w - 32) * 30 / 100);
             o.button(
-                [r + 10, y, 90, 24],
+                [r + 10, y, brush, 24],
                 "Brush",
                 Action::PaintToggle,
-                self.paint_enabled,
+                self.paint_enabled && !self.eraser,
             );
             o.button(
-                [r + 106, y, w - 116, 24],
+                [r + 16 + brush, y, erase, 24],
+                "Eraser",
+                Action::Eraser,
+                self.paint_enabled && self.eraser,
+            );
+            o.button(
+                [r + 22 + brush + erase, y, w - 32 - brush - erase, 24],
                 "Pick color",
                 Action::PickColor,
                 self.pick_color,
             );
-            y += 34;
+            y += 30;
+            if let Some((note, restorable)) = self.original_note() {
+                label_fit(&mut o.canvas, r + 12, y + 12, w - 24, &note, c::INK_MUTED);
+                y += 20;
+                if restorable {
+                    o.button(
+                        [r + 10, y, w - 20, 24],
+                        "Restore texture",
+                        Action::RestoreTexture,
+                        false,
+                    );
+                    y += 30;
+                }
+            }
         }
         o.canvas.label(
             r + 12,
@@ -901,6 +1085,279 @@ impl App {
         }
     }
 }
+fn grouped(n: usize) -> String {
+    let digits = format!("{n}");
+    let mut out = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+/// Texture originals: `X.ORG` companions, generated panel colors and the
+/// session's saved entries. Edits stay entry-granular and one undo step each.
+impl App {
+    /// Append stored originals for the PICs these entries replace. Generated
+    /// panel sheets (original = face color) and returns to the saved entry skip it.
+    pub(super) fn with_originals(&self, entries: Vec<Entry>) -> Vec<Entry> {
+        let skip: Vec<String> = entries
+            .iter()
+            .filter(|e| {
+                self.doc
+                    .saved_entry(&e.name)
+                    .is_some_and(|s| s.same_storage(e))
+                    || self.panel_color(&e.name).is_some()
+            })
+            .map(|e| e.name.clone())
+            .collect();
+        originals::with_originals(&self.doc.archive, entries, &skip)
+    }
+    /// A sheet Hangar generated for a flat-color panel (named after its SH,
+    /// raw square layout) keeps that face's color byte in the SH record.
+    pub(super) fn panel_color(&self, name: &str) -> Option<u8> {
+        let stem = name.strip_suffix(".PIC")?;
+        let at = self.doc.archive.find(name)?;
+        let shapes: Vec<_> = self
+            .doc
+            .archive
+            .entries
+            .iter()
+            .filter(|e| {
+                e.name.strip_suffix(".SH").is_some_and(|sh| {
+                    let prefix: String = sh.chars().take(6).collect();
+                    stem.strip_prefix(prefix.as_str())
+                        .is_some_and(|n| n.len() == 2 && n.bytes().all(|b| b.is_ascii_hexdigit()))
+                })
+            })
+            .collect();
+        if shapes.is_empty()
+            || !self.doc.archive.entries[at]
+                .read()
+                .is_ok_and(|b| originals::panel_sheet(&b))
+        {
+            return None;
+        }
+        let mut color = None;
+        for shape in shapes {
+            let Some(model) = shape.read().ok().and_then(|b| Model::parse(&b).ok()) else {
+                continue;
+            };
+            for f in model.faces.iter().filter(|f| !f.uv.is_empty()) {
+                let texture = f.texture.to_ascii_uppercase();
+                if texture == stem || texture == name {
+                    if color.is_some_and(|c| c != f.color) {
+                        return None;
+                    }
+                    color = Some(f.color);
+                }
+            }
+        }
+        color
+    }
+    /// The selected PIC or ORG's original, for the Paint inspector.
+    pub(super) fn original_note(&self) -> Option<(String, bool)> {
+        let e = self.doc.archive.entries.get(self.selected)?;
+        if let Some(pic) = originals::texture_of(&e.name) {
+            return Some(if originals::valid(e) {
+                (
+                    format!("Stored original of {pic} / {} B", grouped(e.stored_len())),
+                    true,
+                )
+            } else {
+                ("Not a PIC payload; not a stored original".into(), false)
+            });
+        }
+        let org = originals::companion(&e.name)?;
+        if let Some(backup) = originals::backup(&self.doc.archive, &e.name) {
+            return Some((
+                format!("Original kept: {org} / {} B", grouped(backup.stored_len())),
+                true,
+            ));
+        }
+        if let Some(color) = self.panel_color(&e.name) {
+            let solid = self.pic.as_ref().is_some_and(|p| {
+                p.pixels
+                    .iter()
+                    .zip(&p.mask)
+                    .all(|(v, m)| !*m || *v == color)
+            });
+            return Some((format!("Original: panel color {color}"), !solid));
+        }
+        let junk = self.doc.archive.find(&org).is_some();
+        if self
+            .doc
+            .saved_entry(&e.name)
+            .is_some_and(|s| !s.same_storage(e))
+        {
+            return Some(("Original: saved entry, until the next save".into(), true));
+        }
+        Some((
+            if junk {
+                format!("{org} is not a PIC; no stored original")
+            } else {
+                "No stored original yet / kept on first edit".into()
+            },
+            false,
+        ))
+    }
+    /// Restore texture: X.PIC takes X.ORG's exact bytes and flag and X.ORG is
+    /// removed, in one undo step. Without one, a generated panel returns to its
+    /// face color, otherwise the session's saved entry is used.
+    pub(super) fn restore_texture(&mut self) -> Result<()> {
+        self.finish_stroke();
+        let selected = self
+            .doc
+            .archive
+            .entries
+            .get(self.selected)
+            .ok_or("Select a PIC")?
+            .name
+            .clone();
+        let name = match originals::texture_of(&selected) {
+            Some(pic) => pic,
+            None => self
+                .texture_target()
+                .map(|i| self.doc.archive.entries[i].name.clone())
+                .filter(|n| n.ends_with(".PIC"))
+                .ok_or("Select a PIC or a textured panel")?,
+        };
+        let at = self.doc.archive.find(&name);
+        let status = if originals::backup(&self.doc.archive, &name).is_some() {
+            let saved = self.doc.saved_entry(&name).cloned();
+            let (entries, removals) = originals::restore(&self.doc.archive, &name, saved.as_ref())?;
+            let org = removals[0].clone();
+            self.doc.transaction(entries, &removals)?;
+            format!("Restored {name} from {org} / one undo step")
+        } else if let Some(color) = self.panel_color(&name) {
+            let at = at.unwrap();
+            let mut bytes = self.doc.archive.entries[at].read()?;
+            let mut pic = Pic::parse(&bytes)?;
+            let solid = vec![color; pic.pixels.len()];
+            if pic.patch_indices(&mut bytes, &solid)? == 0 {
+                return Err(format!("{name} already shows its panel color {color}"));
+            }
+            self.doc.transaction(vec![Entry::new(&name, bytes)?], &[])?;
+            format!("Restored {name} to panel color {color} / one undo step")
+        } else if let (Some(at), Some(saved)) = (at, self.doc.saved_entry(&name).cloned()) {
+            if saved.same_storage(&self.doc.archive.entries[at]) {
+                return Err(format!("No stored original for {name}"));
+            }
+            self.doc.transaction(vec![saved], &[])?;
+            format!("Restored {name} from the saved entry / one undo step")
+        } else {
+            return Err(format!("No stored original for {name}"));
+        };
+        // Removing X.ORG can shift indices; keep the same entry selected by name.
+        if originals::texture_of(&selected).is_some() {
+            if let Some(i) = self.doc.archive.find(&name) {
+                self.select_entry(i);
+            }
+        } else {
+            let face = self.selected_face;
+            self.selected = self.doc.archive.find(&selected).unwrap_or(self.selected);
+            self.refresh();
+            self.selected_face = face;
+        }
+        self.status = status;
+        Ok(())
+    }
+    /// A stored original previews read-only; edits go to its PIC.
+    fn original_inspector(&self, o: &mut Layout, pic: &str) {
+        let r = self.right();
+        let w = self.width - r;
+        let mut y = 84;
+        if let Some((note, restorable)) = self.original_note() {
+            let (title, size) = note.split_once(" / ").unwrap_or((note.as_str(), ""));
+            label_fit(&mut o.canvas, r + 12, y, w - 24, title, c::INK);
+            y += 22;
+            let detail = if size.is_empty() {
+                "Read-only".to_string()
+            } else {
+                format!("{size} / read-only")
+            };
+            label_fit(&mut o.canvas, r + 12, y, w - 24, &detail, c::INK_MUTED);
+            y += 18;
+            if let Some(i) = self.doc.archive.find(pic) {
+                o.button(
+                    [r + 10, y, w - 20, 24],
+                    &format!("Open {pic}"),
+                    Action::Entry(i),
+                    false,
+                );
+                y += 30;
+            }
+            if restorable {
+                o.button(
+                    [r + 10, y, w - 20, 24],
+                    "Restore texture",
+                    Action::RestoreTexture,
+                    false,
+                );
+                y += 30;
+            }
+        }
+        if self.pic.is_some() {
+            o.button(
+                [r + 10, y, w - 20, 24],
+                "Export PNG",
+                Action::File(FileAction::Png),
+                false,
+            );
+            y += 30;
+        }
+        o.button(
+            [r + 10, y, w - 20, 24],
+            "Export entry",
+            Action::File(FileAction::Export),
+            false,
+        );
+    }
+    /// Package: drop every stored original for a distribution build, one undo step.
+    pub(super) fn remove_originals(&mut self) -> Result<()> {
+        self.finish_stroke();
+        let names = originals::stored(&self.doc.archive);
+        if names.is_empty() {
+            self.status = "No stored originals in this LIB".into();
+            return Ok(());
+        }
+        let selected = self.name().to_string();
+        self.doc.transaction(Vec::new(), &names)?;
+        self.selected = self.doc.archive.find(&selected).unwrap_or(self.selected);
+        self.refresh();
+        self.status = format!(
+            "Removed {} stored original{} (.ORG) / textures unchanged / Ctrl+Z undo",
+            names.len(),
+            if names.len() == 1 { "" } else { "s" }
+        );
+        Ok(())
+    }
+    /// Delete removes a PIC's stored original in the same undo step.
+    pub(super) fn delete_entry(&mut self) -> Result<()> {
+        self.finish_stroke();
+        let name = self
+            .doc
+            .archive
+            .entries
+            .get(self.selected)
+            .ok_or("No selected entry")?
+            .name
+            .clone();
+        let removals = originals::removals(&self.doc.archive, &name);
+        self.doc.transaction(Vec::new(), &removals)?;
+        self.refresh();
+        self.status = if removals.len() > 1 {
+            format!(
+                "Removed {name} and its stored original {} | Ctrl+Z undo",
+                removals[1]
+            )
+        } else {
+            "Entry removed | Ctrl+Z undo".into()
+        };
+        Ok(())
+    }
+}
 impl App {
     /// Integration smoke uses synthetic assets and verifies the live render, not just bytes.
     pub fn smoke_media(&mut self) {
@@ -944,9 +1401,21 @@ impl App {
                 .pixels[pixel],
             self.brush
         );
+        // The 3D eraser uses the same stroke path and the kept DEMO.ORG.
+        let painted = self.doc.archive.entries[entry].read().unwrap();
+        assert!(self.doc.archive.find("DEMO.ORG").is_some());
+        self.eraser = true;
+        self.paint_model_hit(face, uv);
+        assert!(self.painting);
+        self.finish_stroke();
+        self.eraser = false;
+        assert_eq!(self.doc.archive.entries[entry].read().unwrap(), original);
+        self.doc.undo();
+        assert_eq!(self.doc.archive.entries[entry].read().unwrap(), painted);
         self.doc.undo();
         self.refresh();
         assert_eq!(self.doc.archive.entries[entry].read().unwrap(), original);
+        assert!(self.doc.archive.find("DEMO.ORG").is_none());
         self.selected_face = Some(face);
         self.open_texture(entry);
         assert!(self.context_model.is_some());
@@ -1042,11 +1511,269 @@ impl App {
             "{name}: 3D brush updated one texture byte and live preview; repack and undo verified"
         ))
     }
+    /// Real-data check of stored originals on a user-supplied LIB (never CI).
+    #[cfg(not(windows))]
+    pub fn check_real_restore(&mut self) -> Result<String> {
+        self.textured = true;
+        let frame = self.render_model(192, 144);
+        let i = (193..frame.faces.len() - 193)
+            .find(|i| {
+                let face = frame.faces[*i];
+                face != usize::MAX
+                    && frame.uv[*i][0] >= 0
+                    && [*i - 1, *i + 1, *i - 192, *i + 192]
+                        .iter()
+                        .all(|j| frame.faces[*j] == face)
+            })
+            .ok_or("No paintable interior pixel")?;
+        let (face, uv) = (frame.faces[i], frame.uv[i]);
+        let texture = self.model_for_paint().unwrap().faces[face].texture.clone();
+        let name = if texture.contains('.') {
+            texture.to_ascii_uppercase()
+        } else {
+            format!("{}.PIC", texture.to_ascii_uppercase())
+        };
+        let org = originals::companion(&name).ok_or("Texture is not a PIC")?;
+        if self.doc.archive.find(&org).is_some() {
+            return Err(format!(
+                "{org} already exists; use a LIB without stored originals"
+            ));
+        }
+        let at = self.doc.archive.find(&name).ok_or("Texture missing")?;
+        let saved = self.doc.archive.entries[at].clone();
+        let original = saved.read()?;
+        let p = Pic::parse(&original)?;
+        let point = uv[1] as usize * p.width + uv[0] as usize;
+        self.brush = p.pixels[point] ^ 0x55;
+        let count = self.doc.archive.entries.len();
+        let stroke = |app: &mut App, radius: usize, eraser: bool| -> Result<()> {
+            app.eraser = eraser;
+            app.brush_radius = radius;
+            app.selected_face = Some(face);
+            app.paint_model_hit(face, uv);
+            if !app.painting {
+                return Err(app.status.clone());
+            }
+            app.finish_stroke();
+            app.eraser = false;
+            if app.status.starts_with("Error") {
+                return Err(app.status.clone());
+            }
+            Ok(())
+        };
+        stroke(self, 0, false)?;
+        let backup = originals::backup(&self.doc.archive, &name)
+            .ok_or("First paint did not keep a stored original")?
+            .clone();
+        if self.doc.archive.entries.len() != count + 1 || !backup.same_payload(&saved) {
+            return Err("Stored original is not the pre-paint entry".into());
+        }
+        stroke(self, 1, false)?;
+        if !originals::backup(&self.doc.archive, &name).is_some_and(|b| b.same_storage(&backup)) {
+            return Err("Second paint changed the stored original".into());
+        }
+        stroke(self, 3, true)?;
+        let at = self.doc.archive.find(&name).unwrap();
+        if self.doc.archive.entries[at].read()? != original
+            || self.doc.entry_changed(&self.doc.archive.entries[at])
+        {
+            return Err("Eraser did not return the saved bytes".into());
+        }
+        stroke(self, 0, false)?;
+        self.selected = self.doc.archive.find(&name).unwrap();
+        self.refresh();
+        self.restore_texture()?;
+        let at = self.doc.archive.find(&name).unwrap();
+        if !self.doc.archive.entries[at].same_storage(&saved)
+            || self.doc.archive.find(&org).is_some()
+            || self.doc.changed_count() != 0
+        {
+            return Err("Restore texture was not byte exact".into());
+        }
+        self.doc.undo();
+        if originals::backup(&self.doc.archive, &name).is_none() {
+            return Err("Undo did not bring the stored original back".into());
+        }
+        self.doc.redo();
+        self.doc.undo();
+        let report = hangar_core::validation::inspect(&self.doc, &mut Default::default());
+        if report.errors > 0 {
+            return Err(format!("Validation: {}", report.summary()));
+        }
+        let reopened = Archive::parse(self.doc.archive.bytes()?)?;
+        let kept = &reopened.entries[reopened
+            .find(&org)
+            .ok_or("Stored original lost on repack")?];
+        if kept.read()? != original || kept.flag() != saved.flag() {
+            return Err("Stored original changed on repack".into());
+        }
+        Ok(format!(
+            "{name}: {org} kept once (flag {}, {} B stored); eraser returned exact bytes; Restore texture byte exact and clean; undo/redo, validation and repack verified",
+            kept.flag(),
+            kept.stored_len()
+        ))
+    }
 }
 
 #[inline(never)]
 fn brush_test_app() -> Box<App> {
     Box::new(App::new())
+}
+fn press(a: &mut App, predicate: impl Fn(Action) -> bool) {
+    let hit = a
+        .layout()
+        .hits
+        .into_iter()
+        .rev()
+        .find(|h| predicate(h.action))
+        .expect("Visible control missing");
+    let (x, y) = (hit.rect[0] + hit.rect[2] / 2, hit.rect[1] + hit.rect[3] / 2);
+    a.click(x, y, 1, true);
+    a.click(x, y, 1, false);
+}
+fn shows(a: &mut App, text: &str) -> bool {
+    a.layout().canvas.commands.iter().any(|d| match d {
+        Draw::Label(_, _, s, _) | Draw::Text(_, _, s, _) => s.contains(text),
+        _ => false,
+    })
+}
+/// Drag one atlas stroke through texture pixels; release commits it.
+fn drag(a: &mut App, points: &[(i32, i32)]) {
+    let r = a.image_rect().unwrap();
+    let p = a.current_picture().unwrap();
+    let (w, h) = (p.width as i32, p.height as i32);
+    let at = |(u, v): (i32, i32)| {
+        (
+            r[0] + (u * 2 + 1) * r[2] / (w * 2),
+            r[1] + (v * 2 + 1) * r[3] / (h * 2),
+        )
+    };
+    let (x, y) = at(points[0]);
+    a.click(x, y, 1, true);
+    for point in &points[1..] {
+        let (x, y) = at(*point);
+        a.motion(x, y, false);
+    }
+    let (x, y) = at(*points.last().unwrap());
+    a.click(x, y, 1, false);
+}
+impl App {
+    /// Stored originals end to end: paint keeps X.ORG once, the eraser returns
+    /// exact bytes, Restore texture is one undo step, and X.ORG survives a repack.
+    #[inline(never)]
+    pub(super) fn smoke_originals(&mut self) {
+        let mut a = brush_test_app();
+        a.demo();
+        let entry = a.doc.archive.find("DEMO.PIC").unwrap();
+        let original = a.doc.archive.entries[entry].read().unwrap();
+        let saved = a.doc.archive.entries[entry].clone();
+        let count = a.doc.archive.entries.len();
+        a.select_entry(entry);
+        assert!(a.mode == Mode::Media && a.pic.is_some());
+        assert!(shows(&mut a, "No stored original yet"));
+        press(&mut a, |x| matches!(x, Action::PaintToggle));
+        assert!(a.paint_enabled && !a.eraser);
+        a.brush = 7;
+        a.brush_radius = 1;
+        drag(&mut a, &[(5, 5), (12, 5)]);
+        assert!(
+            a.status.contains("original kept as DEMO.ORG"),
+            "{}",
+            a.status
+        );
+        assert_eq!(a.doc.archive.entries.len(), count + 1);
+        let org = a
+            .doc
+            .archive
+            .find("DEMO.ORG")
+            .expect("first paint keeps a backup");
+        let backup = a.doc.archive.entries[org].clone();
+        assert!(backup.same_payload(&saved));
+        assert_ne!(a.doc.archive.entries[entry].read().unwrap(), original);
+        // A second stroke leaves the stored original untouched.
+        drag(&mut a, &[(20, 20)]);
+        assert_eq!(a.doc.archive.entries.len(), count + 1);
+        assert!(a.doc.archive.entries[org].same_storage(&backup));
+        let painted = a.doc.archive.entries[entry].read().unwrap();
+        assert!(shows(&mut a, "Original kept: DEMO.ORG / 1,856 B"));
+        // The eraser paints the original back over the same brush circle.
+        press(&mut a, |x| matches!(x, Action::Eraser));
+        assert!(a.paint_enabled && a.eraser);
+        a.brush_radius = 7;
+        drag(&mut a, &[(0, 5), (31, 5), (20, 20)]);
+        assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
+        assert!(!a.doc.entry_changed(&a.doc.archive.entries[entry]));
+        assert_eq!(a.doc.changed_count(), 1, "only DEMO.ORG remains added");
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.entries[entry].read().unwrap(), painted);
+        a.act(Action::Redo);
+        assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
+        // Esc discards a stroke and keeps the tool active.
+        press(&mut a, |x| matches!(x, Action::PaintToggle));
+        let r = a.image_rect().unwrap();
+        a.click(r[0] + 4, r[1] + 4, 1, true);
+        assert!(a.painting);
+        a.key(Key::Escape, false, false);
+        assert!(a.paint_enabled && a.stroke.is_none());
+        assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
+        // Restore texture: exact bytes and flag, X.ORG removed, one undo step.
+        a.brush_radius = 1;
+        drag(&mut a, &[(8, 8), (9, 9)]);
+        let repainted = a.doc.archive.entries[entry].read().unwrap();
+        press(&mut a, |x| matches!(x, Action::RestoreTexture));
+        assert_eq!(a.status, "Restored DEMO.PIC from DEMO.ORG / one undo step");
+        assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
+        assert!(a.doc.archive.find("DEMO.ORG").is_none());
+        assert_eq!(a.doc.changed_count(), 0);
+        a.act(Action::Undo);
+        assert!(a.doc.archive.find("DEMO.ORG").is_some());
+        assert_eq!(a.doc.archive.entries[entry].read().unwrap(), repainted);
+        a.act(Action::Redo);
+        assert!(a.doc.archive.find("DEMO.ORG").is_none());
+        a.act(Action::Undo);
+        // Repack and reopen: X.ORG keeps its bytes and still restores.
+        let reopened = Archive::parse(a.doc.archive.bytes().unwrap()).unwrap();
+        let org = reopened.find("DEMO.ORG").unwrap();
+        assert_eq!(reopened.entries[org].read().unwrap(), original);
+        assert_eq!(reopened.entries[org].flag(), saved.flag());
+        a.doc = Document::new(reopened);
+        a.select_entry(org);
+        assert!(a.pic.is_some() && a.mode == Mode::Media);
+        assert!(shows(&mut a, "Stored original of DEMO.PIC"));
+        assert!(!a
+            .layout()
+            .hits
+            .iter()
+            .any(|h| matches!(h.action, Action::PaintToggle | Action::DecalPlace)));
+        a.paint_at(org, 1, 1);
+        assert!(a.stroke.is_none() && a.status.contains("read-only"));
+        press(&mut a, |x| matches!(x, Action::RestoreTexture));
+        let entry = a.doc.archive.find("DEMO.PIC").unwrap();
+        assert_eq!(a.selected, entry);
+        assert_eq!(a.doc.archive.entries[entry].read().unwrap(), original);
+        assert!(a.doc.archive.find("DEMO.ORG").is_none());
+        // Once saved, with no stored original left, the eraser says so.
+        a.doc.mark_saved();
+        press(&mut a, |x| matches!(x, Action::Eraser));
+        drag(&mut a, &[(3, 3)]);
+        assert_eq!(a.status, "No stored original for DEMO.PIC");
+        assert!(!a.painting);
+        a.act(Action::Undo);
+        // Delete takes the stored original along; Package can drop all of them.
+        a.select_entry(a.doc.archive.find("DEMO.PIC").unwrap());
+        let before = a.doc.archive.bytes().unwrap();
+        a.key(Key::Delete, false, false);
+        assert!(a.doc.archive.find("DEMO.PIC").is_none());
+        assert!(a.doc.archive.find("DEMO.ORG").is_none());
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), before);
+        a.mode = Mode::Package;
+        press(&mut a, |x| matches!(x, Action::RemoveOriginals));
+        assert!(a.doc.archive.find("DEMO.ORG").is_none());
+        assert!(a.doc.archive.find("DEMO.PIC").is_some());
+        a.act(Action::Undo);
+        assert_eq!(a.doc.archive.bytes().unwrap(), before);
+    }
 }
 impl App {
     #[inline(never)]
@@ -1147,8 +1874,13 @@ impl App {
         a.paint_at(first, 7, 8);
         assert!(!a.doc.dirty());
         assert_eq!(a.stroke_parked.len(), 1);
+        let count = a.doc.archive.entries.len();
         a.finish_stroke();
         assert!(a.doc.dirty());
+        // Both painted textures keep one stored original each, in the same step.
+        assert_eq!(a.doc.archive.entries.len(), count + 2);
+        assert!(a.doc.archive.find("DEMO.ORG").is_some());
+        assert!(a.doc.archive.find("SECOND.ORG").is_some());
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
         a.paint_at(first, 2, 3);
@@ -1171,10 +1903,63 @@ impl App {
         a.paint_at(entry, 5, 5);
         assert!(!a.doc.dirty());
         a.finish_stroke();
+        // Two new panel sheets and no stored originals: their original is the face color.
         assert_eq!(a.doc.archive.entries.len(), count + 2);
+        assert!(!a
+            .doc
+            .archive
+            .entries
+            .iter()
+            .any(|e| e.name.ends_with(".ORG")));
+        assert!(a.status.contains("2 flat panels converted"), "{}", a.status);
         assert!(a.model.as_ref().unwrap().faces[..2]
             .iter()
             .all(|f| !f.texture.is_empty()));
+        // The eraser and Restore texture return a generated sheet to its face color.
+        let sheet = a
+            .doc
+            .archive
+            .entries
+            .iter()
+            .position(|e| e.name == "DEMO00.PIC")
+            .unwrap();
+        let face = a.model.as_ref().unwrap().faces[..2]
+            .iter()
+            .find(|f| f.texture.starts_with("DEMO00"))
+            .unwrap()
+            .color;
+        let solid = |a: &App| {
+            Pic::parse(&a.doc.archive.entries[sheet].read().unwrap())
+                .unwrap()
+                .pixels
+                .iter()
+                .all(|p| *p == face)
+        };
+        assert_eq!(a.panel_color("DEMO00.PIC"), Some(face));
+        assert!(!solid(&a));
+        a.eraser = true;
+        a.brush_radius = 7;
+        a.paint_at(sheet, 4, 4);
+        a.paint_at(sheet, 5, 5);
+        a.finish_stroke();
+        a.eraser = false;
+        assert!(solid(&a));
+        assert!(!a
+            .doc
+            .archive
+            .entries
+            .iter()
+            .any(|e| e.name.ends_with(".ORG")));
+        a.paint_at(sheet, 30, 30);
+        a.finish_stroke();
+        assert!(!solid(&a));
+        a.selected = sheet;
+        a.refresh();
+        a.restore_texture().unwrap();
+        assert!(solid(&a), "{}", a.status);
+        a.act(Action::Undo);
+        a.act(Action::Undo);
+        a.act(Action::Undo);
         a.act(Action::Undo);
         assert_eq!(a.doc.archive.bytes().unwrap(), original);
     }

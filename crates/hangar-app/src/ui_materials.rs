@@ -14,7 +14,10 @@ pub(super) struct DecalDraft {
 impl App {
     pub(super) fn texture_target(&self) -> Option<usize> {
         if self.pic.is_some() {
-            return Some(self.selected);
+            // Stored originals are read-only previews.
+            return hangar_core::originals::texture_of(self.name())
+                .is_none()
+                .then_some(self.selected);
         }
         let model = self.model_for_paint()?;
         let face = model.faces.get(self.selected_face?)?;
@@ -117,7 +120,13 @@ impl App {
         let (entry, pic, _) = self.palette_target()?;
         let source = self.doc.archive.entries[entry].read()?;
         let bytes = material::palette_color(&source, pic, self.brush as usize, rgb)?;
-        self.doc.replace(entry, bytes)?;
+        if pic {
+            let name = self.doc.archive.entries[entry].name.clone();
+            let entries = self.with_originals(vec![Entry::new(&name, bytes)?]);
+            self.doc.transaction(entries, &[])?;
+        } else {
+            self.doc.replace(entry, bytes)?;
+        }
         self.refresh();
         self.status =
             "Palette color changed / all users of this palette see the change / Ctrl+Z undo".into();
@@ -170,7 +179,7 @@ impl App {
             &self.doc.archive.entries[picture].name,
             &name.trim().to_ascii_uppercase(),
         )?;
-        let shapes = entries.len() - 1;
+        let shapes = entries.iter().filter(|e| e.name.ends_with(".SH")).count();
         self.doc.transaction(entries, &[])?;
         if let Some(i) = self.context_entry {
             self.context_model = self.doc.archive.entries[i]
@@ -293,6 +302,9 @@ impl App {
             .get(entry)
             .ok_or("Texture missing")?
             .clone();
+        if hangar_core::originals::texture_of(&original.name).is_some() {
+            return Err("Stored originals are read-only; place decals on the PIC".into());
+        }
         let source = original.read()?;
         let pic = Pic::parse(&source)?;
         if pic.palette.len() != 256 && !self.palette_loaded {
@@ -394,7 +406,8 @@ impl App {
         }
         let d = self.decal_draft.take().unwrap();
         let count = d.changed;
-        self.doc.replace(d.entry, d.bytes)?;
+        let entries = self.with_originals(vec![Entry::new(&d.original.name, d.bytes)?]);
+        self.doc.transaction(entries, &[])?;
         self.refresh();
         self.decal_active = false;
         self.status = format!("Decal baked into {count} indexed pixels / one Ctrl+Z undo step");
@@ -760,7 +773,10 @@ impl App {
         a.brush = 17;
         a.palette_edit("63 2 0").unwrap();
         assert_eq!(a.palette_rgb().unwrap(), [63, 2, 0]);
+        // PIC palette edits keep the texture's original in the same undo step.
+        assert!(a.doc.archive.find("DEMO.ORG").is_some());
         a.act(Action::Undo);
+        assert!(a.doc.archive.find("DEMO.ORG").is_none());
         let before = a.draw().commands;
         a.set_decal(
             Image::national(0).unwrap(),
@@ -780,6 +796,12 @@ impl App {
         a.decal_setting(4, "70").unwrap();
         a.apply_decal().unwrap();
         assert!(a.doc.dirty());
+        let org = a
+            .doc
+            .archive
+            .find("DEMO.ORG")
+            .expect("decal keeps the original");
+        assert!(a.doc.archive.entries[org].same_payload(a.doc.saved_entry("DEMO.PIC").unwrap()));
         let encoded = a.doc.archive.bytes().unwrap();
         let reopened = Archive::parse(encoded).unwrap();
         assert_ne!(

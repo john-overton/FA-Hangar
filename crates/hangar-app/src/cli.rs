@@ -82,6 +82,7 @@ pub fn run() -> Result<()> {
         },
         Some("--decal-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("PIC not found")?;app.select_entry(at);println!("{}",app.check_decal_import(argument(&args,3)?,argument(&args,4)?)?);},
         Some("--paint-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Shape not found")?;app.select_entry(at);println!("{}",app.check_real_paint()?);},
+        Some("--restore-check")=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Shape not found")?;app.select_entry(at);println!("{}",app.check_real_restore()?);},
         Some(cmd @ ("export-png"|"export-wav"))=>{app.open(argument(&args,1)?)?;let at=app.doc.archive.find(argument(&args,2)?).ok_or("Entry not found")?;app.select_entry(at);app.file_prompt(if cmd=="export-png"{FileAction::Png}else{FileAction::Wav});app.key(Key::Char('a'),true,false);for c in argument(&args,3)?.chars(){app.key(Key::Char(c),false,false);}app.key(Key::Enter,false,false);if app.status.starts_with("Error:"){return Err(app.status);}println!("{}",app.status);},
         Some("--native-snapshot") => {
             if let Some(path)=args.get(2).filter(|p|p.as_str()!="-") { app.open(path)?; if let Some(name)=args.get(3) { let at=app.doc.archive.find(name).ok_or("Entry not found")?;app.select_entry(at); } } else { app.demo(); }
@@ -151,7 +152,7 @@ pub fn run() -> Result<()> {
                 match cmd{
                     "inspect"=>{if ext=="SH"{let m=Model::parse(&bytes)?;println!("{} vertices, {} faces, writable={} {}",m.vertices.len(),m.faces.len(),m.writable,m.reason);}else{let b=Brf::parse(&bytes,ext)?;for (i,f) in b.fields.iter().enumerate(){println!("{i:4} {:36} {:7} {}{}",f.label,f.kind,if f.scaled{"^"}else{""},f.value);}}},
                     "extract"=>platform::write_new(argument(&args,3)?,&bytes)?,
-                    "replace"=>{let mut d=Document::new(a);d.replace(at,platform::read(argument(&args,3)?)?)?;crate::saving::library(argument(&args,4)?,&d.archive.bytes()?)?;},
+                    "replace"=>{let mut d=Document::new(a);let name=d.archive.entries[at].name.clone();let new=platform::read(argument(&args,3)?)?;if new!=bytes{let entries=hangar_core::originals::with_originals(&d.archive,vec![hangar_core::archive::Entry::new(&name,new)?],&[]);if let Some(org)=entries.get(1){println!("Original {name} kept as {}",org.name);}d.transaction(entries,&[])?;}crate::saving::library(argument(&args,4)?,&d.archive.bytes()?)?;},
                     "set"=>{let b=Brf::parse(&bytes,ext)?;let index=argument(&args,3)?.parse().map_err(|_|"Invalid field index")?;let new=b.edit(&bytes,index,argument(&args,4)?,ext)?;let mut d=Document::new(a);d.replace(at,new)?;crate::saving::library(argument(&args,5)?,&d.archive.bytes()?)?;},_=>{}
                 }
             }

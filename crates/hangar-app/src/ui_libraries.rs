@@ -18,7 +18,7 @@ pub(super) struct Library {
     camera: (i32, i32, i32, [i32; 2], bool),
     image: (i32, [i32; 2]),
     pub(super) filter: String,
-    pub(super) collapsed: [bool; 9],
+    pub(super) collapsed: [bool; 10],
     pub(super) root_collapsed: bool,
     category: Option<usize>,
     required: Vec<String>,
@@ -212,7 +212,7 @@ impl App {
         self.paint_enabled = false;
         self.selected = 0;
         self.category = None;
-        self.collapsed = [true; 9];
+        self.collapsed = [true; 10];
         self.root_collapsed = false;
         self.scroll = 0;
         self.table_scroll = 0;

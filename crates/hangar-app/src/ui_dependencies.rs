@@ -398,6 +398,21 @@ impl App {
         ] {
             o.button([r + 12, h - offset, w - r - 24, 24], title, action, false);
         }
+        // Editor backups for painted textures; distribution builds usually drop them.
+        if self
+            .doc
+            .archive
+            .entries
+            .iter()
+            .any(|e| hangar_core::originals::texture_of(&e.name).is_some())
+        {
+            o.button(
+                [r + 12, h - 191, w - r - 24, 24],
+                "Remove stored originals",
+                Action::RemoveOriginals,
+                false,
+            );
+        }
         o.button(
             [r + 12, h - 63, w - r - 24, 28],
             "Package LIB",

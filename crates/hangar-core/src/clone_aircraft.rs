@@ -561,7 +561,9 @@ pub fn build_with(
     ];
     if copied_originals > 0 {
         notes.push(format!(
-            "{copied_originals} stored original textures (.ORG) copied with their PICs; remove them for distribution builds."
+            "{copied_originals} stored original texture{} (.ORG) copied with {}; remove them for distribution builds.",
+            if copied_originals == 1 { "" } else { "s" },
+            if copied_originals == 1 { "its PIC" } else { "their PICs" }
         ));
     }
     notes.extend(unresolved);

@@ -133,6 +133,8 @@ impl App {
             entry: self.doc.archive.entries.len() + self.stroke_parked.len(),
             name: plan.name.clone(),
             bytes: plan.picture.clone(),
+            // A new panel sheet's original is its solid face color.
+            erase: Some(Box::new(pic.clone())),
             pic,
             last: None,
             original: None,

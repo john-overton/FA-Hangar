@@ -59,7 +59,10 @@ pub(super) enum Action {
     PlayAudio,
     StopAudio,
     PaintToggle,
+    Eraser,
     PickColor,
+    RestoreTexture,
+    RemoveOriginals,
     Brush(u8),
     Radius(usize),
     OpenTexture(usize),
@@ -142,7 +145,7 @@ pub(super) enum Icon {
     Warn,
     Link,
 }
-const GROUPS: [(&str, &str, Icon); 9] = [
+const GROUPS: [(&str, &str, Icon); 10] = [
     ("Aircraft", "PT", Icon::Aircraft),
     ("Shapes", "SH", Icon::Shape),
     ("Images", "PIC", Icon::Image),
@@ -152,6 +155,7 @@ const GROUPS: [(&str, &str, Icon); 9] = [
     ("Missions", "M", Icon::Mission),
     ("Sounds", "SND", Icon::Sound),
     ("Other resources", "...", Icon::Lib),
+    ("Original textures", "ORG", Icon::Image),
 ];
 pub(super) fn category_of(name: &str) -> usize {
     match extension(name) {
@@ -163,6 +167,7 @@ pub(super) fn category_of(name: &str) -> usize {
         "PAL" => 5,
         "M" | "MM" => 6,
         "5K" | "11K" | "22K" | "WAV" => 7,
+        "ORG" => 9,
         _ => 8,
     }
 }
@@ -470,9 +475,39 @@ impl App {
                 };
             }
             Action::StopAudio => crate::platform::stop_audio(),
+            // Brush and Eraser share one stroke path; Model mode keeps its paint toggle.
             Action::PaintToggle => {
-                self.paint_enabled = !self.paint_enabled;
+                self.finish_stroke();
+                if self.mode == Mode::Model {
+                    if !self.model_paint {
+                        self.act(Action::ModelPaint);
+                    }
+                } else {
+                    self.paint_enabled = !self.paint_enabled || self.eraser;
+                }
+                self.eraser = false;
                 self.pick_color = false;
+            }
+            Action::Eraser => {
+                self.finish_stroke();
+                if self.mode == Mode::Model {
+                    self.eraser = !self.eraser;
+                    if self.eraser && !self.model_paint {
+                        self.act(Action::ModelPaint);
+                    }
+                } else {
+                    self.paint_enabled = !self.paint_enabled || !self.eraser;
+                    self.eraser = self.paint_enabled;
+                }
+                self.pick_color = false;
+            }
+            Action::RestoreTexture => {
+                let result = self.restore_texture();
+                self.result(result);
+            }
+            Action::RemoveOriginals => {
+                let result = self.remove_originals();
+                self.result(result);
             }
             Action::PickColor => {
                 self.pick_color = !self.pick_color;
@@ -2676,6 +2711,7 @@ impl App {
         self.smoke_material_tools();
         self.smoke_advanced_tools();
         self.smoke_render_and_brush();
+        self.smoke_originals();
         self.smoke_object_tools();
         self.demo();
         self.width = 1280;

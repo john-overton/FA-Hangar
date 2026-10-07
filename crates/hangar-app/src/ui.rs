@@ -141,6 +141,8 @@ struct Stroke {
     bytes: Vec<u8>,
     pic: Pic,
     last: Option<(usize, usize)>,
+    /// Eraser target: the texture's original pixels, same layout as `pic`.
+    erase: Option<Box<Pic>>,
 }
 struct Browser {
     folder: String,
@@ -232,7 +234,7 @@ pub struct App {
     variant_id: String,
     variant_draft: Option<Variant>,
     required: Vec<String>,
-    collapsed: [bool; 9],
+    collapsed: [bool; 10],
     root_collapsed: bool,
     category: Option<usize>,
     menu: Option<usize>,
@@ -263,6 +265,7 @@ pub struct App {
     painting: bool,
     last_paint: Option<(usize, usize)>,
     paint_enabled: bool,
+    eraser: bool,
     pick_color: bool,
     textures: BTreeMap<String, Pic>,
     textured: bool,
@@ -378,7 +381,7 @@ impl App {
             variant_id: String::new(),
             variant_draft: None,
             required: Vec::new(),
-            collapsed: [true; 9],
+            collapsed: [true; 10],
             root_collapsed: false,
             category: None,
             menu: None,
@@ -409,6 +412,7 @@ impl App {
             painting: false,
             last_paint: None,
             paint_enabled: false,
+            eraser: false,
             pick_color: false,
             textures: BTreeMap::new(),
             textured: false,
@@ -452,7 +456,7 @@ impl App {
         self.required.clear();
         self.path = "Synthetic demo (not a game asset)".into();
         self.file_backed = false;
-        self.collapsed = [true; 9];
+        self.collapsed = [true; 10];
         self.category = None;
         self.scroll = 0;
         self.table_scroll = 0;
@@ -482,7 +486,7 @@ impl App {
         self.scroll = 0;
         self.filter.clear();
         self.category = None;
-        self.collapsed = [true; 9];
+        self.collapsed = [true; 10];
         self.table_scroll = 0;
         self.mode = Mode::Browse;
         let aircraft: Vec<_> = self
@@ -560,7 +564,10 @@ impl App {
         }
         self.refresh();
         self.frame();
-        if matches!(extension(self.name()), "PIC" | "PAL" | "5K" | "11K" | "WAV") {
+        if matches!(
+            extension(self.name()),
+            "PIC" | "ORG" | "PAL" | "5K" | "11K" | "WAV"
+        ) {
             self.mode = Mode::Media;
             if self.name().ends_with(".PAL") {
                 self.media_tab = 1;
@@ -669,11 +676,22 @@ impl App {
             match e.read() {
                 Ok(data) => {
                     let ext = extension(&e.name);
-                    if ext == "PIC" {
+                    if ext == "PIC" || ext == "ORG" {
+                        // A stored original previews like its PIC but is never painted.
                         match Pic::parse(&data) {
                             Ok(p) => {
-                                self.detail = format!("{} x {} / indexed PIC", p.width, p.height);
+                                self.detail = if ext == "ORG" {
+                                    format!(
+                                        "{} x {} / stored original, read-only",
+                                        p.width, p.height
+                                    )
+                                } else {
+                                    format!("{} x {} / indexed PIC", p.width, p.height)
+                                };
                                 self.pic = Some(p);
+                            }
+                            Err(_) if ext == "ORG" => {
+                                self.detail = "Not a PIC payload; not a stored original".into();
                             }
                             Err(e) => self.detail = e,
                         }
@@ -1064,10 +1082,26 @@ impl App {
                 Ok(())
             }
             FileAction::Replace => {
-                self.doc
-                    .replace(self.selected, crate::platform::read(path)?)?;
+                let bytes = crate::platform::read(path)?;
+                let old = self
+                    .doc
+                    .archive
+                    .entries
+                    .get(self.selected)
+                    .ok_or("No selected entry")?;
+                if old.read().ok().as_deref() == Some(bytes.as_slice()) {
+                    self.status = "Replacement is identical / nothing changed".into();
+                    return Ok(());
+                }
+                let entry = Entry::new(&old.name.clone(), bytes)?;
+                let entries = self.with_originals(vec![entry]);
+                let kept = entries.get(1).map(|e| e.name.clone());
+                self.doc.transaction(entries, &[])?;
                 self.refresh();
-                self.status = "Entry replaced | Ctrl+Z undo".into();
+                self.status = match kept {
+                    Some(org) => format!("Entry replaced / original kept as {org} | Ctrl+Z undo"),
+                    None => "Entry replaced | Ctrl+Z undo".into(),
+                };
                 Ok(())
             }
             FileAction::Export => {
@@ -1267,11 +1301,15 @@ impl App {
         }
         if self.painting {
             if matches!(key, Key::Escape) {
+                // Discard the stroke but stay in the active paint tool.
+                let tool = (self.paint_enabled, self.model_paint);
                 self.painting = false;
                 self.stroke = None;
                 self.stroke_parked.clear();
                 self.panel_draft = None;
                 self.refresh();
+                (self.paint_enabled, self.model_paint) = tool;
+                self.status = "Stroke discarded / nothing changed".into();
                 return;
             }
             self.finish_stroke();
@@ -1398,15 +1436,30 @@ impl App {
                                     format!("{}.PIC", f.texture)
                                 }
                             };
+                            if !from.to_ascii_uppercase().ends_with(".PIC") {
+                                return Err("Select a PIC texture to clone".into());
+                            }
                             let texture =
                                 self.doc.archive.find(&from).ok_or("Texture is missing")?;
-                            let pixels = self.doc.archive.entries[texture].read()?;
+                            if !to.ends_with(".PIC") || self.doc.archive.find(&to).is_some() {
+                                return Err("Choose an unused PIC name".into());
+                            }
                             let (bytes, n) = Model::retarget_texture(
                                 &self.doc.archive.entries[shape].read()?,
                                 &from,
                                 &to,
                             )?;
-                            self.doc.clone_texture(&to, pixels, shape, bytes)?;
+                            // Stored bytes and compression are copied as-is, with any stored original.
+                            let mut entries = vec![
+                                Entry::new(&self.doc.archive.entries[shape].name.clone(), bytes)?,
+                                self.doc.archive.entries[texture].renamed(&to)?,
+                            ];
+                            entries.extend(hangar_core::originals::cloned(
+                                &self.doc.archive,
+                                &from,
+                                &to,
+                            )?);
+                            self.doc.transaction(entries, &[])?;
                             self.select_entry(shape);
                             self.textured = true;
                             self.status=format!("Cloned {to}; {n} decoded references updated. Other LOD/damage references retain original textures.");
@@ -1503,7 +1556,7 @@ impl App {
                                 self.table_scroll = 0;
                                 self.category = None;
                                 self.filter.clear();
-                                self.collapsed = [true; 9];
+                                self.collapsed = [true; 10];
                                 self.mode = Mode::Model;
                                 self.refresh();
                                 self.status = format!(
@@ -1687,7 +1740,7 @@ impl App {
             Key::Up=>{self.select_entry(self.selected.saturating_sub(1));},
             Key::Down=>{self.select_entry(self.selected+1);},
             Key::Enter=>self.edit_field(self.field_selected),
-            Key::Delete=>{let r=self.doc.remove(self.selected);self.result(r);self.refresh();self.status="Entry removed | Ctrl+Z undo".into();},
+            Key::Delete=>{let r=self.delete_entry();self.result(r);},
             Key::Escape=>{self.graft_library=None;self.resource_drag=None;},
             Key::F1=>self.status="Ctrl+O open | Ctrl+S package | Ctrl+I add | Ctrl+E export | Ctrl+Z undo | MMB orbit | Shift+MMB pan | Wheel zoom | G/R/S transform, X/Y/Z toggles axis lock | Tab edit mode: G/R/S act on selected vertices, Shift+click extends, A all/none".into(),
             _=>{}
