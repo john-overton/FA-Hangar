@@ -2,6 +2,8 @@ use crate::{
     platform,
     ui::{App, Draw, FileAction, Key},
 };
+#[path = "cli_shape.rs"]
+mod shape;
 use hangar_core::{archive::Archive, brf::Brf, document::Document, model::Model, Result};
 fn argument(args: &[String], n: usize) -> Result<&str> {
     args.get(n)
@@ -12,7 +14,7 @@ pub fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new();
     match args.first().map(String::as_str) {
-        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
+        Some("--help")=>println!("TORE Hangar\n  tore-hangar [FILE.LIB]\n  --demo\n  --snapshot OUTPUT.svg [FILE.LIB [ENTRY]]\n  --smoke-test\n  demo-lib OUTPUT.LIB\n  export-object INPUT.LIB ENTRY ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  clone-aircraft INPUT.LIB DONOR.PT ID \"TITLE\" OUTPUT.LIB [SOURCE_LIBS...]\n  variant INPUT.LIB DONOR.PT INPUT.SH ID \"TITLE\" OUTPUT.LIB [TEXTURES...]\n  list INPUT.LIB\n  inspect INPUT.LIB ENTRY\n  references INPUT.LIB ENTRY\n  validate INPUT.LIB\n  extract INPUT.LIB ENTRY OUTPUT\n  repack INPUT.LIB OUTPUT.LIB\n  repair-panels INPUT.LIB ENTRY.SH NEW_OUTPUT.LIB\n  --shape-inventory INPUT.LIB [ENTRY.SH]\n  --shape-pose INPUT.LIB ENTRY.SH [NAME=VALUE...]\n  --stub-census NEW_OUTPUT.txt INPUT.LIB...\n  replace INPUT.LIB ENTRY RESOURCE OUTPUT.LIB\n  set INPUT.LIB ENTRY FIELD_INDEX VALUE OUTPUT.LIB\nRetail LIB names are protected. Custom LIB saves keep numbered .bak backups. Resource exports require new files. Windows launches the native GUI."),
         Some("--smoke-test")=>{
             app.demo();let before=app.doc.archive.bytes()?;
             app.key(Key::Char('g'),false,false);app.key(Key::Char('1'),false,false);app.key(Key::Char('q'),false,false);app.key(Key::Enter,false,false);
@@ -44,6 +46,9 @@ pub fn run() -> Result<()> {
             app.smoke_save_policy();
             println!("PASS: shared UI selection, transform, undo, BRF edit, draw commands, donor wizard, packaging, reopening");
         },
+        Some("--stub-census")=>{let report=shape::census(&args[2..])?;platform::write_new(argument(&args,1)?,report.as_bytes())?;println!("Wrote {}",argument(&args,1)?);},
+        Some("--shape-pose")=>print!("{}",shape::pose(argument(&args,1)?,argument(&args,2)?,&args[3..])?),
+        Some("--shape-inventory")=>print!("{}",shape::inventory(argument(&args,1)?,args.get(2).map(String::as_str))?),
         Some("--repair-check")=>{
             app.open(argument(&args,1)?)?;
             let at=app.doc.archive.find(argument(&args,2)?).ok_or("SH not found")?;
