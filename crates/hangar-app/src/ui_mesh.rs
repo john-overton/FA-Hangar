@@ -1,7 +1,7 @@
 //! Edit Mesh vertex drags and transactional panel texture creation.
 use super::view::Action;
 use super::*;
-use hangar_core::shape_edit;
+use hangar_core::{shape_edit, shape_texture as tex};
 pub(super) struct PanelPlan {
     pub entry: usize,
     pub original: Entry,
@@ -9,6 +9,9 @@ pub(super) struct PanelPlan {
     pub name: String,
     pub picture: Vec<u8>,
     pub face: usize,
+    /// Panels converted together and the sheet size.
+    pub faces: usize,
+    pub size: [u32; 2],
 }
 pub(super) struct MeshDrag {
     pub entry: usize,
@@ -84,7 +87,31 @@ impl App {
             .filter(|p| p.entry == entry)
             .map(|p| p.shape.clone())
             .unwrap_or(original.read()?);
-        let result = shape_edit::texture_panel(&source, face, &name, 64, &self.base_palette)?;
+        // Sheets follow the panel: sized from the shape's own texel density,
+        // and without Panel lock coplanar neighbours of the same colour share
+        // one sheet so a stroke crosses them seamlessly.
+        let model = Model::parse(&source)?;
+        let density = tex::atlas_density(&model).unwrap_or(tex::DEFAULT_DENSITY);
+        let group = if self.paint_lock {
+            vec![face]
+        } else {
+            shape_edit::coplanar_panels(&model, face, 32)
+        };
+        let result =
+            shape_edit::texture_panels(&source, &group, &name, density, &self.base_palette)
+                .or_else(|e| {
+                    if group.len() > 1 {
+                        shape_edit::texture_panels(
+                            &source,
+                            &[face],
+                            &name,
+                            density,
+                            &self.base_palette,
+                        )
+                    } else {
+                        Err(e)
+                    }
+                })?;
         Ok(PanelPlan {
             entry,
             original,
@@ -92,6 +119,8 @@ impl App {
             name,
             picture: result.picture,
             face: result.face,
+            faces: result.faces.len(),
+            size: result.size,
         })
     }
     pub(super) fn create_panel_texture(&mut self) -> Result<()> {
@@ -99,6 +128,7 @@ impl App {
         let entry = plan.entry;
         let name = plan.name.clone();
         let face = plan.face;
+        let (panels, [w, h]) = (plan.faces, plan.size);
         self.doc.transaction(
             vec![
                 Entry::new(&plan.original.name, plan.shape)?,
@@ -114,7 +144,14 @@ impl App {
         let i = self.doc.archive.find(&name).unwrap();
         self.open_texture(i);
         self.media_tab = 0;
-        self.status = format!("Created {name} and mapped it to the selected panel. One undo step.");
+        self.status = format!(
+            "Created {name}, {w} \u{d7} {h}, mapped to {}. One undo step.",
+            if panels == 1 {
+                "the selected panel".to_string()
+            } else {
+                format!("{panels} coplanar panels")
+            }
+        );
         Ok(())
     }
     pub(super) fn start_generated_stroke(&mut self, face: usize) -> Result<()> {
@@ -420,6 +457,24 @@ impl App {
         assert_eq!(a.doc.archive.entries.len(), 10);
         let generated = a.model.as_ref().unwrap().faces[face].texture.clone();
         assert!(a.doc.archive.find(&generated).is_some());
+        // The sheet follows the panel (not a fixed 64 x 64): its in-plane
+        // extents at the default density, square texels, long side along U.
+        let sheet = a.doc.archive.entries[a.doc.archive.find(&generated).unwrap()]
+            .read()
+            .unwrap();
+        let sheet = Pic::parse(&sheet).unwrap();
+        let m = a.model.as_ref().unwrap();
+        let f = &m.faces[face];
+        let points: Vec<[i32; 3]> = f.indices.iter().map(|i| m.vertices[*i].point).collect();
+        let expect = tex::planar(
+            &[(points, f.normal)],
+            tex::Plane::Auto,
+            tex::Fit::Density(tex::DEFAULT_DENSITY),
+        )
+        .unwrap();
+        assert_eq!([sheet.width as u32, sheet.height as u32], expect.size);
+        assert!(sheet.width >= sheet.height);
+        assert_eq!(f.uv, expect.uv[0]);
         let bytes = a.doc.archive.bytes().unwrap();
         assert!(Archive::parse(bytes).unwrap().find(&generated).is_some());
         a.act(Action::Undo);
