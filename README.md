@@ -1,8 +1,6 @@
 <p align="center"><img src="docs/FAHANGAR.png" alt="F.A. Hangar: a jet in Union Jack livery, half rendered as a wireframe, over sunset clouds" width="100%"></p>
 
-<h1 align="center">F.A. Hangar</h1>
-
-<p align="center">
+<h1><p align="center">
   <a href="https://github.com/john-overton/FA-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/FA-Hangar/windows.yml?event=release&label=release%20build" alt="Release build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only"></a>
   <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.0-orange" alt="Version 0.9.0"></a>
@@ -10,6 +8,7 @@
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/platforms-Windows%2098%2FME%20%C2%B7%20Win64%20%C2%B7%20Linux%20X11-555" alt="Platforms: Windows 98/ME, Win64, Linux X11"></a>
   <a href="docs/ARCHITECTURE.md"><img src="https://img.shields.io/badge/core-no__std-6c757d" alt="no_std core"></a>
 </p>
+</h1>
 
 A small, standalone Rust workshop for Fighters Anthology LIB files, built toward
 a Blender-light workflow for the game's models and their related resources. Native
