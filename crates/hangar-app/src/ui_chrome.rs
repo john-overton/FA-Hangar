@@ -366,7 +366,7 @@ impl App {
             ],
             _ => vec![
                 Item::new("Controls", Action::Help).key("F1"),
-                Item::new("About T.O.R.E Hangar", Action::About),
+                Item::new("About F.A. Hangar", Action::About),
                 Item::new("Load synthetic demo", Action::Demo),
             ],
         }

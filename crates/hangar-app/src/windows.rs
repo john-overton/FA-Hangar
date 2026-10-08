@@ -240,7 +240,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
         MessageBoxA(
             ptr::null_mut(),
             c"Hangar stopped after an internal error. If saving, check the LIB and its .BAK/.TMP files.".as_ptr(),
-            c"TORE Hangar".as_ptr(),
+            c"F.A. Hangar".as_ptr(),
             0x10,
         );
         ExitProcess(1)
@@ -731,7 +731,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             cursor: LoadCursorA(ptr::null_mut(), 32512usize as *const c_char),
             background: ptr::null_mut(),
             menu: ptr::null(),
-            name: c"ToreHangar".as_ptr(),
+            name: c"FaHangar".as_ptr(),
         };
         if RegisterClassA(&class) == 0 {
             ExitProcess(1);
@@ -739,7 +739,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let hwnd = CreateWindowExA(
             0,
             class.name,
-            concat!("TORE Hangar ", env!("CARGO_PKG_VERSION"), "\0")
+            concat!("F.A. Hangar ", env!("CARGO_PKG_VERSION"), "\0")
                 .as_ptr()
                 .cast(),
             0x00cf0000,
@@ -1074,24 +1074,24 @@ fn save_paths(name: &str, paths: &[String]) -> Result<()> {
     Ok(())
 }
 pub fn load_recent() -> Vec<String> {
-    load_paths("tore-hangar-recent.txt", 8)
+    load_paths("fa-hangar-recent.txt", 8)
 }
 pub fn save_recent(paths: &[String]) -> Result<()> {
-    save_paths("tore-hangar-recent.txt", paths)
+    save_paths("fa-hangar-recent.txt", paths)
 }
 /// The last game palette Hangar resolved: its source label, then 1,536 hex
 /// digits. Read-only locations keep it for the session only.
 pub fn load_palette_memory() -> Vec<String> {
-    load_paths("tore-hangar-palette.txt", 2)
+    load_paths("fa-hangar-palette.txt", 2)
 }
 pub fn save_palette_memory(lines: &[String]) -> Result<()> {
-    save_paths("tore-hangar-palette.txt", lines)
+    save_paths("fa-hangar-palette.txt", lines)
 }
 pub fn load_decals() -> Vec<String> {
-    load_paths("tore-hangar-decals.txt", 16)
+    load_paths("fa-hangar-decals.txt", 16)
 }
 pub fn save_decals(paths: &[String]) -> Result<()> {
-    save_paths("tore-hangar-decals.txt", paths)
+    save_paths("fa-hangar-decals.txt", paths)
 }
 
 static mut AUDIO_DATA: *mut Vec<u8> = ptr::null_mut();

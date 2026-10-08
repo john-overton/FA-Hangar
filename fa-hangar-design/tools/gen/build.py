@@ -519,7 +519,7 @@ html,body{{margin:0;background:var(--gm-900)}}
 <rect class="b2 r" x="660" y="24" width="320" height="252"/>
 {"".join(f'<circle class="dot" cx="{x}" cy="{y}" r="1.25"/>' for x in range(676, 961, 16) for y in range(40, 276, 16))}
 </svg>
-<div class="name">TORE Hangar<span class="tag">Lib editor for Fighters Anthology, built to run on Windows 98.</span></div>
+<div class="name">F.A. Hangar<span class="tag">Lib editor for Fighters Anthology, built to run on Windows 98.</span></div>
 </div>
 </body></html>
 '''

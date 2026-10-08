@@ -7,6 +7,14 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 
 ## Unreleased
 
+- **Renamed to F.A. Hangar.** The app is not part of the TORE project, so
+  T.O.R.E Hangar is now F.A. Hangar: the executable and release packages are
+  `fa-hangar`, the design system lives in `fa-hangar-design`, and the
+  repository is FA-Hangar. The app icon reads F.A. over HANGAR, with an FH
+  monogram at 24 and 16 px. The recent-files, palette and decal lists are
+  now `fa-hangar-recent.txt`, `fa-hangar-palette.txt` and
+  `fa-hangar-decals.txt`; rename the old `tore-hangar-*.txt` files beside
+  the executable to keep them.
 - **Vertex handles sit on their corners at every zoom.** In Edit Mesh the
   handles (and picking, box select, the gizmo pivot, snap targets and the
   other overlay markers) turned whole source units through the camera
@@ -45,12 +53,12 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 - **CI runs on demand or when a release is published, and names builds by
   version.** The Windows workflow no longer runs on every push and pull
   request. It reads the version from `Cargo.toml`, requires a release tag of
-  `v<version>`, and produces `tore-hangar-<version>-win98-me-pentium4` and
-  `tore-hangar-<version>-win64` packages holding
-  `tore-hangar-<version>.exe` and a `SHA256.txt` in `sha256sum` format. On a
+  `v<version>`, and produces `fa-hangar-<version>-win98-me-pentium4` and
+  `fa-hangar-<version>-win64` packages holding
+  `fa-hangar-<version>.exe` and a `SHA256.txt` in `sha256sum` format. On a
   release it also attaches both ZIPs to the release. See
   [RELEASING.md](RELEASING.md).
-- **Help > About T.O.R.E Hangar.** A window with the app icon, the version,
+- **Help > About F.A. Hangar.** A window with the app icon, the version,
   the build target, the licence and the project address; the version also
   shows at the right of the status bar.
 
@@ -273,8 +281,8 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   and the long name separately instead of writing one title into both.
   `export-object` keeps its TITLE argument and adds `--short NAME` and
   `--long NAME`.
-- **App icon.** A gold outline on a gunmetal plate with TORE over HANGAR
-  ([design](../tore-hangar-design/icons/app/README.md)). Windows builds embed
+- **App icon.** A gold outline on a gunmetal plate with F.A. over HANGAR
+  ([design](../fa-hangar-design/icons/app/README.md)). Windows builds embed
   it at 16, 24, 32 and 48 px in 8-bit and 32-bit color plus a 256 px PNG, so
   Explorer, the title bar and the taskbar show it on Windows 98/ME and current
   Windows. The EXE also carries version information (product name, version,

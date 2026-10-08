@@ -1,4 +1,4 @@
-/* TORE Hangar component styles. Solid fills, 1px lines, no alpha, no gradients:
+/* F.A. Hangar component styles. Solid fills, 1px lines, no alpha, no gradients:
    every rule here must be reproducible by a GDI / software rasterizer. */
 .th-root{font-family:var(--font-ui);font-size:12px;line-height:16px;color:var(--ink);background:var(--gm-900);-webkit-font-smoothing:antialiased}
 .th-root *{box-sizing:border-box}

@@ -1,4 +1,4 @@
-Hangar is the TORE dev tool for Fighters Anthology LIB files: open libs, browse entries, edit entry fields, view and adjust 3D shapes, graft aspects between entries, and repackage. It borrows Blender's layout and navigation and swaps Blender's scene concepts for lib entries.
+Hangar is a dev tool for Fighters Anthology LIB files: open libs, browse entries, edit entry fields, view and adjust 3D shapes, graft aspects between entries, and repackage. It borrows Blender's layout and navigation and swaps Blender's scene concepts for lib entries.
 
 ## Principles
 
@@ -59,10 +59,10 @@ One theme, Gunmetal. The surface ladder runs dark to light: `gm-1000` keylines, 
 Hangar's own 16px line set in `assets/Icons`: 1.5px stroke, round caps and joins, 16px grid, drawn with currentColor in the app. Idle icons are `ink-muted`, active ones `amber`. Every entry type has one icon: aircraft (PT), shape (SH), image (PIC), weapon (JT), object (OT), palette (PAL), mission (M), sound (11K), lib (.LIB). Icon-only buttons always carry a `title`.
 
 The app icon (`icons/app/`) is the product mark, not part of the line set: a
-gold `amber` outline on a chamfered `gm-900` plate, TORE in `ink` over HANGAR
+gold `amber` outline on a chamfered `gm-900` plate, F.A. in `ink` over HANGAR
 in `amber`, echoing the patch logo. It is the only decorative use of amber.
 Letters are bold condensed square capitals drawn as geometry. 48 and 32 px are
 hand-placed pixel art of the full name; at 24 and 16 px, where the name is
-illegible, a TH monogram (T `ink`, H `amber`) keeps the same plate and outline.
+illegible, an FH monogram (F `ink`, H `amber`) keeps the same plate and outline.
 Every size has solid pixels only, so the 8-bit Windows 98 entries match the
 32-bit ones exactly.

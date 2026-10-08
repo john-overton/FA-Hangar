@@ -7,7 +7,7 @@ JSON together with the output.
 ## Theme (`theme.py`)
 
 ```sh
-python3 tore-hangar-design/tools/gen/theme.py
+python3 fa-hangar-design/tools/gen/theme.py
 ```
 
 Reads `tokens/tokens.json` and writes:
@@ -29,7 +29,7 @@ committed files are current.
 ## Icons and text advances (`glyphs.py`)
 
 ```sh
-python3 tore-hangar-design/tools/gen/glyphs.py
+python3 fa-hangar-design/tools/gen/glyphs.py
 ```
 
 Writes `crates/hangar-app/src/ui_glyphs.rs`, plain const data the app compiles
@@ -56,13 +56,13 @@ in. Needs `rsvg-convert`, ImageMagick `magick` and the Liberation Sans TTFs.
 ## App icon (`app_icon.py`)
 
 ```sh
-python3 tore-hangar-design/tools/gen/app_icon.py [--review DIR]
+python3 fa-hangar-design/tools/gen/app_icon.py [--review DIR]
 ```
 
-Renders `icons/app/tore-hangar.svg` at 256 with `rsvg-convert` (read back
+Renders `icons/app/fa-hangar.svg` at 256 with `rsvg-convert` (read back
 through `magick`), builds 16, 24, 32 and 48 from the hand-tuned pixel art in
-the script, and writes `icons/app/tore-hangar-<size>.png` and
-`icons/app/tore-hangar.ico` (8-bit and 32-bit DIB entries with AND masks for
+the script, and writes `icons/app/fa-hangar-<size>.png` and
+`icons/app/fa-hangar.ico` (8-bit and 32-bit DIB entries with AND masks for
 the small sizes, PNG for 256). Colors come from `tokens.json`; the script
 refuses a master that uses a color outside the tokens. `--review DIR` writes
 1x and 8x contact sheets on dark, teal and white grounds. The build reads the

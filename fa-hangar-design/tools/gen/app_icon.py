@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate the TORE Hangar application icon.
+"""Generate the F.A. Hangar application icon.
 
-    python3 tore-hangar-design/tools/gen/app_icon.py [--review DIR]
+    python3 fa-hangar-design/tools/gen/app_icon.py [--review DIR]
 
-Reads `icons/app/tore-hangar.svg` (the 256px master) and the hand-tuned pixel
+Reads `icons/app/fa-hangar.svg` (the 256px master) and the hand-tuned pixel
 art below, and writes into `icons/app/`:
 
-- `tore-hangar-{16,24,32,48,256}.png`
-- `tore-hangar.ico`: 16, 24, 32 and 48 as uncompressed DIB entries, each in an
+- `fa-hangar-{16,24,32,48,256}.png`
+- `fa-hangar.ico`: 16, 24, 32 and 48 as uncompressed DIB entries, each in an
   8-bit 256-colour palette version (Windows 98/ME) and a 32-bit BGRA version,
   both with AND masks, plus 256 as PNG for current Windows.
 
@@ -28,7 +28,7 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 DESIGN = os.path.normpath(os.path.join(HERE, "..", ".."))
 APP = os.path.join(DESIGN, "icons", "app")
-MASTER = os.path.join(APP, "tore-hangar.svg")
+MASTER = os.path.join(APP, "fa-hangar.svg")
 
 TOKENS = {t["name"]: t["value"] for t in json.load(open(os.path.join(DESIGN, "tokens", "tokens.json")))["color"]["tokens"]}
 
@@ -44,28 +44,27 @@ PLATE, GOLD, INK = rgb("gm-900"), rgb("amber"), rgb("ink")
 # land between pixels below 64px. Each size is a chamfered plate whose edge is
 # the gold outline (`gold` px thick, eroded 4-connected so the 45-degree
 # corners are single-pixel diagonals), with glyph bitmaps placed on it.
-#   16: "TH" monogram (T ink, H amber), 1px strokes like the outline.
-#   24: "TH" monogram, 2px strokes.
-#   32: TORE (2px strokes) over HANGAR in a 3x5 face (N is 4 wide): the
+#   16: "FH" monogram (F ink, H amber), 1px strokes like the outline.
+#   24: "FH" monogram, 2px strokes.
+#   32: F.A. (2px strokes) over HANGAR in a 3x5 face (N is 4 wide): the
 #       smallest size where the full name still reads at 1x.
-#   48: TORE (3px strokes, chamfered O and R) over a 5x8 HANGAR.
+#   48: F.A. (3px strokes, chamfered A) over a 5x8 HANGAR.
 # Glyph rows use '#' for ink and '.' for plate; lowercase keys are the
 # HANGAR line's smaller face.
 GLYPHS = {
     16: {
-        "T": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+        "F": ["#####", "#....", "#....", "#....", "####.", "#....", "#....", "#....", "#....", "#...."],
         "H": ["#...#", "#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#", "#...#", "#...#"],
     },
     24: {
-        "T": ["########"] * 2 + ["...##..."] * 11,
+        "F": ["#######"] * 2 + ["##....."] * 3 + ["######."] * 2 + ["##....."] * 6,
         "H": ["##...##", "##...##", "##...##", "##...##", "##...##", "#######", "#######", "##...##",
               "##...##", "##...##", "##...##", "##...##", "##...##"],
     },
     32: {
-        "T": ["######"] * 2 + ["..##.."] * 7,
-        "O": [".###.", "#####"] + ["##.##"] * 5 + ["#####", ".###."],
-        "R": ["####.", "#####", "##.##", "#####", "####.", "##.#.", "##.##", "##.##", "##.##"],
-        "E": ["#####", "#####", "##...", "##...", "####.", "##...", "##...", "#####", "#####"],
+        "F": ["#####", "#####", "##...", "##...", "####.", "##...", "##...", "##...", "##..."],
+        "A": [".###.", "#####", "##.##", "##.##", "#####", "##.##", "##.##", "##.##", "##.##"],
+        ".": [".."] * 7 + ["##"] * 2,
         "h": ["#.#", "#.#", "###", "#.#", "#.#"],
         "a": ["###", "#.#", "###", "#.#", "#.#"],
         "n": ["#..#", "##.#", "#.##", "#..#", "#..#"],
@@ -73,11 +72,9 @@ GLYPHS = {
         "r": ["##.", "#.#", "##.", "#.#", "#.#"],
     },
     48: {
-        "T": ["#########"] * 3 + ["...###..."] * 13,
-        "O": ["..####..", ".######.", "########"] + ["###..###"] * 10 + ["########", ".######.", "..####.."],
-        "R": ["######..", "#######.", "########", "###..###", "###..###", "########", "#######.", "######..",
-              "###.###.", "###.###.", "###..###", "###..###", "###..###", "###..###", "###..###", "###..###"],
-        "E": ["#######"] * 3 + ["###...."] * 4 + ["######."] * 3 + ["###...."] * 3 + ["#######"] * 3,
+        "F": ["#######"] * 3 + ["###...."] * 4 + ["######."] * 3 + ["###...."] * 6,
+        "A": ["..####..", ".######.", "########"] + ["###..###"] * 4 + ["########"] * 3 + ["###..###"] * 6,
+        ".": ["..."] * 13 + ["###"] * 3,
         "h": ["#...#", "#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
         "a": [".###.", "#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
         "n": ["#...#", "##..#", "##..#", "#.#.#", "#.#.#", "#..##", "#..##", "#...#"],
@@ -88,12 +85,12 @@ GLYPHS = {
 
 # Per size: (gold outline px, corner chamfer px, [(text, x, y, gap, color)]).
 LAYOUT = {
-    16: (1, 2, [("TH", 2, 3, 2, None)]),
-    24: (1, 3, [("TH", 3, 5, 2, None)]),
-    32: (1, 4, [("TORE", 4, 8, 1, INK), ("hangar", 4, 20, 1, GOLD)]),
-    48: (2, 6, [("TORE", 5, 9, 2, INK), ("hangar", 5, 30, 2, GOLD)]),
+    16: (1, 2, [("FH", 2, 3, 2, None)]),
+    24: (1, 3, [("FH", 4, 5, 2, None)]),
+    32: (1, 4, [("F.A.", 8, 8, 1, INK), ("hangar", 4, 20, 1, GOLD)]),
+    48: (2, 6, [("F.A.", 11, 9, 2, INK), ("hangar", 5, 30, 2, GOLD)]),
 }
-MONOGRAM = {"T": INK, "H": GOLD}
+MONOGRAM = {"F": INK, "H": GOLD}
 
 
 def plate(n, gold, chamfer):
@@ -218,7 +215,7 @@ def main():
     imgs = {n: pixel_art(n) for n in (16, 24, 32, 48)}
     imgs[256] = render(MASTER, 256)
     for n, img in imgs.items():
-        with open(os.path.join(APP, f"tore-hangar-{n}.png"), "wb") as f:
+        with open(os.path.join(APP, f"fa-hangar-{n}.png"), "wb") as f:
             f.write(png_bytes(img))
     small = (48, 32, 24, 16)
     colors = sorted({px[:3] for n in small for row in imgs[n] for px in row if px[3] >= 128} - {(0, 0, 0)})
@@ -230,7 +227,7 @@ def main():
         entries.append((n, 32, dib(imgs[n], 32)))
     for n in small:
         entries.append((n, 8, dib(imgs[n], 8, palette)))
-    with open(os.path.join(APP, "tore-hangar.ico"), "wb") as f:
+    with open(os.path.join(APP, "fa-hangar.ico"), "wb") as f:
         f.write(ico(entries))
     if args.review:
         os.makedirs(args.review, exist_ok=True)

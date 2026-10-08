@@ -308,7 +308,7 @@ unsafe extern "C" {
 /// 32 and 48px 32-bit entries of the committed app icon. A 32-bit DIB pixel
 /// read as a little-endian u32 is already 0xAARRGGBB.
 fn wm_icon() -> Vec<c_ulong> {
-    const ICO: &[u8] = include_bytes!("../../../tore-hangar-design/icons/app/tore-hangar.ico");
+    const ICO: &[u8] = include_bytes!("../../../fa-hangar-design/icons/app/fa-hangar.ico");
     let int = |at: usize, len: usize| {
         ICO.get(at..at + len)
             .map_or(0, |b| b.iter().rev().fold(0, |v, &x| v << 8 | x as usize))
@@ -358,7 +358,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
             0,
             crate::ui::theme::color::GM_900.0 as c_ulong,
         );
-        let title = CString::new(format!("TORE Hangar {}", env!("CARGO_PKG_VERSION"))).unwrap();
+        let title = CString::new(format!("F.A. Hangar {}", env!("CARGO_PKG_VERSION"))).unwrap();
         XStoreName(d, w, title.as_ptr());
         let icon = wm_icon();
         if !icon.is_empty() {
@@ -675,24 +675,24 @@ fn save_paths(name: &str, paths: &[String]) -> Result<()> {
     std::fs::write(sidecar_path(name), paths.join("\n")).map_err(|e| e.to_string())
 }
 pub fn load_recent() -> Vec<String> {
-    load_paths("tore-hangar-recent.txt", 8)
+    load_paths("fa-hangar-recent.txt", 8)
 }
 pub fn save_recent(paths: &[String]) -> Result<()> {
-    save_paths("tore-hangar-recent.txt", paths)
+    save_paths("fa-hangar-recent.txt", paths)
 }
 /// The last game palette Hangar resolved: its source label, then 1,536 hex
 /// digits. Read-only locations keep it for the session only.
 pub fn load_palette_memory() -> Vec<String> {
-    load_paths("tore-hangar-palette.txt", 2)
+    load_paths("fa-hangar-palette.txt", 2)
 }
 pub fn save_palette_memory(lines: &[String]) -> Result<()> {
-    save_paths("tore-hangar-palette.txt", lines)
+    save_paths("fa-hangar-palette.txt", lines)
 }
 pub fn load_decals() -> Vec<String> {
-    load_paths("tore-hangar-decals.txt", 16)
+    load_paths("fa-hangar-decals.txt", 16)
 }
 pub fn save_decals(paths: &[String]) -> Result<()> {
-    save_paths("tore-hangar-decals.txt", paths)
+    save_paths("fa-hangar-decals.txt", paths)
 }
 std::thread_local! {static AUDIO:std::cell::RefCell<Option<std::process::Child>>=const{std::cell::RefCell::new(None)};}
 pub fn stop_audio() {

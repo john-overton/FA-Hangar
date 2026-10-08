@@ -3,7 +3,7 @@
 
 tokens.json is the source of truth. Run from anywhere:
 
-    python3 tore-hangar-design/tools/gen/theme.py
+    python3 fa-hangar-design/tools/gen/theme.py
 
 Output is deterministic; CI-style check: run it and `git diff --exit-code`.
 Everything emitted for Rust is integer (the native build has no floating point).
@@ -56,7 +56,7 @@ def text_styles(t):
 
 def theme_rs(t):
     out = [
-        "//! TORE Hangar theme tokens, generated from tokens.json by tools/gen/theme.py.",
+        "//! F.A. Hangar theme tokens, generated from tokens.json by tools/gen/theme.py.",
         "//! Do not edit by hand: change tokens.json and rerun the generator.",
         "//! Colors are 0x00RRGGBB (GDI COLORREF wants 0x00BBGGRR: use `colorref()`).",
         "//! No alpha and no floating point by design: every surface is a solid fill.",

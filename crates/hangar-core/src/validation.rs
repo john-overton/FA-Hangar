@@ -73,7 +73,7 @@ impl Report {
 }
 pub fn text(doc: &Document, report: &Report) -> String {
     let mut out = format!(
-        "T.O.R.E Hangar package report\n{}\n\nChanges\n",
+        "F.A. Hangar package report\n{}\n\nChanges\n",
         report.summary()
     );
     for (name, kind) in doc.changes() {

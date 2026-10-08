@@ -1,22 +1,22 @@
-# TORE Hangar: GUI design system
+# F.A. Hangar: GUI design system
 
-Visual spec for Hangar, the TORE dev tool for reading, editing, grafting, and repackaging Fighters Anthology LIB files. Gunmetal theme, Blender-style layout and controls, flat enough to draw with GDI on Windows 98/ME.
+Visual spec for Hangar, a dev tool for reading, editing, grafting, and repackaging Fighters Anthology LIB files. Gunmetal theme, Blender-style layout and controls, flat enough to draw with GDI on Windows 98/ME.
 
 Start with `screens/workspace.png`, then `BRAND.md`.
 
 ## App icon
 
 <p>
-  <img src="icons/app/tore-hangar-256.png" alt="TORE Hangar app icon, 256 px" width="128">
-  <img src="icons/app/tore-hangar-48.png" alt="48 px" width="48">
-  <img src="icons/app/tore-hangar-32.png" alt="32 px" width="32">
-  <img src="icons/app/tore-hangar-24.png" alt="24 px" width="24">
-  <img src="icons/app/tore-hangar-16.png" alt="16 px" width="16">
+  <img src="icons/app/fa-hangar-256.png" alt="F.A. Hangar app icon, 256 px" width="128">
+  <img src="icons/app/fa-hangar-48.png" alt="48 px" width="48">
+  <img src="icons/app/fa-hangar-32.png" alt="32 px" width="32">
+  <img src="icons/app/fa-hangar-24.png" alt="24 px" width="24">
+  <img src="icons/app/fa-hangar-16.png" alt="16 px" width="16">
 </p>
 
-A gold outline on a gunmetal plate with TORE over HANGAR. The 256 master is
-`icons/app/tore-hangar.svg`; 48 and 32 are pixel art of the full name, 24 and
-16 a TH monogram. `icons/app/tore-hangar.ico` is embedded in the Windows
+A gold outline on a gunmetal plate with F.A. over HANGAR. The 256 master is
+`icons/app/fa-hangar.svg`; 48 and 32 are pixel art of the full name, 24 and
+16 an FH monogram. `icons/app/fa-hangar.ico` is embedded in the Windows
 executables. See `icons/app/README.md`.
 
 ## Layout
@@ -51,4 +51,4 @@ Button, NumberField, Select, Checkbox, Panel, PropertyTabs, Outliner, TypeBadge,
 
 ## Live version
 
-The editable design system lives in the "TORE Hangar" Design System artifact on claude.ai. If you change tokens there, regenerate `theme.rs` and `tokens.css` from the new `tokens.json`.
+The editable design system lives in the "F.A. Hangar" Design System artifact on claude.ai. If you change tokens there, regenerate `theme.rs` and `tokens.css` from the new `tokens.json`.

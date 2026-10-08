@@ -15,11 +15,11 @@ workflow) and when a GitHub release is published.
    workflow fails before building otherwise. Delete the release and tag, fix
    the version and publish again.
 5. The workflow checks, builds and audits both executables, then attaches
-   `tore-hangar-<version>-win98-me-pentium4.zip` and
-   `tore-hangar-<version>-win64.zip` to the release. Each ZIP unpacks into a
-   folder holding `tore-hangar-<version>.exe`, `SHA256.txt` (sha256sum format)
+   `fa-hangar-<version>-win98-me-pentium4.zip` and
+   `fa-hangar-<version>-win64.zip` to the release. Each ZIP unpacks into a
+   folder holding `fa-hangar-<version>.exe`, `SHA256.txt` (sha256sum format)
    and the documentation.
 
 A manual run (no release) builds the same packages as workflow artifacts named
-`tore-hangar-<version>-<variant>` with the current `Cargo.toml` version and
+`fa-hangar-<version>-<variant>` with the current `Cargo.toml` version and
 uploads nothing to a release.

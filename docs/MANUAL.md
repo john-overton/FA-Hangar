@@ -1,6 +1,6 @@
-# T.O.R.E Hangar manual
+# F.A. Hangar manual
 
-How to use T.O.R.E Hangar to inspect and edit Fighters Anthology LIB files.
+How to use F.A. Hangar to inspect and edit Fighters Anthology LIB files.
 For downloads and builds see the [README](../README.md); for format and writer
 decisions see [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -87,7 +87,7 @@ transforms without retail data.
 **Ctrl+O** or the File menu opens a LIB through the in-app file browser. The
 browser has directory rows, drive roots, recent LIBs and an editable path. It
 does not create missing directories. Recent paths are kept in
-`tore-hangar-recent.txt` beside the executable; if that location is read-only,
+`fa-hangar-recent.txt` beside the executable; if that location is read-only,
 history still works for the current session.
 
 Open multiple LIBs together without a fixed count cap, switching through
@@ -97,7 +97,7 @@ destination for assembling resources.
 
 ### Workspaces
 
-The UI follows the Gunmetal design system in `tore-hangar-design`: one menu
+The UI follows the Gunmetal design system in `fa-hangar-design`: one menu
 bar with flat workspace tabs, a categorized outliner with type icons, linked
 aircraft/shape selection, grouped source-value properties, and
 Browse/Model/Flight/Graft/Package/Paint workspaces. Raw fields show saved values
@@ -116,7 +116,7 @@ sizes and weights.
   check, or the validation error count. The version, such as `v0.9.0`, sits at
   the far right.
 - **Help.** **Controls** (F1) lists the main keys in the status bar.
-  **About T.O.R.E Hangar** opens a window with the app icon, the version, the
+  **About F.A. Hangar** opens a window with the app icon, the version, the
   build (Windows 98/ME i686, Windows x64 or Linux), the licence and the
   project address. Close, Esc or Enter dismisses it.
 - **Viewport header.** The mode select switches between **Object Mode**,
@@ -851,7 +851,7 @@ PAL Hangar draws with. For the selected entry it uses the first of:
 6. `PALETTE.PAL` in a LIB in the same folder, `FA_2.LIB` and `FA_1.LIB`
    first, read from their directories without loading them;
 7. the last game palette Hangar found, remembered in
-   `tore-hangar-palette.txt` beside the executable (for the session only
+   `fa-hangar-palette.txt` beside the executable (for the session only
    when that folder is read-only);
 8. otherwise a grayscale ramp.
 
@@ -1157,7 +1157,7 @@ To add a marking:
    the Japanese roundel. These are compact editor artwork; import PNG for exact
    national variants or authentic squadron artwork.
 3. Imported PNG paths are remembered in the **Squadron library**. The list
-   holds 16 files and is saved beside the executable in tore-hangar-decals.txt.
+   holds 16 files and is saved beside the executable in fa-hangar-decals.txt.
    Artwork stays in its original file; removing a list item does not delete it.
    A read-only executable folder retains new selections for the session only.
 4. Click or drag on the texture atlas or a visible model panel. Center,

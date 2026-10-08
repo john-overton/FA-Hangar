@@ -1,4 +1,4 @@
-//! Design-system components (tore-hangar-design/components/*): drawing plus
+//! Design-system components (fa-hangar-design/components/*): drawing plus
 //! hit regions on the shared `Layout`, and the NumberField interaction state.
 //! Every hit region equals the rect the component draws. Corners use a 1px
 //! notch (the ground shows through the corner pixel), the GDI-safe stand-in

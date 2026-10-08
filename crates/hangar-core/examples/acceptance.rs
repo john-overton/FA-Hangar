@@ -45,7 +45,7 @@ fn run() -> Result<()> {
     ];
     let out = Path::new(&args[2]);
     fs::create_dir(out).map_err(|e| e.to_string())?;
-    let mut report=String::from("TORE HANGAR LOCAL ACCEPTANCE CANDIDATES\nOriginal-game results: PENDING USER TEST\n\nUse one candidate folder at a time. Baseline and edited folders deliberately share private filenames; do not load both together. Keep stock LIBs intact. New IDs may require mission/loadout selection; presence in a package does not prove runtime registration. Record game version, enabled LIB order, object selection, views/LOD/damage and results in RESULTS.tsv.\n\n");
+    let mut report=String::from("F.A. HANGAR LOCAL ACCEPTANCE CANDIDATES\nOriginal-game results: PENDING USER TEST\n\nUse one candidate folder at a time. Baseline and edited folders deliberately share private filenames; do not load both together. Keep stock LIBs intact. New IDs may require mission/loadout selection; presence in a package does not prove runtime registration. Record game version, enabled LIB order, object selection, views/LOD/damage and results in RESULTS.tsv.\n\n");
     let cases = [
         ("01-weapon", "AIM9M.JT", "HGWPN", "Hangar test missile"),
         ("02-static", "BLDG1.OT", "HGBLD", "Hangar test building"),

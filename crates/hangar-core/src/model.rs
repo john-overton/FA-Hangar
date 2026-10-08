@@ -1129,7 +1129,7 @@ impl Model {
     }
     pub fn obj(&self) -> String {
         let mut out =
-            String::from("# TORE Hangar static pose; geometry only, no textures or animation\n");
+            String::from("# F.A. Hangar static pose; geometry only, no textures or animation\n");
         for v in &self.vertices {
             out.push_str(&format!("v {} {} {}\n", v.point[0], v.point[1], v.point[2]));
         }

@@ -16,7 +16,7 @@ use hangar_core::{
     picture::{self, Pic},
     Result,
 };
-#[path = "../../../tore-hangar-design/tokens/theme.rs"]
+#[path = "../../../fa-hangar-design/tokens/theme.rs"]
 #[allow(dead_code)]
 #[rustfmt::skip]
 pub mod theme;

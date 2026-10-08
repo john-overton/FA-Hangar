@@ -7,5 +7,5 @@
 *.exe
 __pycache__/
 
-tore-hangar-recent.txt
-tore-hangar-palette.txt
+fa-hangar-recent.txt
+fa-hangar-palette.txt

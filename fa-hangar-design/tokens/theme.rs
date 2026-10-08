@@ -1,4 +1,4 @@
-//! TORE Hangar theme tokens, generated from tokens.json by tools/gen/theme.py.
+//! F.A. Hangar theme tokens, generated from tokens.json by tools/gen/theme.py.
 //! Do not edit by hand: change tokens.json and rerun the generator.
 //! Colors are 0x00RRGGBB (GDI COLORREF wants 0x00BBGGRR: use `colorref()`).
 //! No alpha and no floating point by design: every surface is a solid fill.

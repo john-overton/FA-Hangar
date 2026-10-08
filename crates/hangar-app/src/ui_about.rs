@@ -3,9 +3,9 @@
 use super::view::{Action, Layout, DIALOG_HEAD};
 use super::*;
 
-const ICO: &[u8] = include_bytes!("../../../tore-hangar-design/icons/app/tore-hangar.ico");
+const ICO: &[u8] = include_bytes!("../../../fa-hangar-design/icons/app/fa-hangar.ico");
 const ICON: usize = 48;
-const SITE: &str = "https://github.com/john-overton/T.O.R.E-Hangar";
+const SITE: &str = "https://github.com/john-overton/FA-Hangar";
 const BLURB: &str = "Edit Fighters Anthology LIBs and the shapes, textures and definitions inside them. Nothing is written until you save.";
 
 /// The platform this executable was built for.
@@ -59,7 +59,7 @@ impl App {
         self.menu = None;
         self.prompt = Some(Prompt {
             kind: PromptKind::About,
-            title: "About T.O.R.E Hangar".into(),
+            title: "About F.A. Hangar".into(),
             value: String::new(),
             axis: 0,
         });
@@ -98,7 +98,7 @@ impl App {
         o.canvas.styled(
             tx,
             by + 22,
-            &fit("T.O.R.E Hangar", bx + bw - tx, Style::Display),
+            &fit("F.A. Hangar", bx + bw - tx, Style::Display),
             c::INK,
             Style::Display,
         );
@@ -185,7 +185,7 @@ impl App {
                 assert!(has(build_target()) && has("GPL-3.0-only") && has(SITE));
                 assert!(texts
                     .iter()
-                    .any(|t| t.2 == "T.O.R.E Hangar" && t.3 == Style::Display));
+                    .any(|t| t.2 == "F.A. Hangar" && t.3 == Style::Display));
                 assert!(
                     self.draw().commands.iter().any(|d| matches!(
                         d,

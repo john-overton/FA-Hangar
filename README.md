@@ -1,9 +1,9 @@
-<p align="center"><img src="docs/TOREHANGAR.png" alt="T.O.R.E Hangar" width="220"></p>
+<p align="center"><img src="docs/FAHANGAR.png" alt="F.A. Hangar: a jet in Union Jack livery, half rendered as a wireframe, over sunset clouds" width="100%"></p>
 
-<h1 align="center">T.O.R.E Hangar</h1>
+<h1 align="center">F.A. Hangar</h1>
 
 <p align="center">
-  <a href="https://github.com/john-overton/T.O.R.E-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/T.O.R.E-Hangar/windows.yml?event=release&label=release%20build" alt="Release build status"></a>
+  <a href="https://github.com/john-overton/FA-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/FA-Hangar/windows.yml?event=release&label=release%20build" alt="Release build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only"></a>
   <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.0-orange" alt="Version 0.9.0"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.91.1-b7410e?logo=rust" alt="Rust 1.91.1"></a>
@@ -14,7 +14,7 @@
 A small, standalone Rust workshop for Fighters Anthology LIB files, built toward
 a Blender-light workflow for the game's models and their related resources. Native
 Win32/GDI on Windows, X11/Xwayland for local Linux development. The supplied
-[design system](tore-hangar-design/README.md) supplies the Gunmetal colors and
+[design system](fa-hangar-design/README.md) supplies the Gunmetal colors and
 Blender-inspired workspace.
 
 **Early working editor, not a complete SH authoring tool.** LIB and textual
@@ -62,10 +62,10 @@ The full feature list and how-to guides are in the [manual](docs/MANUAL.md).
 
 ### Download
 
-Each [GitHub release](https://github.com/john-overton/T.O.R.E-Hangar/releases)
+Each [GitHub release](https://github.com/john-overton/FA-Hangar/releases)
 carries two ZIPs with the version in their names:
-`tore-hangar-<version>-win98-me-pentium4.zip` and
-`tore-hangar-<version>-win64.zip`, each holding `tore-hangar-<version>.exe`,
+`fa-hangar-<version>-win98-me-pentium4.zip` and
+`fa-hangar-<version>-win64.zip`, each holding `fa-hangar-<version>.exe`,
 `SHA256.txt` and the documentation. The same packages are workflow artifacts of
 [GitHub Actions](.github/workflows/windows.yml), which runs only on Windows and
 only on demand (Actions, Run workflow) or when a release is published, so the
@@ -116,8 +116,8 @@ linker and generated import libraries:
 rustup target add i686-pc-windows-msvc x86_64-pc-windows-msvc
 cargo build --release --locked --target i686-pc-windows-msvc
 cargo build --release --locked --target x86_64-pc-windows-msvc
-python3 tools/check_pe.py --legacy target/i686-pc-windows-msvc/release/tore-hangar.exe
-python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/tore-hangar.exe
+python3 tools/check_pe.py --legacy target/i686-pc-windows-msvc/release/fa-hangar.exe
+python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/fa-hangar.exe
 ```
 
 The audit also checks the embedded app icon and version resources;
@@ -134,7 +134,7 @@ The audit also checks the embedded app icon and version resources;
 | [Compatibility](docs/COMPATIBILITY.md) | Platform limits and legacy acceptance still required |
 | [Releasing](docs/RELEASING.md) | Version bump, tag and the release workflow |
 | [Windows test](docs/WINDOWS-TEST.md) | Manual Windows and game acceptance checklist |
-| [Design system](tore-hangar-design/README.md) | Gunmetal tokens, components and [brand voice](tore-hangar-design/BRAND.md) |
+| [Design system](fa-hangar-design/README.md) | Gunmetal tokens, components and [brand voice](fa-hangar-design/BRAND.md) |
 
 ## Scope still ahead
 
@@ -149,7 +149,7 @@ the [manual](docs/MANUAL.md#limits-and-why).
 ## Structure and provenance
 
 `hangar-core` contains portable `no_std` + `alloc` formats and editing history.
-`tore-hangar` contains shared UI logic plus small native platform backends.
+`fa-hangar` contains shared UI logic plus small native platform backends.
 [Architecture and format references](docs/ARCHITECTURE.md) records the decisions
 and remaining writer work.
 

@@ -79,7 +79,7 @@ jobs:
       - name: Audit executable and run shared editor smoke test
         shell: pwsh
         run: |
-          $exe = 'target/${{ matrix.target }}/release/tore-hangar.exe'
+          $exe = 'target/${{ matrix.target }}/release/fa-hangar.exe'
           python tools/check_pe.py $exe ${{ matrix.legacy }}
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $process = Start-Process $exe -ArgumentList '--smoke-test' -PassThru
@@ -88,10 +88,10 @@ jobs:
       - name: Make portable package
         shell: pwsh
         run: |
-          $package = "tore-hangar-$env:VERSION-${{ matrix.variant }}"
-          $exe = "tore-hangar-$env:VERSION.exe"
+          $package = "fa-hangar-$env:VERSION-${{ matrix.variant }}"
+          $exe = "fa-hangar-$env:VERSION.exe"
           New-Item -ItemType Directory -Force $package | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/tore-hangar.exe "$package/$exe"
+          Copy-Item target/${{ matrix.target }}/release/fa-hangar.exe "$package/$exe"
           Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md $package/
           Copy-Item docs/MANUAL.md,docs/COMPATIBILITY.md,docs/WINDOWS-TEST.md $package/
           # sha256sum format: "<hash>  <file>"

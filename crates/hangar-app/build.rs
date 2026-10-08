@@ -1,10 +1,10 @@
-//! Windows resources for `tore-hangar.exe`: the app icon (RT_GROUP_ICON 1 and
+//! Windows resources for `fa-hangar.exe`: the app icon (RT_GROUP_ICON 1 and
 //! its RT_ICON images, copied from the committed .ico) and a VERSIONINFO.
 //! Written as a .res file into OUT_DIR and handed to the linker; lld-link and
 //! link.exe both convert .res inputs themselves. Other targets get nothing.
 use std::{env, fs, path::Path};
 
-const ICO: &str = "../../tore-hangar-design/icons/app/tore-hangar.ico";
+const ICO: &str = "../../fa-hangar-design/icons/app/fa-hangar.ico";
 const RT_ICON: u16 = 3;
 const RT_GROUP_ICON: u16 = 14;
 const RT_VERSION: u16 = 16;
@@ -36,7 +36,7 @@ fn main() {
         LANG_EN_US,
         &version_info(version, &var("CARGO_PKG_VERSION")),
     );
-    let out = Path::new(&var("OUT_DIR")).join("tore-hangar.res");
+    let out = Path::new(&var("OUT_DIR")).join("fa-hangar.res");
     fs::write(&out, res).unwrap_or_else(|e| panic!("{}: {e}", out.display()));
     println!("cargo:rustc-link-arg-bins={}", out.display());
 }
@@ -148,15 +148,15 @@ fn version_info([major, minor, patch]: [u16; 3], version: &str) -> Vec<u8> {
     .map(u32::to_le_bytes)
     .concat();
     let strings = [
-        ("FileDescription", "TORE Hangar"),
+        ("FileDescription", "F.A. Hangar"),
         ("FileVersion", version),
-        ("InternalName", "tore-hangar"),
+        ("InternalName", "fa-hangar"),
         (
             "LegalCopyright",
             "Free software under GPL-3.0-only, without warranty",
         ),
-        ("OriginalFilename", "tore-hangar.exe"),
-        ("ProductName", "TORE Hangar"),
+        ("OriginalFilename", "fa-hangar.exe"),
+        ("ProductName", "F.A. Hangar"),
         ("ProductVersion", version),
     ]
     .map(|(key, value)| node(key, &wide(value), true, &[]));

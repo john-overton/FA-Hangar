@@ -1,16 +1,16 @@
 # AGENTS.md
 
-A guide for coding agents working on T.O.R.E Hangar: a small, standalone Rust
+A guide for coding agents working on F.A. Hangar: a small, standalone Rust
 editor for Fighters Anthology (FA) LIB archives and the resources inside them
 (PT/NT/JT/OT/SEE/ECM definitions, SH shapes, PIC textures, PCM audio).
 Read `README.md` for an overview, `docs/MANUAL.md` for user-facing features,
-`docs/ARCHITECTURE.md` for format and writer decisions, and `tore-hangar-design/BRAND.md` before touching UI.
+`docs/ARCHITECTURE.md` for format and writer decisions, and `fa-hangar-design/BRAND.md` before touching UI.
 
 ## Layout
 
 ```
 crates/hangar-core/   Portable formats + editing history. #![no_std] + alloc.
-crates/hangar-app/    Binary `tore-hangar`: shared UI, CLI, platform backends.
+crates/hangar-app/    Binary `fa-hangar`: shared UI, CLI, platform backends.
   src/ui.rs           App struct, events, Canvas/Draw commands, theme import.
   src/ui_view.rs      Layout, drawing and hit regions for every workspace.
   src/ui_*.rs         Feature slices as further `impl App` blocks (media/paint,
@@ -20,14 +20,14 @@ crates/hangar-app/    Binary `tore-hangar`: shared UI, CLI, platform backends.
   src/linux.rs        Xlib backend for local development.
   src/cli.rs          Linux-only CLI, smoke test and headless check commands.
   src/saving.rs       Shared staged-save/backup protocol.
-tore-hangar-design/   Design system. tokens/theme.rs is compiled into the app
+fa-hangar-design/   Design system. tokens/theme.rs is compiled into the app
                       via #[path]; components/*/README.md specify each widget.
 docs/                 MANUAL, CHANGELOG, RELEASING, ARCHITECTURE, VALIDATION,
                       COMPATIBILITY, WINDOWS-TEST.
 tools/check_pe.py     Audits Windows executables' headers, import list and the
                       embedded icon/version resources.
 crates/hangar-app/build.rs  Writes the Windows icon/version .res from the
-                      committed tore-hangar-design/icons/app .ico (no deps).
+                      committed fa-hangar-design/icons/app .ico (no deps).
 ```
 
 ## Build and check
@@ -129,7 +129,7 @@ hard-code their locations in code or docs.
 - All drawing goes through `Canvas`/`Draw` commands and hit regions emitted by
   the shared UI, so both backends render the same thing and the smoke test can
   click controls. Do not draw directly in a platform backend.
-- Colors, spacing and metrics come from `theme` (`tore-hangar-design/tokens/
+- Colors, spacing and metrics come from `theme` (`fa-hangar-design/tokens/
   theme.rs`). Do not hard-code colors. Edit `tokens.json` and regenerate if a
   token must change.
 - GDI-friendly: solid fills and 1px lines only; no alpha, gradients, blurs or

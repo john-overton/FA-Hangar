@@ -1,9 +1,9 @@
 # First Windows test
 
-Use `tore-hangar-<version>-win64.zip` on a modern 64-bit Windows box. Use
-`tore-hangar-<version>-win98-me-pentium4.zip` on Windows 98/ME with an
+Use `fa-hangar-<version>-win64.zip` on a modern 64-bit Windows box. Use
+`fa-hangar-<version>-win98-me-pentium4.zip` on Windows 98/ME with an
 SSE2-capable CPU. Extract to a writable folder with an ASCII path and launch
-`tore-hangar-<version>.exe`.
+`fa-hangar-<version>.exe`.
 The EXE is portable; the other files are documentation and licensing.
 
 ## Quick application check
@@ -277,7 +277,7 @@ separately. No retail data is included in the test package.
 
 ## Edited geometry and part settings (unreleased)
 
-Use copies only. On Linux, run `tore-hangar --geometry-check NEW_DIR FA_2.LIB
+Use copies only. On Linux, run `fa-hangar --geometry-check NEW_DIR FA_2.LIB
 F18.SH A10.SH`. Then put the `F18-*.SH` and `A10-*.SH` results you test, renamed
 `F18.SH` and `A10.SH`, into a new custom LIB, one variant per LIB.
 
@@ -342,14 +342,14 @@ In-game checks:
 
 ## App icon and version information (unreleased)
 
-1. In Explorer, view the folder holding `tore-hangar.exe` as Large Icons and
+1. In Explorer, view the folder holding `fa-hangar.exe` as Large Icons and
    as Small Icons (on current Windows also Extra large): the gold-outlined
-   TORE / HANGAR plate shows at large sizes and the TH monogram at small
+   F.A. / HANGAR plate shows at large sizes and the FH monogram at small
    sizes, with clear corners and no black box.
 2. Launch it: the title bar and taskbar button show the icon. On Windows
    98/ME also check Alt+Tab and a 256-colour display mode.
 3. Right-click the EXE, **Properties**: the Version tab (98/ME) or Details tab
-   shows TORE Hangar, the release version and the GPL-3.0-only notice.
+   shows F.A. Hangar, the release version and the GPL-3.0-only notice.
 
 ## Unresolved in source exports (unreleased)
 
@@ -370,7 +370,7 @@ Open `FA_2.LIB`, make the edits below and save them under a custom name
 (for example `IDENT.LIB`). In a copied game installation, replace `FA_2.LIB`
 with that file, renaming it there (Hangar never saves under a retail name;
 keeping both would leave two copies of every other entry). On Linux,
-`tore-hangar --identity-check FA_2.LIB F14.PT F14Z F18.PT F18Z IDENT.LIB`
+`fa-hangar --identity-check FA_2.LIB F14.PT F14Z F18.PT F18Z IDENT.LIB`
 makes the same renames with the default names instead (`F-14` / `F- 14D
 Tomcat` kept, the duplicate listed as `F/A- 18D Hornet variant`).
 
@@ -500,7 +500,7 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    FA_2.LIB**.
 2. Close Hangar, move the mod LIB to a folder without retail LIBs and open
    it: the palette reads **PALETTE.PAL from FA_2.LIB, remembered**. Delete
-   `tore-hangar-palette.txt` beside the executable and open it again: the
+   `fa-hangar-palette.txt` beside the executable and open it again: the
    panel shows grayscale with **No game palette found; colors are
    approximate.**; **Load palette…** with `FA_2.LIB` restores color.
 3. Copy F5EV.PT to a new LIB with **Copy to**: the review has an `F5EV.PAL`

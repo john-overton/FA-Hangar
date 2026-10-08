@@ -52,7 +52,7 @@ lightweight portable application. The user's accepted CPU minimum is SSE2.
 - `windows.rs`: Win32 ANSI events, GDI back buffer, filesystem and allocation.
   `linux.rs`: Xlib events/drawing plus standard Linux filesystem support.
 - `build.rs` (windows-msvc only): writes the committed app icon
-  (`tore-hangar-design/icons/app/tore-hangar.ico`) as RT_ICON/RT_GROUP_ICON 1
+  (`fa-hangar-design/icons/app/fa-hangar.ico`) as RT_ICON/RT_GROUP_ICON 1
   plus a VERSIONINFO into a `.res` that the linker converts itself, so no
   resource compiler or Python is needed. `windows.rs` loads it with
   `LoadIconA`; `linux.rs` reads the same file's 32-bit entries for
@@ -193,7 +193,7 @@ be silently flattened or discarded.
 
 ## UI differences from the design reference
 
-The UI follows `tore-hangar-design` (tokens, component READMEs, screens).
+The UI follows `fa-hangar-design` (tokens, component READMEs, screens).
 `ui_view.rs` and the feature slices emit drawing commands and hit regions from
 the same layout. The shared smoke test lays out every editor and dialog at
 1280 x 800 and 800 x 600 and checks that each hit region stays in the window
@@ -1422,7 +1422,7 @@ export path reads that field). Order for the selected entry:
 6. `PALETTE.PAL` in a LIB in the current LIB's folder: the directory-only
    index and one range read per LIB (`ui_clone::index`, `read_range`),
    same ranking, at most 32 LIBs, skipping open ones;
-7. the remembered game palette, `tore-hangar-palette.txt` beside the
+7. the remembered game palette, `fa-hangar-palette.txt` beside the
    executable (source label, then 1,536 hex digits) through the same
    sidecar helpers as the recent-file list; a failed write keeps it for the
    session. Only a retail `PALETTE.PAL` (found, or loaded from a retail LIB
