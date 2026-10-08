@@ -5,7 +5,17 @@ the root [`Cargo.toml`](../Cargo.toml). What was verified for each version is
 recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
-## Unreleased
+## 0.9.0
+
+The first published release, and the first under the F.A. Hangar name.
+Region-scoped SH editing on retail aircraft with a transform gizmo, magnetic
+snap, and vertex add, split and connect tools; a moving-parts catalog with
+pose preview; per-panel textures, Replace color and Remap from view; runtime
+markings; identity editing with Rename reference ID and Duplicate aircraft;
+palette resolution without `PALETTE.PAL`; fixes for two FA crashes caused by
+Hangar's output; stored texture originals with an eraser and Restore texture;
+and a design-system UI pass with an app icon. Nothing in this release has
+been verified in the original game yet; see [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
 - **Renamed to F.A. Hangar.** The app is not part of the TORE project, so
   T.O.R.E Hangar is now F.A. Hangar: the executable and release packages are
@@ -321,14 +331,6 @@ recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
   reads, as in the GUI, so `FA_7.LIB`, `FA_10.LIB`, `FA_10B.LIB`, `FA_11.LIB`
   and `FA_11B.LIB` (140 to 186 MiB) work as sources instead of failing with
   "File exceeds 128 MiB limit".
-
-## 0.9.0
-
-Design-system UI pass, region-scoped SH editing on retail aircraft, a
-moving-parts catalog with pose preview, and stored texture originals with an
-eraser and Restore texture. Nothing in this release has been verified in the
-original game yet; see [WINDOWS-TEST.md](WINDOWS-TEST.md).
-
 
 - **Edit Mesh** works on retail aircraft, region by region. Vertex and face
   select modes (1 / 3 and header buttons), click, Shift+click, A, box select

@@ -20,7 +20,7 @@ crates/hangar-app/    Binary `fa-hangar`: shared UI, CLI, platform backends.
   src/linux.rs        Xlib backend for local development.
   src/cli.rs          Linux-only CLI, smoke test and headless check commands.
   src/saving.rs       Shared staged-save/backup protocol.
-fa-hangar-design/   Design system. tokens/theme.rs is compiled into the app
+fa-hangar-design/     Design system. tokens/theme.rs is compiled into the app
                       via #[path]; components/*/README.md specify each widget.
 docs/                 MANUAL, CHANGELOG, RELEASING, ARCHITECTURE, VALIDATION,
                       COMPATIBILITY, WINDOWS-TEST.

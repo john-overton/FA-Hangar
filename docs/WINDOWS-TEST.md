@@ -240,7 +240,7 @@ separately. No retail data is included in the test package.
 4. Paint another supported blank panel using the updated editor, save/reopen
    and retest it in FA. Already repaired files must report no repair needed.
 
-## Edit mode and viewport fixes (unreleased)
+## Edit mode and viewport fixes (0.9.0)
 
 1. Load the demo, select DEMO.SH and press Tab. Click a vertex without moving:
    it selects and the LIB stays unmodified. Shift+click a second vertex, then
@@ -258,7 +258,7 @@ separately. No retail data is included in the test package.
 6. Press 5 for perspective in Edit mode and press a vertex: it selects and
    the status asks for an orthographic view instead of the station message.
 
-## Texture originals, eraser and restore (unreleased)
+## Texture originals, eraser and restore (0.9.0)
 
 1. Copy a custom LIB with an aircraft texture (never edit retail files). Paint
    one stroke on its PIC. Confirm `X.ORG` appears under Original textures and
@@ -275,7 +275,7 @@ separately. No retail data is included in the test package.
    are unaffected compared with the same LIB after **Package > Remove stored
    originals**. Report any difference with the LIB name and entry count.
 
-## Edited geometry and part settings (unreleased)
+## Edited geometry and part settings (0.9.0)
 
 Use copies only. On Linux, run `fa-hangar --geometry-check NEW_DIR FA_2.LIB
 F18.SH A10.SH`. Then put the `F18-*.SH` and `A10-*.SH` results you test, renamed
@@ -297,7 +297,7 @@ F18.SH A10.SH`. Then put the `F18-*.SH` and `A10-*.SH` results you test, renamed
    state. Report any crash, a part drawn in the wrong place, or a
    flight-model difference.
 
-## Edit Mesh, Parts and gear encodings (unreleased)
+## Edit Mesh, Parts and gear encodings (0.9.0)
 
 Use a copy of FA_2.LIB and save every result to a new custom LIB, one variant
 per LIB.
@@ -340,7 +340,7 @@ In-game checks:
    form it reaches; any of them can replace the aircraft's SH in a test LIB
    for the same check.
 
-## App icon and version information (unreleased)
+## App icon and version information (0.9.0)
 
 1. In Explorer, view the folder holding `fa-hangar.exe` as Large Icons and
    as Small Icons (on current Windows also Extra large): the gold-outlined
@@ -351,7 +351,7 @@ In-game checks:
 3. Right-click the EXE, **Properties**: the Version tab (98/ME) or Details tab
    shows F.A. Hangar, the release version and the GPL-3.0-only notice.
 
-## Unresolved in source exports (unreleased)
+## Unresolved in source exports (0.9.0)
 
 1. Open FA_2.LIB, select `F14.PT` and click **Export object**. The review has
    no Unresolved in source section; export it as `F14X` and fly it: the
@@ -364,7 +364,7 @@ In-game checks:
    texture…** and pick its own skin; after export the face that used the
    missing name shows that skin in game.
 
-## Names, reference ID rename and duplicate aircraft (unreleased)
+## Names, reference ID rename and duplicate aircraft (0.9.0)
 
 Open `FA_2.LIB`, make the edits below and save them under a custom name
 (for example `IDENT.LIB`). In a copied game installation, replace `FA_2.LIB`
@@ -391,7 +391,7 @@ Tomcat` kept, the duplicate listed as `F/A- 18D Hornet variant`).
    missions that name `F14.PT`) and record what the game does without
    `F14.PT`: an error, a substitute aircraft or a missing flight.
 
-## Per-panel textures and sized panel sheets (unreleased)
+## Per-panel textures and sized panel sheets (0.9.0)
 
 Use a copy of a LIB holding the aircraft (save under a new custom name).
 
@@ -417,7 +417,7 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    missing. Record whether a generated sheet narrower than 256
    pixels displays (every retail shape texture is 256 wide).
 
-## Replace a color (unreleased)
+## Replace a color (0.9.0)
 
 Use a copy of a LIB holding the aircraft (save under a new custom name).
 
@@ -438,7 +438,7 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    replaced color shows only where it was applied, and the `.ORG` entry does
    not disturb loading.
 
-## Panel selection and Remap from view (unreleased)
+## Panel selection and Remap from view (0.9.0)
 
 Use a copy of a LIB holding the aircraft (save under a new custom name).
 
@@ -461,7 +461,7 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    aircraft is drawn (the new PIC has the retail texture layout). Repeat
    with **Blank**.
 
-## FA crash fixes: textures and the game folder (unreleased)
+## FA crash fixes: textures and the game folder (0.9.0)
 
 1. Copy `TopGun-repaired.LIB` (made by `repair-textures` from the user's
    `TopGun.LIB`) into a test copy of the game folder in place of
@@ -479,7 +479,7 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    the dialog names the 14-character LIB name; Cancel writes nothing, Save
    anyway saves and the status says to move it out. Remove it afterwards.
 
-## Negative-G engine cut-out (unreleased)
+## Negative-G engine cut-out (0.9.0)
 
 1. Open a copy of a custom LIB with an aircraft PT and select it in Model.
    The Propulsion panel shows **Neg-G cut-out** with `1/256 s`. In Flight,
@@ -491,7 +491,7 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    throttle returns to the lever setting with no restart. Set it back to 0
    and repeat: the engine keeps running however long the push lasts.
 
-## Display palettes and palette companions (unreleased)
+## Display palettes and palette companions (0.9.0)
 
 1. Put a copy of a two-aircraft mod LIB without `PALETTE.PAL` (for example
    `TOPGUNFX.LIB` with F14.PT and F5EV.PT) in a folder with copies of
@@ -512,7 +512,7 @@ Use a copy of a LIB holding the aircraft (save under a new custom name).
    say why. Duplicate an aircraft in a LIB without a palette: the review has
    a `<ID>.PAL` row; **Skip** leaves it out.
 
-## F-5 tail fin: proofs through loops (unreleased)
+## F-5 tail fin: proofs through loops (0.9.0)
 
 Use a copy of `TOPGUNFX.LIB` (or a custom LIB holding `F5EV.SH`) with the
 game palette loaded.
@@ -534,7 +534,7 @@ game palette loaded.
    fin shows the bake and the dot, nothing else changes, and the game does
    not crash.
 
-## Runtime markings (unreleased)
+## Runtime markings (0.9.0)
 
 Use a copy of `FA_2.LIB` (or a custom LIB holding `F5EV.SH`) and the game
 palette. FA must also load the retail `FA_1.LIB`, which holds the roundels.
@@ -564,7 +564,7 @@ palette. FA must also load the retail `FA_1.LIB`, which holds the roundels.
    changed and `SU27_B.SH` as having no slot 0. Fly the Su-27 as the player
    and get it damaged: no left tail art on the intact or damaged shapes.
 
-## Transform gizmo, magnetic snap and X-ray (unreleased)
+## Transform gizmo, magnetic snap and X-ray (0.9.0)
 
 Use a copy of a LIB with an editable aircraft shape (or the synthetic demo).
 
@@ -585,7 +585,7 @@ Use a copy of a LIB with an editable aircraft shape (or the synthetic demo).
    become pickable; Alt+Z again turns it off and no window menu opens.
 6. Repeat at 800x600: the X-ray and magnet toggles are in the shading menu.
 
-## Vertex handles, Add vertex, split and connect (unreleased)
+## Vertex handles, Add vertex, split and connect (0.9.0)
 
 Use a copy of a LIB with an editable aircraft shape (the F-5's F5EV.SH, or
 the synthetic demo).

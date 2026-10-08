@@ -466,7 +466,7 @@ and Parts UI and their smoke tests.
 None of the edited shapes, part settings or non-retail gear forms has been
 loaded in the original game yet; steps are in WINDOWS-TEST.md.
 
-## Unreleased app icon
+## 0.9.0 app icon
 
 The `.res` that `build.rs` writes is byte-identical to `llvm-rc` output for
 the equivalent `.rc` (ICON plus VERSIONINFO). `check_pe.py` finds icon group 1
@@ -481,7 +481,7 @@ audit reports 1,158,656 bytes (32-bit, was 1,127,936) and 1,320,960 bytes
 The icon has not yet been seen in Explorer, a title bar or a Properties
 dialog on Windows 98/ME or current Windows; steps are in WINDOWS-TEST.md.
 
-## Unreleased unresolved-in-source exports
+## 0.9.0 unresolved-in-source exports
 
 Reproduced the report: `export-object FA_2.LIB F14.PT ...` with FA_1, FA_4B,
 FA_4D, swpatch, FA_4C and FA_3 as sources stopped at "F14_C.SH references
@@ -540,7 +540,7 @@ reports 1,219,584 bytes (32-bit, was 1,180,672) and 1,391,104 bytes (64-bit,
 was 1,346,048) with the same 60 reviewed imports. No exported aircraft has
 been flown in the original game yet; steps are in WINDOWS-TEST.md.
 
-## Unreleased identity panel, rename and duplicate
+## 0.9.0 identity panel, rename and duplicate
 
 Real data: a copy of `FA_2.LIB` (5,405 entries) under a scratch folder,
 `--identity-check FA_2.LIB F14.PT F14Z F18.PT F18Z IDENTITY.LIB` (release
@@ -603,7 +603,7 @@ are inserted one by one. The PE audit reports 1,343,488 bytes (32-bit) and
 has been listed or flown in the original game yet; steps are in
 WINDOWS-TEST.md.
 
-## Unreleased per-panel textures and sized panel sheets
+## 0.9.0 per-panel textures and sized panel sheets
 
 Read-only probes on a copy of the user's retail `FA_2.LIB` (2026-10-07; the
 original file was not modified, and no game data is in the repository):
@@ -692,7 +692,7 @@ sort's 4 KiB stack buffer. The PE audit reports 1,456,640 bytes (32-bit) and
 textures and the new sheet sizes have not been loaded in the original game
 yet; steps are in WINDOWS-TEST.md.
 
-## Unreleased color replacement
+## 0.9.0 color replacement
 
 `--replace-check FA_2.LIB F18.SH NEW_DIR` on a copy of the user's retail
 `FA_2.LIB` (2026-10-07; the original file's SHA-256 was unchanged before and
@@ -755,7 +755,7 @@ reports 1,501,696 bytes (32-bit) and 1,716,224 bytes (64-bit) with the same
 60 reviewed imports. Replace has not been tried in the original game or on
 Windows 98 yet; steps are in WINDOWS-TEST.md.
 
-## Unreleased panel selection and Remap from view
+## 0.9.0 panel selection and Remap from view
 
 `--remap-check FA_2.LIB NEW_DIR F18.SH F16.SH A10.SH` on a copy of the
 user's retail `FA_2.LIB` (2026-10-07; the original's SHA-256 was the same
@@ -830,7 +830,7 @@ reports 1,561,600 bytes (32-bit) and 1,767,424 bytes (64-bit) with the same
 60 reviewed imports. Remapped textures have not been loaded in the original
 game yet; steps are in WINDOWS-TEST.md.
 
-## Unreleased FA crash fixes: texture layout and loader limits
+## 0.9.0 FA crash fixes: texture layout and loader limits
 
 2026-10-07. The user's `TopGun.LIB` crashed FA in the F-5's external view
 (access violation at 0x4CAF0D, the per-row pointer lookup in polygon texture
@@ -896,7 +896,7 @@ PE audit reports 1,592,832 bytes (32-bit) and 1,807,360 bytes (64-bit) with
 the same 60 reviewed imports. The repaired LIB has not been loaded in the
 original game yet; steps are in WINDOWS-TEST.md.
 
-## Unreleased negative-G cut-out field
+## 0.9.0 negative-G cut-out field
 
 2026-10-07. Static evidence only. The FA.EXE routines named in ARCHITECTURE.md
 (0x451A60, 0x451E80, 0x452140) were read in disassembly and none was
@@ -912,7 +912,7 @@ finds the **Neg-G cut-out** number field in the Model inspector and the
 the smoke test and the x86_64 Windows release build with its PE audit (60
 reviewed imports) pass.
 
-## Unreleased display palettes and palette companions
+## 0.9.0 display palettes and palette companions
 
 2026-10-07. The user's `TOPGUNFX.LIB` (F14.PT and F5EV.PT, no
 `PALETTE.PAL`) showed grayscale until `PALETTE.PAL` was added by hand.
@@ -963,7 +963,7 @@ PE audit reports 1,665,024 bytes (32-bit) and 1,890,304 bytes (64-bit) with
 the same 60 reviewed imports. Not yet checked in the original game; steps
 are in WINDOWS-TEST.md.
 
-## Unreleased dataflow texture and slot proofs, F-5 tail remap
+## 0.9.0 dataflow texture and slot proofs, F-5 tail remap
 
 Read-only probes (2026-10-07) on the user's retail `FA_2.LIB` and on a copy
 of the user's `TOPGUNFX.LIB`; neither original was modified, and no game
@@ -1050,7 +1050,7 @@ and the smoke test pass on top of the palette-resolver changes. `App` is
 (32-bit) and 1,907,712 bytes (64-bit) with the same 60 reviewed imports. The
 remapped F-5 has not been flown in the original game.
 
-## Unreleased runtime markings
+## 0.9.0 runtime markings
 
 Read-only probes (2026-10-07) on copies of the user's retail `FA_2.LIB` and
 `TOPGUNFX.LIB`, and static reading of the retail `FA.EXE` with its `FA.SMS`
@@ -1145,7 +1145,7 @@ is in the boxed `EditState`). No Win32 API was added; the PE audit reports
 reviewed imports. No hidden, reassigned or paintable marking has been
 loaded in the original game.
 
-## Unreleased handle precision, shown vertices, Add vertex, split and connect
+## 0.9.0 handle precision, shown vertices, Add vertex, split and connect
 
 2026-10-07. Linux only; nothing here has been loaded in the original game
 yet ([WINDOWS-TEST.md](WINDOWS-TEST.md)). Renders and checks ran on a copy
@@ -1199,7 +1199,7 @@ in the edit state). No Win32 API was added; the PE audit reports 1,988,096
 bytes (32-bit) and 2,221,056 bytes (64-bit) with the same 60 reviewed
 imports.
 
-## Unreleased transform gizmo, magnetic snap and X-ray
+## 0.9.0 transform gizmo, magnetic snap and X-ray
 
 2026-10-07. Linux only; the gizmo has not been used on Windows or in the
 original game yet ([WINDOWS-TEST.md](WINDOWS-TEST.md)). Renders ran on
@@ -1243,3 +1243,14 @@ marking outlines under the handles and gizmo. Formatting, strict Clippy
 (Alt+Z reuses the WM_SYSKEYDOWN/WM_SYSCHAR handling of Alt+N); the PE audit
 reports 1,854,464 bytes (32-bit) and 2,097,664 bytes (64-bit) with the same
 60 reviewed imports.
+
+## 0.9.0 release checks
+
+2026-10-07, on the release commit after the rename to F.A. Hangar.
+Formatting, strict Clippy (also for both Windows targets), 216 core tests
+and the smoke test pass. `App` is 2,744 bytes. Both release builds pass the
+PE audit: 1,987,584 bytes (32-bit) and 2,220,544 bytes (64-bit), the same
+60 reviewed imports, no runtime DLLs, the F.A. Hangar icon at 16, 24, 32 and
+48 px in 8-bit and 32-bit color plus the 256 px PNG, and version 0.9.0 with
+product name F.A. Hangar. Nothing in 0.9.0 has been loaded in the original
+game yet; steps are in [WINDOWS-TEST.md](WINDOWS-TEST.md).
