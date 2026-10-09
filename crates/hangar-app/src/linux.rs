@@ -2,6 +2,7 @@
 use crate::ui::{App, Draw, Key, Style};
 use hangar_core::Result;
 use std::{
+    cell::{Cell, RefCell},
     ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void, CString},
     io::{Read, Write},
     ptr,
@@ -104,8 +105,74 @@ struct XClientMessage {
     format: c_int,
     data: [c_long; 5],
 }
+/// SelectionRequest: another client asks for our CLIPBOARD text.
+#[repr(C)]
+struct XSelectionRequestEvent {
+    kind: c_int,
+    serial: c_ulong,
+    send: c_int,
+    display: *mut c_void,
+    owner: c_ulong,
+    requestor: c_ulong,
+    selection: c_ulong,
+    target: c_ulong,
+    property: c_ulong,
+    time: c_ulong,
+}
+/// SelectionNotify: the answer to a request, ours or theirs.
+#[repr(C)]
+struct XSelectionEvent {
+    kind: c_int,
+    serial: c_ulong,
+    send: c_int,
+    display: *mut c_void,
+    requestor: c_ulong,
+    selection: c_ulong,
+    target: c_ulong,
+    property: c_ulong,
+    time: c_ulong,
+}
 #[link(name = "X11")]
 unsafe extern "C" {
+    fn XSetSelectionOwner(
+        d: *mut c_void,
+        selection: c_ulong,
+        owner: c_ulong,
+        time: c_ulong,
+    ) -> c_int;
+    fn XGetSelectionOwner(d: *mut c_void, selection: c_ulong) -> c_ulong;
+    fn XConvertSelection(
+        d: *mut c_void,
+        selection: c_ulong,
+        target: c_ulong,
+        property: c_ulong,
+        requestor: c_ulong,
+        time: c_ulong,
+    ) -> c_int;
+    fn XCheckTypedWindowEvent(d: *mut c_void, w: c_ulong, kind: c_int, event: *mut c_void)
+        -> c_int;
+    fn XGetWindowProperty(
+        d: *mut c_void,
+        w: c_ulong,
+        property: c_ulong,
+        offset: c_long,
+        length: c_long,
+        delete: c_int,
+        kind: c_ulong,
+        actual_kind: *mut c_ulong,
+        actual_format: *mut c_int,
+        items: *mut c_ulong,
+        after: *mut c_ulong,
+        data: *mut *mut u8,
+    ) -> c_int;
+    fn XFree(data: *mut c_void) -> c_int;
+    fn XSendEvent(
+        d: *mut c_void,
+        w: c_ulong,
+        propagate: c_int,
+        mask: c_long,
+        event: *mut c_void,
+    ) -> c_int;
     fn XGetImage(
         d: *mut c_void,
         w: c_ulong,
@@ -332,6 +399,148 @@ fn wm_icon() -> Vec<c_ulong> {
     }
     out
 }
+thread_local! {
+    /// The open display and window, for the clipboard; null when headless.
+    static X: Cell<(*mut c_void, c_ulong)> = const { Cell::new((ptr::null_mut(), 0)) };
+    /// Text this window offers as the CLIPBOARD selection.
+    static OWNED: RefCell<String> = const { RefCell::new(String::new()) };
+}
+unsafe fn atom(d: *mut c_void, name: &std::ffi::CStr) -> c_ulong {
+    XInternAtom(d, name.as_ptr(), 0)
+}
+/// Text on the CLIPBOARD selection, or `None` (no display, no owner, no text).
+pub fn clipboard_text() -> Option<String> {
+    let (d, w) = X.with(Cell::get);
+    if d.is_null() {
+        return None;
+    }
+    unsafe {
+        let clipboard = atom(d, c"CLIPBOARD");
+        let owner = XGetSelectionOwner(d, clipboard);
+        if owner == w {
+            return Some(OWNED.with(|t| t.borrow().clone()));
+        }
+        if owner == 0 {
+            return None;
+        }
+        let property = atom(d, c"HANGAR_PASTE");
+        XConvertSelection(d, clipboard, atom(d, c"UTF8_STRING"), property, w, 0);
+        XFlush(d);
+        // The owner answers with SelectionNotify; give it a second.
+        let mut event = [0 as c_long; 24];
+        let mut answered = false;
+        for _ in 0..100 {
+            if XCheckTypedWindowEvent(d, w, 31, event.as_mut_ptr().cast()) != 0 {
+                answered = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let e = &*(event.as_ptr().cast::<XSelectionEvent>());
+        if !answered || e.property == 0 {
+            return None;
+        }
+        let (mut kind, mut format, mut items, mut after) = (0, 0, 0, 0);
+        let mut data: *mut u8 = ptr::null_mut();
+        // Up to 64 KiB (16 Ki 32-bit units), deleting the property after.
+        let read = XGetWindowProperty(
+            d,
+            w,
+            property,
+            0,
+            16384,
+            1,
+            0,
+            &mut kind,
+            &mut format,
+            &mut items,
+            &mut after,
+            &mut data,
+        );
+        if read != 0 || data.is_null() {
+            return None;
+        }
+        let text = (format == 8).then(|| {
+            String::from_utf8_lossy(std::slice::from_raw_parts(data, items as usize)).into_owned()
+        });
+        XFree(data.cast());
+        text
+    }
+}
+/// Offer `text` as the CLIPBOARD selection; false without a display.
+pub fn set_clipboard_text(text: &str) -> bool {
+    let (d, w) = X.with(Cell::get);
+    if d.is_null() {
+        return false;
+    }
+    OWNED.with(|t| *t.borrow_mut() = text.into());
+    unsafe {
+        let clipboard = atom(d, c"CLIPBOARD");
+        XSetSelectionOwner(d, clipboard, w, 0);
+        XGetSelectionOwner(d, clipboard) == w
+    }
+}
+/// Answer another client's request for our CLIPBOARD text.
+unsafe fn selection_request(d: *mut c_void, e: &XSelectionRequestEvent) {
+    let utf8 = atom(d, c"UTF8_STRING");
+    let targets = atom(d, c"TARGETS");
+    // Obsolete clients leave the property empty and mean the target.
+    let mut property = if e.property == 0 {
+        e.target
+    } else {
+        e.property
+    };
+    if e.target == targets {
+        let offered = [targets, utf8, 31];
+        // XA_ATOM, format 32 (C longs), PropModeReplace.
+        XChangeProperty(
+            d,
+            e.requestor,
+            property,
+            4,
+            32,
+            0,
+            offered.as_ptr().cast(),
+            3,
+        );
+    } else if e.target == utf8 || e.target == 31 || e.target == atom(d, c"TEXT") {
+        let kind = if e.target == utf8 { utf8 } else { 31 };
+        OWNED.with(|t| {
+            let t = t.borrow();
+            XChangeProperty(
+                d,
+                e.requestor,
+                property,
+                kind,
+                8,
+                0,
+                t.as_ptr(),
+                t.len() as c_int,
+            );
+        });
+    } else {
+        property = 0;
+    }
+    let mut reply = XSelectionEvent {
+        kind: 31,
+        serial: 0,
+        send: 1,
+        display: d,
+        requestor: e.requestor,
+        selection: e.selection,
+        target: e.target,
+        property,
+        time: e.time,
+    };
+    XSendEvent(
+        d,
+        e.requestor,
+        0,
+        0,
+        (&mut reply as *mut XSelectionEvent).cast(),
+    );
+    XFlush(d);
+}
 pub fn run(app: App) -> Result<()> {
     run_surface(app, None)
 }
@@ -379,6 +588,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
         let mut delete = XInternAtom(d, c"WM_DELETE_WINDOW".as_ptr(), 0);
         XSetWMProtocols(d, w, &mut delete, 1);
         let gc = XCreateGC(d, w, 0, ptr::null_mut());
+        X.with(|x| x.set((d, w)));
         let fonts = Fonts::load(d);
         if capture.is_none() {
             XMapWindow(d, w);
@@ -408,7 +618,10 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                         0xffff => Some(Key::Delete),
                         0xff52 => Some(Key::Up),
                         0xff54 => Some(Key::Down),
+                        0xff51 => Some(Key::Left),
+                        0xff53 => Some(Key::Right),
                         0xff50 => Some(Key::Home),
+                        0xff57 => Some(Key::End),
                         0xff09 => Some(Key::Tab),
                         0xffbe => Some(Key::F1),
                         0xffb0..=0xffb9 => Some(Key::Num((sym - 0xffb0) as u8)),
@@ -468,6 +681,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
                     app.width = e.width.max(800);
                     app.height = e.height.max(600);
                 }
+                30 => selection_request(d, &*(event.as_ptr().cast::<XSelectionRequestEvent>())),
                 33 => {
                     let e = &*(event.as_ptr().cast::<XClientMessage>());
                     if e.data[0] as c_ulong == delete {
@@ -611,6 +825,7 @@ fn run_surface(mut app: App, capture: Option<&str>) -> Result<()> {
             XFlush(d);
         }
         stop_audio();
+        X.with(|x| x.set((ptr::null_mut(), 0)));
         fonts.free(d);
         XFreeGC(d, gc);
         XDestroyWindow(d, w);

@@ -298,6 +298,7 @@ impl App {
                     ),
                     value: suggestion,
                     axis: 0,
+                    caret: super::Caret::END,
                 });
             }
             TEX_ASSIGN => {
@@ -344,6 +345,7 @@ impl App {
                     ),
                     value: String::new(),
                     axis: 0,
+                    caret: super::Caret::END,
                 });
             }
             TEX_REMAP => self.open_remap(entry, faces)?,
@@ -594,7 +596,7 @@ impl App {
         };
         label(o, y, "Filter PIC names");
         y += m::ROW_H;
-        self.dialog_input(o, [bx, y, bw, 26], &p.value);
+        self.dialog_input(o, [bx, y, bw, 26], &p.value, p.caret);
         y += 26 + space::SPACE_2;
         let rows = self.assign_rows();
         let picked = d.picked.and_then(|i| rows.iter().position(|r| *r == i));
@@ -866,6 +868,7 @@ impl App {
             ),
             value: suggestion,
             axis: 0,
+            caret: super::Caret::END,
         });
         Ok(())
     }
@@ -983,7 +986,7 @@ impl App {
         let half = bw / 3;
         label(o, y, "New PIC name");
         y += m::ROW_H;
-        self.dialog_input(o, [bx, y, bw, 26], &p.value);
+        self.dialog_input(o, [bx, y, bw, 26], &p.value, p.caret);
         y += 26 + space::SPACE_2;
         let rows = [
             (

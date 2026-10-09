@@ -106,6 +106,7 @@ impl App {
             title,
             value,
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     pub(super) fn palette_edit(&mut self, value: &str) -> Result<()> {

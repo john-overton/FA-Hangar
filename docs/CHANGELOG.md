@@ -5,6 +5,20 @@ the root [`Cargo.toml`](../Cargo.toml). What was verified for each version is
 recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
+## Unreleased
+
+- **Text fields edit in place.** Dialog values and the outliner filter have
+  a movable caret: arrows (Ctrl for words), Home and End, Shift to select,
+  Backspace and Delete at the caret, Ctrl+A to select all, and Ctrl+C, Ctrl+X
+  and Ctrl+V through the system clipboard. Click places the caret, drag or
+  Shift+click selects, double-click selects a word. Ctrl+A now selects the
+  value instead of clearing it; typing still replaces it.
+- **Drop a resource on a field that names one.** Drag an entry from the
+  outliner onto a BRF string that holds a file name of the same type (such
+  as a PT's shape) or onto a station's Store to set it in one undo step.
+  Names can come from any open LIB. Outliner entries now select on release,
+  so pressing one to drag it no longer changes what the editors show.
+
 ## 0.9.1
 
 - **The 32-bit build targets a Pentium II.** The Windows 98/ME executable no

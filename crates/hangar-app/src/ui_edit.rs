@@ -711,6 +711,7 @@ impl App {
                     title: "Flat colour for new faces".into(),
                     value: String::new(),
                     axis: 0,
+                    caret: super::Caret::END,
                 });
                 return Ok(());
             }

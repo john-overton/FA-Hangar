@@ -6,6 +6,7 @@ The lib browser: every open .LIB as a root, its entries grouped by type.
 - Group rows show the type badge and an entry count in `value-sm`.
 - An `amber` dirty dot marks any entry, and its lib, that differs from disk.
 - Header: filter field, type filter segmented buttons, and + to open another lib.
-- Drag an entry from one lib onto another to copy it; drag onto an entry of the same type to open Graft with that pair.
+- Drag an entry from one lib onto another to copy it; drag onto an entry of the same type to open Graft with that pair; drag onto a field that names a resource of the same type (outlined in `steel`) to set it.
+- An entry selects on release, so starting a drag never changes what the editors show.
 
 The consumer provides the lib list, entry groups, selection, active entry, and dirty set.

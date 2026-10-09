@@ -1277,3 +1277,29 @@ PE audit: 1,955,328 bytes (32-bit) and 2,220,544 bytes (64-bit), the same
 60 reviewed imports, no runtime DLLs, the icon set and version 0.9.1. Not
 yet run on a Pentium II/III or on Windows 98/ME; steps are in
 [COMPATIBILITY.md](COMPATIBILITY.md) and [WINDOWS-TEST.md](WINDOWS-TEST.md).
+
+## Unreleased: text fields and name drops
+
+2026-10-09. `smoke_text_editing` drives the dialog value and the outliner
+filter through real key and pointer events: Home/End, arrows and Ctrl word
+moves, Shift selection, Backspace/Delete at the caret and by word, Ctrl+A,
+Ctrl+C/X/V with the in-app clipboard (the headless smoke has no window, so
+the system clipboard is not touched), first-line ASCII paste, click to place
+the caret, drag to select, double-click for a word, and a committed value
+that undoes in one step. `smoke_reference_drop` (800x600 and 1280x800)
+presses an SH in the outliner without changing the selected PT, drops it on
+the PT's shape string (steel outline, chip, status, one undo step back to
+the original bytes), refuses a PIC and a title string with their reasons,
+selects on a plain click's release, takes a name from another open LIB, and
+drops a JT on a station's Store. The existing drag, layout and library
+smokes pass with entries selecting on release.
+
+Formatting, strict Clippy (also for both Windows targets), 216 core tests
+and the smoke test pass. `App` is 2,832 bytes (+88: the prompt caret, the
+boxed text state and the larger drag record). The PE audit passes for both
+builds, 1,979,392 bytes (32-bit) and 2,247,680 bytes (64-bit), with 69
+reviewed imports: the nine clipboard and global-memory functions are new,
+all Windows 95 APIs. The 32-bit executable still disassembles with no SSE.
+The system clipboard (Windows CF_TEXT, X11 CLIPBOARD) is not exercised by
+CI and has not been tried by hand yet; steps are in
+[WINDOWS-TEST.md](WINDOWS-TEST.md).

@@ -364,6 +364,8 @@ struct Prompt {
     title: String,
     value: String,
     axis: usize,
+    /// Caret and selection in `value`.
+    caret: Caret,
 }
 #[derive(Clone, Copy)]
 pub enum Key {
@@ -374,7 +376,10 @@ pub enum Key {
     Delete,
     Up,
     Down,
+    Left,
+    Right,
     Home,
+    End,
     Tab,
     F1,
     Num(u8),
@@ -450,6 +455,8 @@ pub struct App {
     transfer_move: bool,
     include_dependencies: bool,
     resource_drag: Option<libraries_ui::ResourceDrag>,
+    /// Filter caret, text clipboard and a mouse text selection.
+    text: Box<text_ui::TextState>,
     scroll: usize,
     field_scroll: usize,
     field_selected: usize,
@@ -621,6 +628,7 @@ impl App {
             transfer_move: false,
             include_dependencies: true,
             resource_drag: None,
+            text: Box::default(),
             scroll: 0,
             field_scroll: 0,
             field_selected: 0,
@@ -1309,6 +1317,7 @@ impl App {
             title: title.into(),
             value,
             axis: 0,
+            caret: Caret::END,
         });
         let initial = self.prompt.as_ref().unwrap().value.clone();
         self.browse_folder(&folder);
@@ -1388,6 +1397,7 @@ impl App {
                     title: "New aircraft, step 2: unique ID of 1 to 6 letters or digits".into(),
                     value: String::new(),
                     axis: 0,
+                    caret: Caret::END,
                 });
                 self.status =
                     "The new aircraft inherits donor flight, equipment, damage and shadow".into();
@@ -1429,6 +1439,7 @@ impl App {
                             title: format!("Saving {leaf} here would break FA's loader limits"),
                             value: String::new(),
                             axis: 0,
+                            caret: Caret::END,
                         });
                         return Ok(());
                     }
@@ -1538,6 +1549,7 @@ impl App {
                     title: format!("Apply donor {} ({})", field.label, field.kind),
                     value: f.value.clone(),
                     axis: 0,
+                    caret: Caret::END,
                 });
                 Ok(())
             }
@@ -1556,6 +1568,7 @@ impl App {
                 ),
                 value: f.value.clone(),
                 axis: 0,
+                caret: Caret::END,
             });
         }
     }
@@ -1645,6 +1658,7 @@ impl App {
             title,
             value: String::new(),
             axis: 3,
+            caret: Caret::END,
         });
         self.transform_preview();
     }
@@ -2096,6 +2110,7 @@ impl App {
                                     title: "New aircraft, step 3: display name".into(),
                                     value: String::new(),
                                     axis: 0,
+                                    caret: Caret::END,
                                 });
                                 Ok(())
                             }
@@ -2119,6 +2134,7 @@ impl App {
                                         ),
                                         value: String::new(),
                                         axis: 0,
+                                        caret: Caret::END,
                                     });
                                     self.variant_draft = Some(v);
                                     Ok(())
@@ -2173,19 +2189,8 @@ impl App {
                             self.perform_file(a, &path)
                         }
                         PromptKind::Field(index) => {
-                            let r = self
-                                .brf
-                                .as_ref()
-                                .ok_or_else(|| "No BRF fields".to_string())
-                                .and_then(|b| {
-                                    b.edit(&self.data, index, &p.value, extension(self.name()))
-                                })
-                                .and_then(|b| self.doc.replace(self.selected, b));
+                            let r = self.set_field(index, &p.value);
                             if r.is_ok() {
-                                let scroll = self.field_scroll;
-                                self.refresh();
-                                self.field_scroll = scroll;
-                                self.field_selected = index;
                                 self.status = "Field changed. Ctrl+Z undoes it.".into();
                             }
                             r
@@ -2199,10 +2204,6 @@ impl App {
                         self.prompt = Some(p);
                     }
                 }
-                Key::Backspace => {
-                    self.prompt.as_mut().unwrap().value.pop();
-                    self.transform_preview();
-                }
                 Key::Up | Key::Down
                     if self
                         .prompt
@@ -2211,61 +2212,64 @@ impl App {
                 {
                     self.assign_step(if matches!(key, Key::Up) { -1 } else { 1 });
                 }
-                Key::Char(ch) => {
-                    let p = self.prompt.as_mut().unwrap();
-                    if matches!(p.kind, PromptKind::Transform(_) | PromptKind::StationMove)
+                Key::Char(ch)
+                    if !ctrl
                         && "xyzXYZ".contains(ch)
-                    {
-                        let axis = match ch.to_ascii_lowercase() {
-                            'x' => 0,
-                            'y' => 1,
-                            _ => 2,
-                        };
-                        // Transform locks toggle; a station move always needs an axis.
-                        p.axis = if p.axis == axis && matches!(p.kind, PromptKind::Transform(_)) {
-                            3
-                        } else {
-                            axis
-                        };
-                    } else if ctrl && ch.eq_ignore_ascii_case(&'a') {
-                        p.value.clear();
-                    } else if !ctrl && !ch.is_control() && p.value.len() < 1024 {
-                        p.value.push(ch);
-                    }
+                        && self.prompt.as_ref().is_some_and(|p| {
+                            matches!(p.kind, PromptKind::Transform(_) | PromptKind::StationMove)
+                        }) =>
+                {
+                    let p = self.prompt.as_mut().unwrap();
+                    let axis = match ch.to_ascii_lowercase() {
+                        'x' => 0,
+                        'y' => 1,
+                        _ => 2,
+                    };
+                    // Transform locks toggle; a station move always needs an axis.
+                    p.axis = if p.axis == axis && matches!(p.kind, PromptKind::Transform(_)) {
+                        3
+                    } else {
+                        axis
+                    };
                     self.transform_preview();
                 }
-                _ => {}
+                _ => {
+                    if self.text_key(text_ui::Field::Prompt, key, ctrl, shift)
+                        == text_ui::Edit::Changed
+                    {
+                        self.transform_preview();
+                    }
+                }
             }
             return;
         }
         if self.filter_focus {
             match key {
-                Key::Escape | Key::Enter => self.filter_focus = false,
-                Key::Backspace => {
-                    self.filter.pop();
-                    self.category = None;
-                    self.table_scroll = 0;
-                    self.scroll = 0;
+                Key::Escape | Key::Enter => {
+                    self.filter_focus = false;
+                    self.text.filter = None;
                 }
-                Key::Char(c) if !ctrl => {
-                    self.filter.push(c);
-                    self.category = None;
-                    self.table_scroll = 0;
-                    self.scroll = 0;
+                _ => {
+                    if self.text_key(text_ui::Field::Filter, key, ctrl, shift)
+                        == text_ui::Edit::Changed
+                    {
+                        self.category = None;
+                        self.table_scroll = 0;
+                        self.scroll = 0;
+                    }
                 }
-                _ => {}
             }
             return;
         }
         match key {
-            Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'c'=>{let r=self.copy_resource();self.result(r);},'v'=>{let r=self.paste_resources();self.result(r);},'d'=>self.rename_prompt(true),'w'=>{let r=self.close_library();self.result(r);},'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>self.filter_focus=true,'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
+            Key::Char(ch) if ctrl=>match ch.to_ascii_lowercase(){'c'=>{let r=self.copy_resource();self.result(r);},'v'=>{let r=self.paste_resources();self.result(r);},'d'=>self.rename_prompt(true),'w'=>{let r=self.close_library();self.result(r);},'o'=>self.file_prompt(FileAction::Open),'s'=>self.file_prompt(FileAction::Save),'i'=>self.file_prompt(FileAction::Import),'e'=>self.file_prompt(FileAction::Export),'f'=>{self.filter_focus=true;self.text.filter=None;},'b'=>{self.mode=Mode::Package;self.file_prompt(FileAction::Save);},'z'=>{if shift{self.doc.redo();}else{self.doc.undo();}self.refresh();self.status=self.doc.summary();},'y'=>{self.doc.redo();self.refresh();},_=>{}},
             Key::Char(ch) if !ctrl&&self.mesh_edit&&self.mode==Mode::Model&&self.edit_key(ch,shift)=>{},
             Key::Delete if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_op(edit_ui::OP_DELETE),
             Key::Char('h')|Key::Char('H')=>{let r=self.station_add(false,true);self.result(r);},
             Key::Char('a')|Key::Char('A') if self.mesh_edit&&self.mode==Mode::Model=>self.mesh_toggle_all(),
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.mesh_edit&&self.mode==Mode::Model=>self.mesh_transform_prompt(ch.to_ascii_lowercase()),
             Key::Tab if self.mode==Mode::Model=>self.act(view::Action::MeshMode),
-            Key::Char('g')|Key::Char('G') if self.hp_tool&&self.mode==Mode::Model => {self.prompt=Some(Prompt{kind:PromptKind::StationMove,title:"Move station along X, Y or Z in source units".into(),value:"0".into(),axis:0});},
+            Key::Char('g')|Key::Char('G') if self.hp_tool&&self.mode==Mode::Model => {self.prompt=Some(Prompt{kind:PromptKind::StationMove,title:"Move station along X, Y or Z in source units".into(),value:"0".into(),axis:0, caret: Caret::END});},
             Key::Char(ch) if "gGrRsS".contains(ch)&&self.model.is_some()=>{
                 if self.model_entry!=Some(self.selected) || self.model.as_ref().is_some_and(|m|!m.writable){self.status="Select the linked SH entry to edit supported geometry; animated SH remains read-only".into();return;}
                 self.transform_prompt(ch.to_ascii_lowercase());
@@ -2299,6 +2303,7 @@ impl App {
                 ),
                 value: String::new(),
                 axis: 0,
+                caret: Caret::END,
             });
         } else {
             self.quit = true;
@@ -2327,6 +2332,9 @@ impl App {
             self.pressed = down;
         }
         if button == 1 && !down {
+            if self.text.drag.take().is_some() {
+                return;
+            }
             if self.scrub.is_some() {
                 self.number_release();
                 return;
@@ -2355,7 +2363,10 @@ impl App {
                 let live = drag.live
                     || (x - drag.start[0]).abs() + (y - drag.start[1]).abs()
                         > libraries_ui::DRAG_THRESHOLD;
-                if live && self.prompt.is_none() && drag.library == self.library_id {
+                if !live {
+                    // A press that never became a drag is a click: select now.
+                    self.act(drag.click);
+                } else if self.prompt.is_none() {
                     let result = self.drop_resource(drag, x, y);
                     self.result(result);
                 }
@@ -2620,13 +2631,24 @@ impl App {
         if button != 1 {
             return;
         }
-        let action = self
+        let hit = self
             .layout()
             .hits
             .into_iter()
             .rev()
             .find(|h| h.contains(x, y))
-            .map(|h| h.action);
+            .map(|h| (h.rect, h.action));
+        let action = hit.map(|h| h.1);
+        if let Some((rect, a @ (view::Action::PromptText | view::Action::Filter))) = hit {
+            let field = if matches!(a, view::Action::Filter) {
+                text_ui::Field::Filter
+            } else {
+                text_ui::Field::Prompt
+            };
+            self.text_press(field, rect, x, shift);
+            self.act(a);
+            return;
+        }
         if let Some(view::Action::Number(t)) = action {
             self.number_press(t, x);
             return;
@@ -2636,26 +2658,28 @@ impl App {
             return;
         }
         if let Some(action) = action {
-            self.resource_drag =
-                if x < self.left() && self.prompt.is_none() && self.mode != Mode::Package {
-                    match action {
-                        view::Action::Entry(i) => Some((self.library_id, i)),
-                        view::Action::LibraryEntry(id, i) => Some((id, i)),
-                        _ => None,
-                    }
-                    .map(|(library, entry)| libraries_ui::ResourceDrag {
-                        library,
-                        entry,
-                        start: [x, y],
-                        live: false,
-                    })
-                } else {
-                    None
-                };
-            self.act(action);
+            self.resource_drag = if x < self.left()
+                && self.prompt.is_none()
+                && self.mode != Mode::Package
+            {
+                match action {
+                    view::Action::Entry(i) => Some((self.library_id, i)),
+                    view::Action::LibraryEntry(id, i) => Some((id, i)),
+                    _ => None,
+                }
+                .map(|(library, entry)| self.start_resource_drag(library, entry, [x, y], action))
+            } else {
+                None
+            };
+            // An outliner entry selects on release, so dragging it to a
+            // field keeps the entry that owns the field on screen.
+            if self.resource_drag.is_none() {
+                self.act(action);
+            }
         } else {
             self.menu = None;
             self.filter_focus = false;
+            self.text.filter = None;
         }
     }
     pub fn motion(&mut self, x: i32, y: i32, shift: bool) {
@@ -2713,9 +2737,19 @@ impl App {
                 self.status = format!("Gizmo unavailable: {why}");
             }
         }
+        if self.text.drag.is_some() && self.pressed {
+            self.text_motion(x);
+        }
         if let Some(d) = &mut self.resource_drag {
             d.live |=
                 (x - d.start[0]).abs() + (y - d.start[1]).abs() > libraries_ui::DRAG_THRESHOLD;
+        }
+        if let Some(d) = self.resource_drag.filter(|d| d.live) {
+            let (target, rect) = self.drop_target_at(d, x, y);
+            if let Some(d) = &mut self.resource_drag {
+                d.target = target;
+                d.rect = rect;
+            }
         }
 
         if self.painting {
@@ -3114,3 +3148,7 @@ mod vertex_ui;
 
 #[path = "ui_about.rs"]
 mod about_ui;
+
+#[path = "ui_text.rs"]
+mod text_ui;
+use text_ui::Caret;

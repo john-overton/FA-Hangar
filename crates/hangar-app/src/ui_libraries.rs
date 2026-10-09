@@ -31,12 +31,19 @@ pub(super) struct Library {
     table_scroll: usize,
 }
 /// A press on an outliner entry; `live` once it moves past `DRAG_THRESHOLD`.
+/// The entry is selected on release (`click`) only if it never went live.
 #[derive(Clone, Copy)]
 pub(super) struct ResourceDrag {
     pub library: u64,
     pub entry: usize,
     pub start: [i32; 2],
     pub live: bool,
+    pub click: Action,
+    /// The entry is a BRF definition, so it can be a graft donor.
+    pub definition: bool,
+    /// What a release at the pointer would do, and the field it would set.
+    pub target: DropTarget,
+    pub rect: Option<[i32; 4]>,
 }
 /// Manhattan distance a press travels before it becomes a drag.
 pub(super) const DRAG_THRESHOLD: i32 = 6;
@@ -47,6 +54,10 @@ pub(super) enum DropTarget {
     Copy(u64),
     /// Open Graft with the dragged entry as donor and this entry as target.
     Graft(usize),
+    /// Set this BRF string field of the selected definition to the entry's name.
+    Field(usize),
+    /// Make the entry the selected station's default store.
+    Store,
     /// Nothing; the reason shows in the drag chip.
     Invalid(&'static str),
 }
@@ -275,6 +286,7 @@ impl App {
                 title: "Close active LIB without saving?".into(),
                 value: String::new(),
                 axis: 0,
+                caret: super::Caret::END,
             });
             return Ok(());
         }
@@ -373,6 +385,7 @@ impl App {
             ),
             value: String::new(),
             axis: 0,
+            caret: super::Caret::END,
         });
         Ok(())
     }
@@ -388,6 +401,7 @@ impl App {
             },
             value: self.name().into(),
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     pub(super) fn review_resource_name(&mut self, name: &str, duplicate: bool) -> Result<()> {
@@ -425,6 +439,7 @@ impl App {
             ),
             value: String::new(),
             axis: 0,
+            caret: super::Caret::END,
         });
         Ok(())
     }
@@ -986,47 +1001,168 @@ impl App {
     pub(super) fn drag_live(&self) -> bool {
         self.resource_drag.is_some_and(|d| d.live)
     }
-    /// What releasing `drag` at (x, y) would do. Other LIBs take copies;
-    /// same-type definitions in the dragged entry's LIB take a graft.
-    pub(super) fn drop_target_at(&self, drag: ResourceDrag, x: i32, y: i32) -> DropTarget {
-        let Some((id, _, entry)) = self.outliner_row_at(x, y) else {
-            return DropTarget::Invalid("Drop on a LIB in the outliner");
+    /// Stored name of entry `i` in open LIB `id`.
+    pub(super) fn entry_name_in(&self, id: u64, i: usize) -> Option<&str> {
+        let doc = if id == self.library_id {
+            &self.doc
+        } else {
+            &self.libraries.iter().find(|l| l.id == id)?.doc
         };
-        if drag.library != self.library_id {
-            return DropTarget::Invalid("Source LIB is no longer active");
+        doc.archive.entries.get(i).map(|e| e.name.as_str())
+    }
+    /// A press on outliner entry `entry` of LIB `library` that may become a drag.
+    pub(super) fn start_resource_drag(
+        &self,
+        library: u64,
+        entry: usize,
+        start: [i32; 2],
+        click: Action,
+    ) -> ResourceDrag {
+        let doc = if library == self.library_id {
+            Some(&self.doc)
+        } else {
+            self.libraries
+                .iter()
+                .find(|l| l.id == library)
+                .map(|l| &l.doc)
+        };
+        let definition = doc
+            .and_then(|d| d.archive.entries.get(entry))
+            .and_then(|e| e.read().ok())
+            .is_some_and(|b| b.starts_with(b"[brent's_relocatable_format]"));
+        ResourceDrag {
+            library,
+            entry,
+            start,
+            live: false,
+            click,
+            definition,
+            target: DropTarget::Invalid("Drop on a LIB in the outliner"),
+            rect: None,
         }
+    }
+    /// What releasing `drag` at (x, y) would do, with the field it would set.
+    /// Other LIBs take copies; same-type definitions in the dragged entry's
+    /// LIB take a graft; a field naming a resource of the same type takes
+    /// the entry's name.
+    pub(super) fn drop_target_at(
+        &self,
+        drag: ResourceDrag,
+        x: i32,
+        y: i32,
+    ) -> (DropTarget, Option<[i32; 4]>) {
+        let Some((id, _, entry)) = self.outliner_row_at(x, y) else {
+            if x >= self.left() {
+                if let Some(found) = self.reference_target(drag, x, y) {
+                    return found;
+                }
+            }
+            return (DropTarget::Invalid("Drop on a LIB in the outliner"), None);
+        };
         if id != drag.library {
-            return DropTarget::Copy(id);
+            return (DropTarget::Copy(id), None);
         }
-        let ext = |i: usize| self.doc.archive.entries.get(i).map(|e| extension(&e.name));
-        match entry {
+        let ext = |i: usize| self.entry_name_in(id, i).map(extension);
+        let target = match entry {
             Some(to) if to == drag.entry => DropTarget::Invalid("Drop on another LIB"),
             Some(to) if ext(to) == ext(drag.entry) => {
-                if self.selected == drag.entry && self.brf.is_some() {
+                if drag.definition {
                     DropTarget::Graft(to)
                 } else {
                     DropTarget::Invalid("Graft takes definitions only")
                 }
             }
             _ => DropTarget::Invalid("Already in this LIB"),
-        }
+        };
+        (target, None)
+    }
+    /// A field under (x, y) that names a resource: a BRF string of the
+    /// selected definition, or the selected station's default store.
+    fn reference_target(
+        &self,
+        drag: ResourceDrag,
+        x: i32,
+        y: i32,
+    ) -> Option<(DropTarget, Option<[i32; 4]>)> {
+        let name = self.entry_name_in(drag.library, drag.entry)?;
+        let hit = self
+            .layout()
+            .hits
+            .into_iter()
+            .rev()
+            .find(|h| h.contains(x, y))?;
+        let target = match hit.action {
+            Action::Field(i) => {
+                let f = self.brf.as_ref()?.fields.get(i)?;
+                let current = f.value.trim_matches('"');
+                if f.kind != "string" || current.rsplit_once('.').is_none() {
+                    DropTarget::Invalid("Field does not name a resource")
+                } else if extension(current) != extension(name) {
+                    DropTarget::Invalid("Field names another file type")
+                } else if current.eq_ignore_ascii_case(name) {
+                    DropTarget::Invalid("Field already names it")
+                } else {
+                    DropTarget::Field(i)
+                }
+            }
+            Action::StationField(12) => {
+                if matches!(extension(name), "JT" | "SEE" | "ECM" | "GAS") {
+                    DropTarget::Store
+                } else {
+                    DropTarget::Invalid("A store is a JT, SEE, ECM or GAS")
+                }
+            }
+            _ => return None,
+        };
+        Some((target, Some(hit.rect)))
     }
     pub(super) fn drop_target(&self) -> Option<DropTarget> {
-        let drag = self.resource_drag.filter(|d| d.live)?;
-        Some(self.drop_target_at(drag, self.mouse[0], self.mouse[1]))
+        self.resource_drag.filter(|d| d.live).map(|d| d.target)
+    }
+    /// Set BRF field `index` of the selected definition to `value` as one undo step.
+    pub(super) fn set_field(&mut self, index: usize, value: &str) -> Result<()> {
+        let bytes = self
+            .brf
+            .as_ref()
+            .ok_or_else(|| "No BRF fields".to_string())?
+            .edit(&self.data, index, value, extension(self.name()))?;
+        self.doc.replace(self.selected, bytes)?;
+        let scroll = self.field_scroll;
+        self.refresh();
+        self.field_scroll = scroll;
+        self.field_selected = index;
+        Ok(())
     }
     /// Release a live drag at (x, y).
     pub(super) fn drop_resource(&mut self, drag: ResourceDrag, x: i32, y: i32) -> Result<()> {
-        match self.drop_target_at(drag, x, y) {
+        let name = self
+            .entry_name_in(drag.library, drag.entry)
+            .ok_or("Dragged entry is gone")?
+            .to_string();
+        match self.drop_target_at(drag, x, y).0 {
             DropTarget::Copy(id) => {
-                self.selected = drag.entry;
+                self.act(drag.click);
                 self.prepare_drop(id)?;
             }
             DropTarget::Graft(to) => {
-                self.selected = drag.entry;
+                self.act(drag.click);
                 self.pin_donor()?;
                 self.select_entry(to);
                 self.mode = Mode::Graft;
+            }
+            DropTarget::Field(i) => {
+                let f = &self.brf.as_ref().ok_or("No BRF fields")?.fields[i];
+                let quote = if f.value.starts_with('\'') { '\'' } else { '"' };
+                let label = f.label.clone();
+                self.set_field(i, &format!("{quote}{name}{quote}"))?;
+                self.status = format!("{label} now names {name}. Ctrl+Z undoes it.");
+            }
+            DropTarget::Store => {
+                self.station_value(12, &name)?;
+                self.status = format!(
+                    "HP{} default store is now {name}. Ctrl+Z undoes it.",
+                    self.hp_selected + 1
+                );
             }
             DropTarget::Invalid(reason) => self.status = format!("Not dropped: {reason}"),
         }
@@ -1035,7 +1171,7 @@ impl App {
     /// Status bar text for a live drag: what releasing would do.
     pub(super) fn drag_status(&self) -> Option<String> {
         let drag = self.resource_drag.filter(|d| d.live)?;
-        let name = self.doc.archive.entries.get(drag.entry)?.name.as_str();
+        let name = self.entry_name_in(drag.library, drag.entry)?;
         Some(match self.drop_target()? {
             DropTarget::Copy(id) => {
                 let lib = self.library_name(id);
@@ -1047,7 +1183,15 @@ impl App {
             }
             DropTarget::Graft(to) => format!(
                 "Release to graft {name} onto {}",
-                self.doc.archive.entries[to].name
+                self.entry_name_in(drag.library, to)?
+            ),
+            DropTarget::Field(i) => format!(
+                "Release to set {} to {name}; Ctrl+Z undoes it",
+                self.brf.as_ref()?.fields.get(i)?.label
+            ),
+            DropTarget::Store => format!(
+                "Release to make {name} the default store of HP{}",
+                self.hp_selected + 1
             ),
             DropTarget::Invalid(reason) => format!("{reason}; release does nothing"),
         })
@@ -1062,7 +1206,9 @@ impl App {
             {
                 Some((c::AMBER_DEEP, c::AMBER))
             }
-            DropTarget::Graft(to) if row.0 == self.library_id && row.2 == Some(to) => {
+            DropTarget::Graft(to)
+                if self.resource_drag.is_some_and(|d| d.library == row.0) && row.2 == Some(to) =>
+            {
                 Some((c::STEEL_DEEP, c::STEEL))
             }
             _ => None,
@@ -1075,20 +1221,41 @@ impl App {
         let Some(drag) = self.resource_drag.filter(|d| d.live) else {
             return;
         };
-        let (Some(target), Some(entry)) =
-            (self.drop_target(), self.doc.archive.entries.get(drag.entry))
-        else {
+        let (Some(target), Some(name)) = (
+            self.drop_target(),
+            self.entry_name_in(drag.library, drag.entry),
+        ) else {
             return;
         };
         let (label, color) = match target {
             DropTarget::Copy(id) => (format!("Copy to {}", self.library_name(id)), c::INK),
             DropTarget::Graft(to) => (
-                format!("Graft with {}", self.doc.archive.entries[to].name),
+                format!(
+                    "Graft with {}",
+                    self.entry_name_in(drag.library, to).unwrap_or("")
+                ),
                 c::STEEL,
             ),
+            DropTarget::Field(i) => (
+                format!(
+                    "Set {}",
+                    self.brf
+                        .as_ref()
+                        .and_then(|b| b.fields.get(i))
+                        .map_or("", |f| f.label.as_str())
+                ),
+                c::STEEL,
+            ),
+            DropTarget::Store => (format!("Store of HP{}", self.hp_selected + 1), c::STEEL),
             DropTarget::Invalid(reason) => (reason.to_string(), c::INK_MUTED),
         };
-        let name_w = text_width(&entry.name, Style::Value);
+        // The field a release would set is outlined in steel.
+        if let (DropTarget::Field(_) | DropTarget::Store, Some([fx, fy, fw, fh])) =
+            (target, drag.rect)
+        {
+            widgets::frame(&mut o.canvas, [fx - 1, fy - 1, fw + 2, fh + 2], c::STEEL);
+        }
+        let name_w = text_width(name, Style::Value);
         let w = space::SPACE_2
             + m::ICON
             + space::SPACE_1
@@ -1110,7 +1277,7 @@ impl App {
         d.icon(
             tx,
             y + (h - m::ICON) / 2,
-            super::view::group_icon(&entry.name),
+            super::view::group_icon(name),
             c::INK_MUTED,
             c::GM_800,
         );
@@ -1118,7 +1285,7 @@ impl App {
         d.styled(
             tx,
             widgets::baseline(y, h, Style::Value),
-            &entry.name,
+            name,
             c::INK,
             Style::Value,
         );
@@ -1173,6 +1340,179 @@ impl App {
         self.scroll = 0;
         self.status.clear();
         Ok(target)
+    }
+    /// Dragging an outliner entry onto a field that names a resource: the
+    /// press leaves the owner selected, matching types set the field as one
+    /// undo step, other types and plain strings are refused, a click still
+    /// selects, other LIBs supply names, and a JT becomes a station's store.
+    #[inline(never)]
+    pub(super) fn smoke_reference_drop(&mut self) {
+        let outlined = |app: &App, [x, y, w, _]: [i32; 4]| {
+            app.draw().commands.iter().any(|d| {
+                matches!(d, Draw::Rect(rx, ry, rw, 1, c)
+                    if *c == c::STEEL.0 && *rx == x && *ry == y - 1 && *rw == w)
+            })
+        };
+        let drag = |app: &mut App, from: [i32; 4], to: [i32; 2]| {
+            let (x, y) = (from[0] + 40, from[1] + from[3] / 2);
+            app.motion(x, y, false);
+            app.pointer(x, y, 1, true, false);
+            app.motion(to[0], to[1], false);
+        };
+        for (w, h) in [(800, 600), (1280, 800)] {
+            let other = self.drag_fixture().unwrap();
+            let source = self.library_id;
+            self.width = w;
+            self.height = h;
+            self.mode = Mode::Properties;
+            self.field_group = None;
+            let pt = self.selected;
+            let before = self.doc.archive.entries[pt].read().unwrap();
+            let field_at = |app: &App, value: &str| {
+                app.brf
+                    .as_ref()
+                    .unwrap()
+                    .fields
+                    .iter()
+                    .position(|f| f.kind == "string" && f.value == value)
+                    .unwrap()
+            };
+            let f = field_at(self, "\"DEMO.SH\"");
+            self.field_scroll = f;
+            let field = self
+                .chrome_hit(&|a| matches!(a, Action::Field(i) if i == f))
+                .expect("shape field row");
+            let to = [field[0] + 10, field[1] + field[3] / 2];
+            // The outliner row of `name` in the active LIB, scrolled into view.
+            let row = |app: &mut App, name: &str| {
+                let i = app.doc.archive.find(name).unwrap();
+                app.collapsed[super::view::category_of(name)] = false;
+                let at = app
+                    .library_rows()
+                    .iter()
+                    .position(|r| r.0 == app.library_id && r.2 == Some(i))
+                    .unwrap();
+                app.scroll = at.saturating_sub(1);
+                app.chrome_hit(&|a| matches!(a, Action::Entry(e) if e == i))
+                    .expect("outliner row")
+            };
+            // The press does not select DEMO_A.SH: DEMO.PT's fields stay.
+            let r = row(self, "DEMO_A.SH");
+            drag(self, r, to);
+            assert_eq!(self.selected, pt);
+            assert_eq!(self.drop_target(), Some(DropTarget::Field(f)));
+            assert!(outlined(self, field), "steel outline on the field");
+            let status = self.drag_status().unwrap();
+            assert!(status.starts_with("Release to set ") && status.contains("DEMO_A.SH"));
+            self.pointer(to[0], to[1], 1, false, false);
+            assert_eq!(self.selected, pt);
+            assert_eq!(self.brf.as_ref().unwrap().fields[f].value, "\"DEMO_A.SH\"");
+            assert!(
+                self.status.contains("now names DEMO_A.SH"),
+                "{}",
+                self.status
+            );
+            // One undo step restores the stored bytes.
+            self.key(Key::Char('z'), true, false);
+            assert_eq!(self.doc.archive.entries[pt].read().unwrap(), before);
+            // Undo refreshes the list from the top; show the field again.
+            self.field_scroll = f;
+            // Another file type is refused with the reason; nothing changes.
+            let r = row(self, "DEMO.PIC");
+            drag(self, r, to);
+            assert_eq!(
+                self.drop_target(),
+                Some(DropTarget::Invalid("Field names another file type"))
+            );
+            assert!(!outlined(self, field));
+            self.pointer(to[0], to[1], 1, false, false);
+            assert!(self.status.starts_with("Not dropped"));
+            assert_eq!(self.doc.archive.entries[pt].read().unwrap(), before);
+            // A string that is not a file name is not a target.
+            let title = field_at(self, "\"Demo\"");
+            self.field_scroll = title;
+            let plain = self
+                .chrome_hit(&|a| matches!(a, Action::Field(i) if i == title))
+                .unwrap();
+            let r = row(self, "DEMO_A.SH");
+            drag(self, r, [plain[0] + 10, plain[1] + 4]);
+            assert_eq!(
+                self.drop_target(),
+                Some(DropTarget::Invalid("Field does not name a resource"))
+            );
+            self.pointer(plain[0] + 10, plain[1] + 4, 1, false, false);
+            assert_eq!(self.doc.archive.entries[pt].read().unwrap(), before);
+            // A click without moving selects on release.
+            let a = self.doc.archive.find("DEMO_A.SH").unwrap();
+            let r = row(self, "DEMO_A.SH");
+            self.pointer(r[0] + 40, r[1] + 8, 1, true, false);
+            assert_eq!(self.selected, pt);
+            self.pointer(r[0] + 40, r[1] + 8, 1, false, false);
+            assert_eq!(self.selected, a);
+            if w == 800 {
+                continue;
+            }
+            // A name from another open LIB: MYJET.PT onto the PT's own name.
+            self.select_entry(pt);
+            self.mode = Mode::Properties;
+            let own = field_at(self, "\"DEMO.PT\"");
+            self.field_scroll = own;
+            let field = self
+                .chrome_hit(&|a| matches!(a, Action::Field(i) if i == own))
+                .unwrap();
+            if self
+                .chrome_hit(&|a| matches!(a, Action::LibraryEntry(id, _) if id == other))
+                .is_none()
+            {
+                self.toggle_library(other);
+            }
+            let jet = self
+                .chrome_hit(&|a| matches!(a, Action::LibraryEntry(id, 0) if id == other))
+                .expect("MYJET.PT row");
+            drag(self, jet, [field[0] + 10, field[1] + 4]);
+            assert_eq!(self.drop_target(), Some(DropTarget::Field(own)));
+            self.pointer(field[0] + 10, field[1] + 4, 1, false, false);
+            assert_eq!(self.brf.as_ref().unwrap().fields[own].value, "\"MYJET.PT\"");
+            assert_eq!(self.library_id, source, "the field's LIB stays active");
+            self.key(Key::Char('z'), true, false);
+            // A JT dropped on the Store select becomes that station's store.
+            self.doc
+                .import("AIM9.JT", hangar_core::brf::demo())
+                .unwrap();
+            self.select_entry(pt);
+            self.mode = Mode::Model;
+            self.hp_tool = true;
+            self.hp_visible = true;
+            self.hp_selected = 0;
+            self.refresh();
+            let store = self
+                .chrome_hit(&|a| matches!(a, Action::StationField(12)))
+                .expect("Store select");
+            let target = [store[0] + 10, store[1] + store[3] / 2];
+            let r = row(self, "AIM9.JT");
+            drag(self, r, target);
+            assert_eq!(self.drop_target(), Some(DropTarget::Store));
+            self.pointer(target[0], target[1], 1, false, false);
+            assert_eq!(
+                self.hp_context.as_ref().unwrap().stations[0]
+                    .store
+                    .as_deref(),
+                Some("AIM9.JT"),
+                "{}",
+                self.status
+            );
+            let r = row(self, "DEMO_A.SH");
+            drag(self, r, target);
+            assert_eq!(
+                self.drop_target(),
+                Some(DropTarget::Invalid("A store is a JT, SEE, ECM or GAS"))
+            );
+            self.pointer(target[0], target[1], 1, false, false);
+            self.hp_tool = false;
+        }
+        self.libraries.clear();
+        self.width = 1280;
+        self.height = 800;
     }
     /// Drag feedback through real pointer events: the threshold, the chip,
     /// amber copy targets, steel graft targets, invalid reasons, the status
@@ -1818,6 +2158,7 @@ impl App {
         assert!(a.root_collapsed);
         let mut d = library_test_app();
         d.smoke_drag_feedback();
+        d.smoke_reference_drop();
         d.smoke_context_menu();
     }
 }

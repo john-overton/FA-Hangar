@@ -608,6 +608,27 @@ the synthetic demo).
    game: the panels draw where they did, with their textures, and nothing
    flickers or vanishes. Report any difference.
 
+## Text fields and name drops (Unreleased)
+
+1. Select a PT, open Properties and click a string field such as the shape
+   name. In the dialog, press Home, Right, End, Shift+Left and Ctrl+Left:
+   the caret moves and the selection fills amber-deep. Type over a selection,
+   Backspace and Delete at the caret, then Esc: nothing changes.
+2. Select the value with Ctrl+A, Ctrl+C, then paste into Notepad. Copy a
+   line from Notepad and Ctrl+V it into the dialog; a pasted line break or
+   accented letter is left out and the status says so. On Windows 98 check
+   this on the original OS, not only through WOW64.
+3. Click inside the value to place the caret, drag across it to select and
+   double-click a word. Repeat in the outliner filter (Ctrl+F).
+4. With the PT's fields showing, press on another SH in the outliner and drag
+   it onto the shape field: the PT stays selected, the field is outlined in
+   steel and the chip reads **Set …**. Release: the field shows the new name
+   and Ctrl+Z restores it. Drop a PIC there instead: the chip gives the
+   reason and nothing changes. A plain click on an entry still selects it.
+5. In Hardpoints, drag a JT onto **Store**: the selected station takes it,
+   one undo step. Save to a custom LIB, reload, and fly it if the store and
+   station suit each other.
+
 ## Please report
 
 Windows version and architecture, CPU model or VM setup, whether the window

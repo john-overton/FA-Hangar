@@ -140,6 +140,7 @@ impl App {
             ),
             value: if long { id.long } else { id.short },
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     /// One undo step; only the name operand's bytes change.
@@ -190,6 +191,7 @@ impl App {
             ),
             value: stem(self.name()).into(),
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     pub(super) fn rename_review(&mut self, id: &str) -> Result<()> {
@@ -223,6 +225,7 @@ impl App {
             title,
             value: id.trim().to_ascii_uppercase(),
             axis: 0,
+            caret: super::Caret::END,
         });
         Ok(())
     }
@@ -413,6 +416,7 @@ impl App {
             ),
             value: String::new(),
             axis: 0,
+            caret: super::Caret::END,
         });
         Ok(())
     }

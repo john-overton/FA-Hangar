@@ -42,6 +42,7 @@ impl App {
             },
             value: String::new(),
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     pub(super) fn apply_base_color(&mut self, face: bool) -> Result<()> {

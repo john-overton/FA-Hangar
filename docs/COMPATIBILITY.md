@@ -75,7 +75,10 @@ compiler-generated instructions or runtime behavior work on Windows 98.
 
 The additional Windows APIs are `FindFirstFileA`/`FindNextFileA`/`FindClose`,
 path/drive queries, `MoveFileA` for same-directory non-replacing moves, `SetFilePointer` for bounded source reads, `StretchDIBits` and `PlaySoundA`, all from the existing Win32
-API family. The audio buffer stays owned until playback is stopped before
+API family. Copy and paste in text fields use `OpenClipboard`, `CloseClipboard`,
+`EmptyClipboard`, `GetClipboardData` and `SetClipboardData` with ANSI `CF_TEXT`,
+holding the text in `GlobalAlloc` memory (`GlobalLock`, `GlobalUnlock`,
+`GlobalFree`); all are Windows 95 APIs. The audio buffer stays owned until playback is stopped before
 release ([PlaySound memory lifetime](https://learn.microsoft.com/en-us/previous-versions/dd743680(v=vs.85))).
 No WinMM DLL is bundled; Windows supplies it.
 

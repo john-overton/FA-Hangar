@@ -111,6 +111,7 @@ impl App {
             title,
             value,
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     pub(super) fn add_clone_source(&mut self, path: &str) -> Result<()> {
@@ -609,6 +610,7 @@ impl App {
             title: "Export object: review private resources".into(),
             value: String::new(),
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     /// Wheel over the Unresolved in source rows scrolls them, not the renames.

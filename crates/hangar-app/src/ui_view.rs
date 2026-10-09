@@ -20,6 +20,8 @@ pub(super) enum Action {
     Related(usize),
     Field(usize),
     PickField(usize),
+    /// The dialog value box: a click places the caret.
+    PromptText,
     ResetField(usize),
     View(u8),
     Transform(char),
@@ -421,6 +423,7 @@ impl App {
                         .into(),
                     value: "LIVERY.PIC".into(),
                     axis: 0,
+                    caret: super::Caret::END,
                 });
             }
             Action::FaceTexture(op) => self.face_texture_action(op),
@@ -508,6 +511,7 @@ impl App {
                         self.brush
                     ),
                     axis: 0,
+                    caret: super::Caret::END,
                 });
             }
             Action::CloneKeep(row) => {
@@ -540,6 +544,7 @@ impl App {
                         title: format!("Texture for {target}: a PIC in this LIB or a source LIB"),
                         value: String::new(),
                         axis: 0,
+                        caret: super::Caret::END,
                     });
                 }
             }
@@ -640,6 +645,8 @@ impl App {
                 self.refresh();
                 self.status = self.doc.summary();
             }
+            // Placed by the press in `pointer`; nothing else to do.
+            Action::PromptText => {}
             Action::Filter => {
                 self.filter_focus = true;
                 self.category = None;
@@ -860,6 +867,7 @@ impl App {
                     title: "Squadron library".into(),
                     value: String::new(),
                     axis: 0,
+                    caret: super::Caret::END,
                 });
             }
             Action::DecalSaved(i) => {
@@ -884,6 +892,7 @@ impl App {
                     title: "Tail-text ink: palette index 0 to 255".into(),
                     value: format!("{}", self.text_ink()),
                     axis: 0,
+                    caret: super::Caret::END,
                 })
             }
             Action::DecalText => {
@@ -892,6 +901,7 @@ impl App {
                     title: "Tail number: letters, digits, space, dash, slash, period".into(),
                     value: self.decal_text.clone(),
                     axis: 0,
+                    caret: super::Caret::END,
                 })
             }
             Action::DecalPreset(next) => {
@@ -1390,6 +1400,7 @@ impl App {
                 title: "Review".into(),
                 value: String::new(),
                 axis: 0,
+                caret: super::Caret::END,
             });
             return Ok(());
         }
@@ -1719,16 +1730,12 @@ impl App {
                 Style::Value,
             );
         } else {
-            // Show the end of a long filter; the caret follows the text.
-            let mut text = self.filter.clone();
-            while text_width(&text, Style::Value) > room - 2 && !text.is_empty() {
-                text.remove(0);
-            }
-            d.styled(tx, base, &text, c::INK, Style::Value);
-            if self.filter_focus {
-                let cx = tx + text_width(&text, Style::Value) + 1;
-                d.rect(cx, fy + 4, 1, fh - 8, c::INK);
-            }
+            // A long filter scrolls to keep the caret (or, unfocused, its end) in view.
+            let (tx, room) = text_ui::filter_area(filter);
+            let caret = self
+                .filter_focus
+                .then(|| self.text.filter.unwrap_or(Caret::END));
+            text_ui::draw(d, tx, base, fy, fh, room, &self.filter, caret);
         }
         o.hit(filter, Action::Filter);
         let types: Vec<(Btn, Action)> = [(0, Icon::Aircraft), (1, Icon::Shape), (2, Icon::Image)]
@@ -2852,23 +2859,14 @@ impl App {
         ]
     }
     /// Sunken text input with a `focus` border, the end of `value` and a caret.
-    pub(super) fn dialog_input(&self, o: &mut Layout, rect: [i32; 4], value: &str) {
+    pub(super) fn dialog_input(&self, o: &mut Layout, rect: [i32; 4], value: &str, caret: Caret) {
         use widgets::{baseline, notched};
-        let [x, y, w, h] = rect;
+        let [_, y, _, h] = rect;
         notched(&mut o.canvas, rect, Some(c::GM_950), Some(c::FOCUS));
-        let mut text = value.to_string();
-        while !text.is_empty() && text_width(&text, Style::Value) > w - 20 {
-            text.remove(0);
-        }
-        o.canvas.styled(
-            x + 8,
-            baseline(y, h, Style::Value),
-            &text,
-            c::INK,
-            Style::Value,
-        );
-        let cx = x + 9 + text_width(&text, Style::Value);
-        o.canvas.rect(cx, y + 5, 1, h - 10, c::INK);
+        let (tx, room) = text_ui::prompt_area(rect);
+        let base = baseline(y, h, Style::Value);
+        text_ui::draw(&mut o.canvas, tx, base, y, h, room, value, Some(caret));
+        o.hit(rect, Action::PromptText);
     }
     /// Dialog footer buttons, right-aligned at the bottom of `rect`: a ghost
     /// Cancel (when given) and the dialog's action; `left` buttons start at
@@ -2986,7 +2984,7 @@ impl App {
             c::INK_MUTED,
             Style::Label,
         );
-        self.dialog_input(o, [bx, by + m::ROW_H, bw, 26], &p.value);
+        self.dialog_input(o, [bx, by + m::ROW_H, bw, 26], &p.value, p.caret);
         let hint = if let PromptKind::Transform(op) = p.kind {
             let lock = match (p.axis, op) {
                 (0..=2, _) => format!("Axis {}", ['X', 'Y', 'Z'][p.axis]),
@@ -3057,12 +3055,10 @@ impl App {
                 .into_iter()
                 .find(|h| predicate(h.action))
                 .expect("Visible control missing");
-            app.click(
-                hit.rect[0] + hit.rect[2] / 2,
-                hit.rect[1] + hit.rect[3] / 2,
-                1,
-                true,
-            );
+            let (x, y) = (hit.rect[0] + hit.rect[2] / 2, hit.rect[1] + hit.rect[3] / 2);
+            // Outliner entries select on release.
+            app.click(x, y, 1, true);
+            app.click(x, y, 1, false);
         }
         self.smoke_widgets();
         self.smoke_chrome();
@@ -3073,6 +3069,7 @@ impl App {
         self.smoke_dependencies();
         self.smoke_graft();
         self.smoke_libraries();
+        self.smoke_text_editing();
         self.smoke_identity();
         self.smoke_library_moves();
         self.smoke_material_tools();
@@ -3438,6 +3435,7 @@ impl App {
                             title: "Review".into(),
                             value: String::new(),
                             axis: 0,
+                            caret: super::Caret::END,
                         });
                         "export review"
                     }

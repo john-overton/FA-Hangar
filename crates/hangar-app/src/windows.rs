@@ -105,6 +105,10 @@ unsafe extern "system" {
     fn DeleteFileA(name: *const c_char) -> i32;
     fn MoveFileA(from: *const c_char, to: *const c_char) -> i32;
     fn GetLastError() -> u32;
+    fn GlobalAlloc(flags: u32, size: usize) -> Handle;
+    fn GlobalLock(mem: Handle) -> *mut c_void;
+    fn GlobalUnlock(mem: Handle) -> i32;
+    fn GlobalFree(mem: Handle) -> Handle;
 }
 #[cfg_attr(not(target_arch = "x86"), link(name = "user32", kind = "raw-dylib"))]
 #[cfg_attr(
@@ -146,6 +150,11 @@ unsafe extern "system" {
     fn SetCapture(hwnd: Handle) -> Handle;
     fn ReleaseCapture() -> i32;
     fn MessageBoxA(hwnd: Handle, text: *const c_char, caption: *const c_char, flags: u32) -> i32;
+    fn OpenClipboard(hwnd: Handle) -> i32;
+    fn CloseClipboard() -> i32;
+    fn EmptyClipboard() -> i32;
+    fn GetClipboardData(format: u32) -> Handle;
+    fn SetClipboardData(format: u32, mem: Handle) -> Handle;
 }
 #[cfg_attr(not(target_arch = "x86"), link(name = "gdi32", kind = "raw-dylib"))]
 #[cfg_attr(
@@ -605,7 +614,10 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wp: usize, lp: isize) 
                 0x2e => Some(Key::Delete),
                 0x26 => Some(Key::Up),
                 0x28 => Some(Key::Down),
+                0x25 => Some(Key::Left),
+                0x27 => Some(Key::Right),
                 0x24 => Some(Key::Home),
+                0x23 => Some(Key::End),
                 9 => Some(Key::Tab),
                 0x70 => Some(Key::F1),
                 0x60..=0x69 => Some(Key::Num((wp - 0x60) as u8)),
@@ -755,6 +767,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         if hwnd.is_null() {
             ExitProcess(1);
         }
+        WINDOW = hwnd;
         ShowWindow(hwnd, 1);
         UpdateWindow(hwnd);
         let mut msg: Msg = core::mem::zeroed();
@@ -1094,6 +1107,70 @@ pub fn save_decals(paths: &[String]) -> Result<()> {
     save_paths("fa-hangar-decals.txt", paths)
 }
 
+/// The main window, which owns clipboard data; null in the headless smoke test.
+static mut WINDOW: Handle = ptr::null_mut();
+/// CF_TEXT: ANSI text, all a field takes.
+const CF_TEXT: u32 = 1;
+/// Text on the system clipboard, or `None` (no window, no text).
+pub fn clipboard_text() -> Option<String> {
+    unsafe {
+        let hwnd = WINDOW;
+        if hwnd.is_null() || OpenClipboard(hwnd) == 0 {
+            return None;
+        }
+        let mem = GetClipboardData(CF_TEXT);
+        let text = if mem.is_null() {
+            None
+        } else {
+            let p = GlobalLock(mem) as *const u8;
+            if p.is_null() {
+                None
+            } else {
+                // CF_TEXT ends in NUL; a field never needs more than 64 KiB.
+                let mut n = 0;
+                while n < 65536 && *p.add(n) != 0 {
+                    n += 1;
+                }
+                let text = core::slice::from_raw_parts(p, n)
+                    .iter()
+                    .map(|&b| b as char)
+                    .collect();
+                GlobalUnlock(mem);
+                Some(text)
+            }
+        };
+        CloseClipboard();
+        text
+    }
+}
+/// Put `text` on the system clipboard as CF_TEXT; false without a window.
+pub fn set_clipboard_text(text: &str) -> bool {
+    unsafe {
+        let hwnd = WINDOW;
+        if hwnd.is_null() || OpenClipboard(hwnd) == 0 {
+            return false;
+        }
+        let mut done = false;
+        if EmptyClipboard() != 0 {
+            // GMEM_MOVEABLE: the clipboard takes ownership on success.
+            let mem = GlobalAlloc(2, text.len() + 1);
+            if !mem.is_null() {
+                let p = GlobalLock(mem) as *mut u8;
+                if !p.is_null() {
+                    ptr::copy_nonoverlapping(text.as_ptr(), p, text.len());
+                    *p.add(text.len()) = 0;
+                    GlobalUnlock(mem);
+                    done = !SetClipboardData(CF_TEXT, mem).is_null();
+                }
+                if !done {
+                    GlobalFree(mem);
+                }
+            }
+        }
+        CloseClipboard();
+        done
+    }
+}
 static mut AUDIO_DATA: *mut Vec<u8> = ptr::null_mut();
 pub fn stop_audio() {
     unsafe {

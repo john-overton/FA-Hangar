@@ -287,6 +287,7 @@ impl App {
             o,
             [bx, foot + 2 * m::ROW_H + space::SPACE_1, bw, 26],
             &p.value,
+            p.caret,
         );
         if let Some(error) = self.status.strip_prefix("Error: ") {
             let ey = y + h - space::SPACE_4 - m::BUTTON_H;

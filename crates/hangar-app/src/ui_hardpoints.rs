@@ -274,6 +274,7 @@ impl App {
             title,
             value,
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     pub(super) fn station_value(&mut self, column: usize, value: &str) -> Result<()> {

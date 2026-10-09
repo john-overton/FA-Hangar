@@ -152,6 +152,15 @@ sizes and weights.
   turns amber. Values the game stores with BRF's `^` marker read **scaled**
   after the number; they stay in raw source units. `$hex` operands, strings
   and pointers keep their notation and open the type prompt when clicked.
+- **Text fields.** The value box of every dialog and the outliner filter
+  edit in place. Left and Right move the caret (with Ctrl, a word at a
+  time), Home and End jump to either end, and Shift with any of them
+  selects. Backspace and Delete remove a character or the selection (with
+  Ctrl, a word). Ctrl+A selects all, so typing replaces the value. Ctrl+C,
+  Ctrl+X and Ctrl+V copy, cut and paste through the system clipboard. Click to
+  place the caret, drag or Shift+click to select, double-click to select a
+  word. Pasted text keeps its first line and printable ASCII only, since
+  operands, names and paths are single ASCII values.
 
 | Workspace | Use |
 | --- | --- |
@@ -689,6 +698,16 @@ same-type definition in the same LIB (outlined in steel), or a short reason
 where a release does nothing, such as **Already in this LIB**. The status bar
 repeats the release action. **Esc** or the right mouse button cancels the drag.
 
+An entry is selected when the button is released, so pressing one to drag it
+leaves the editors on the definition you are working on. Drop an entry on a
+field that names a resource of the same type to put its name there: a BRF
+string such as a PT's shape `"F14.SH"` in Properties, or a station's **Store**
+in Hardpoints (a JT, SEE, ECM or GAS). Over such a field the chip reads
+**Set …** and the field is outlined in steel; releasing changes it as one undo
+step. The name can come from any open LIB, but the game finds it only when that
+LIB is installed too. Strings that are not file names, such as titles, and
+fields that name another file type are refused with the reason in the chip.
+
 Right-click an entry for its context menu. It selects the entry first
 (switching LIB if needed) and lists **Copy to** and **Move to** submenus with
 every other open LIB, then **Copy**, **Paste**, **Duplicate**, **Rename…**
@@ -1126,7 +1145,9 @@ Select an aircraft PT and click **Hardpoints** above the model. Steel diamonds
 mark its stations; the selected station turns amber. Step between stations
 with the chevrons beside "HP1 of 2". Drag a diamond in an orthographic view,
 scrub or type the X, Y and Z number fields under **Location**, or press G,
-X/Y/Z, an offset and Enter. H places a new station at the cursor's view-plane position. Add,
+X/Y/Z, an offset and Enter. H places a new station at the cursor's view-plane position.
+Drag a JT, SEE, ECM or GAS from the outliner onto **Store** to load the
+selected station with it. Add,
 duplicate, remove, move and store assignments each form one undo step. The
 inspector also exposes weight class, item count, location code and flags;
 **All station fields** opens the structured table for slew settings and other
@@ -1683,7 +1704,9 @@ folds the other way in the viewport. Whether the game agrees is listed in
 | Replace / export OBJ | Inspector buttons |
 | Search entry names | Ctrl+F or search field; Esc leaves search |
 | Select entry | Click or Up/Down; wheel scrolls the outliner |
-| Edit a definition operand | Drag its number field to scrub, click to type (Ctrl+A clears), Backspace restores the saved value |
+| Edit a definition operand | Drag its number field to scrub, click to type, Backspace restores the saved value |
+| Edit typed text | Left/Right (Ctrl: by word), Home/End, Shift to select, Ctrl+A select all, Ctrl+C/X/V clipboard; click, drag or double-click with the mouse |
+| Name a resource in a field | Drag the entry from the outliner onto the field (a BRF string or a station's Store) |
 | Collapse a panel / keep only one | Click its header / Ctrl+click its header |
 | Show only aircraft, shapes or images | Type buttons beside the outliner filter |
 | Scroll fields | Wheel over panels, Flight workspace or Raw fields |

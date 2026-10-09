@@ -395,6 +395,7 @@ impl App {
             title: "Replace color".into(),
             value: String::new(),
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     /// Paint, Mesh menu and Face textures action: open the dialog on the

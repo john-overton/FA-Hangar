@@ -62,6 +62,7 @@ impl App {
             title: "About F.A. Hangar".into(),
             value: String::new(),
             axis: 0,
+            caret: super::Caret::END,
         });
     }
     pub(super) fn about_dialog(&self, o: &mut Layout) {

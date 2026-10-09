@@ -1800,6 +1800,7 @@ impl App {
                 },
                 value: format_number(spec.value, spec.decimals, false),
                 axis: 0,
+                caret: super::Caret::END,
             });
         }
     }
@@ -1824,6 +1825,10 @@ impl App {
     /// Backends report a double-click of the left button after its press.
     pub fn double_click(&mut self, x: i32, y: i32) {
         self.mouse = [x, y];
+        if let Some((field, _)) = self.text_field_at(x, y) {
+            self.text_word(field);
+            return;
+        }
         if self.prompt.is_some() {
             return;
         }
