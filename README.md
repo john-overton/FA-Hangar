@@ -3,7 +3,7 @@
 <h1><p align="center">
   <a href="https://github.com/john-overton/FA-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/FA-Hangar/windows.yml?event=release&label=release%20build" alt="Release build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only"></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.0-orange" alt="Version 0.9.0"></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.1-orange" alt="Version 0.9.1"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.91.1-b7410e?logo=rust" alt="Rust 1.91.1"></a>
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/platforms-Windows%2098%2FME%20%C2%B7%20Win64%20%C2%B7%20Linux%20X11-555" alt="Platforms: Windows 98/ME, Win64, Linux X11"></a>
   <a href="docs/ARCHITECTURE.md"><img src="https://img.shields.io/badge/core-no__std-6c757d" alt="no_std core"></a>
@@ -63,7 +63,7 @@ The full feature list and how-to guides are in the [manual](docs/MANUAL.md).
 
 Each [GitHub release](https://github.com/john-overton/FA-Hangar/releases)
 carries two ZIPs with the version in their names:
-`fa-hangar-<version>-win98-me-pentium4.zip` and
+`fa-hangar-<version>-win98-me-pentium2.zip` and
 `fa-hangar-<version>-win64.zip`, each holding `fa-hangar-<version>.exe`,
 `SHA256.txt` and the documentation. The same packages are workflow artifacts of
 [GitHub Actions](.github/workflows/windows.yml), which runs only on Windows and
@@ -75,7 +75,8 @@ The legacy executable's smoke test runs on the modern Windows runner, not on
 Windows 98. Source and notices are included in the repository; packages carry
 the license and notices alongside the executable.
 
-The 32-bit build targets Windows 98/ME on **Pentium 4/SSE2 or newer**. The 64-bit
+The 32-bit build targets Windows 98/ME on **Pentium II or newer** (no SSE
+required; Pentium III, Pentium 4 and Athlon also work). The 64-bit
 build targets modern Windows. Each is a portable executable of about 2 MiB,
 including the built-in `--smoke-test` self-check so a release build can be
 checked on the target machine. Copy it to a writable location and run it. No installer or runtime
@@ -112,12 +113,21 @@ Both targets build on Linux without a Windows SDK, using Rust's bundled
 linker and generated import libraries:
 
 ```sh
-rustup target add i686-pc-windows-msvc x86_64-pc-windows-msvc
-cargo build --release --locked --target i686-pc-windows-msvc
+rustup target add x86_64-pc-windows-msvc
+RUSTC_BOOTSTRAP=1 cargo build --release --locked -Zbuild-std=core,alloc \
+  --target targets/i686-win98-windows-msvc.json
 cargo build --release --locked --target x86_64-pc-windows-msvc
-python3 tools/check_pe.py --legacy target/i686-pc-windows-msvc/release/fa-hangar.exe
+python3 tools/check_pe.py --legacy target/i686-win98-windows-msvc/release/fa-hangar.exe
 python3 tools/check_pe.py target/x86_64-pc-windows-msvc/release/fa-hangar.exe
 ```
+
+The 32-bit build uses the custom target
+[`targets/i686-win98-windows-msvc.json`](targets/i686-win98-windows-msvc.json):
+`i686-pc-windows-msvc` with CPU `pentium2` and the x87 float ABI, so the
+compiler emits no SSE or SSE2. Rust ships no prebuilt `core`/`alloc` for it,
+so `-Zbuild-std` rebuilds them from the `rust-src` component (listed in
+`rust-toolchain.toml`); `RUSTC_BOOTSTRAP=1` allows that flag on the pinned
+stable toolchain. Clippy for this target takes the same flags.
 
 The audit also checks the embedded app icon and version resources;
 `--extract-icon OUT.ico` writes the icon back out.

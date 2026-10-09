@@ -1254,3 +1254,26 @@ PE audit: 1,987,584 bytes (32-bit) and 2,220,544 bytes (64-bit), the same
 48 px in 8-bit and 32-bit color plus the 256 px PNG, and version 0.9.0 with
 product name F.A. Hangar. Nothing in 0.9.0 has been loaded in the original
 game yet; steps are in [WINDOWS-TEST.md](WINDOWS-TEST.md).
+
+## 0.9.1 Pentium II build
+
+2026-10-09. The 32-bit build moved from the stock `i686-pc-windows-msvc`
+target (CPU `pentium4`, SSE2 float ABI) to the custom
+`targets/i686-win98-windows-msvc.json` (CPU `pentium2`, x87 float ABI), with
+`core` and `alloc` rebuilt by `-Zbuild-std`. A disassembly of the 0.9.0
+32-bit executable found about 15,400 SSE2-only instructions. A trial build
+with only `-C target-cpu=pentium3` still kept SSE2 in the prebuilt `core`
+and `alloc` (`format_inner`, `from_utf8_lossy`, `escape_debug_ext`,
+`assert_failed_inner`); with the stock target, Rust 1.91.1 refuses to build
+`core` without SSE. The 0.9.1 32-bit executable disassembles with no
+`xmm`/MXCSR, fence, prefetch, `movnti` or `clflush` instructions; what
+remains is i686 integer code (`cmov` included) plus x87. The disassembly
+check was run by hand with GNU objdump. It is not part of `check_pe.py`,
+because jump tables inside `.text` can decode as stray instructions.
+
+Formatting, strict Clippy (also for both Windows targets), 216 core tests
+and the smoke test pass. `App` is 2,744 bytes. Both release builds pass the
+PE audit: 1,955,328 bytes (32-bit) and 2,220,544 bytes (64-bit), the same
+60 reviewed imports, no runtime DLLs, the icon set and version 0.9.1. Not
+yet run on a Pentium II/III or on Windows 98/ME; steps are in
+[COMPATIBILITY.md](COMPATIBILITY.md) and [WINDOWS-TEST.md](WINDOWS-TEST.md).

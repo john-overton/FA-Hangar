@@ -15,7 +15,7 @@ workflow) and when a GitHub release is published.
    workflow fails before building otherwise. Delete the release and tag, fix
    the version and publish again.
 5. The workflow checks, builds and audits both executables, then attaches
-   `fa-hangar-<version>-win98-me-pentium4.zip` and
+   `fa-hangar-<version>-win98-me-pentium2.zip` and
    `fa-hangar-<version>-win64.zip` to the release. Each ZIP unpacks into a
    folder holding `fa-hangar-<version>.exe`, `SHA256.txt` (sha256sum format)
    and the documentation.

@@ -5,6 +5,16 @@ the root [`Cargo.toml`](../Cargo.toml). What was verified for each version is
 recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
+## 0.9.1
+
+- **The 32-bit build targets a Pentium II.** The Windows 98/ME executable no
+  longer needs SSE2: it is built for a Pentium II (no SSE at all), so
+  Pentium II, Pentium III, Celeron and early Athlon machines can run it as
+  well as Pentium 4 and later. The package is now
+  `fa-hangar-<version>-win98-me-pentium2.zip` (it was `-pentium4`). Nothing
+  else changes; the 64-bit build is the same. Not yet run on Pentium II/III
+  hardware or on Windows 98; see [WINDOWS-TEST.md](WINDOWS-TEST.md).
+
 ## 0.9.0
 
 The first published release, and the first under the F.A. Hangar name.

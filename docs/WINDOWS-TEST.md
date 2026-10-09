@@ -1,8 +1,8 @@
 # First Windows test
 
 Use `fa-hangar-<version>-win64.zip` on a modern 64-bit Windows box. Use
-`fa-hangar-<version>-win98-me-pentium4.zip` on Windows 98/ME with an
-SSE2-capable CPU. Extract to a writable folder with an ASCII path and launch
+`fa-hangar-<version>-win98-me-pentium2.zip` on Windows 98/ME with a
+Pentium II or newer CPU. Extract to a writable folder with an ASCII path and launch
 `fa-hangar-<version>.exe`.
 The EXE is portable; the other files are documentation and licensing.
 
@@ -610,7 +610,7 @@ the synthetic demo).
 
 ## Please report
 
-Windows version and architecture, CPU/SSE2 or VM setup, whether the window
+Windows version and architecture, CPU model or VM setup, whether the window
 opened, which checklist step failed, and the exact status/error text. A screenshot
 of a drawing/layout problem will help. Original-game results should be recorded
 separately from successful editor packaging.

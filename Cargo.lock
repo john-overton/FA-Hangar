@@ -9,8 +9,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "fa-hangar"
+version = "0.9.1"
+dependencies = [
+ "hangar-core",
+]
+
+[[package]]
 name = "hangar-core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "miniz_oxide",
 ]
@@ -22,11 +29,4 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
 dependencies = [
  "adler2",
-]
-
-[[package]]
-name = "fa-hangar"
-version = "0.9.0"
-dependencies = [
- "hangar-core",
 ]

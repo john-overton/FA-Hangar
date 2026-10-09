@@ -48,18 +48,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: i686-pc-windows-msvc
-            variant: win98-me-pentium4
+          # Custom target (Pentium II, x87 float ABI): no prebuilt core/alloc
+          # exists, so they are rebuilt from rust-src with -Zbuild-std on the
+          # pinned stable toolchain (RUSTC_BOOTSTRAP). See .cargo/config.toml.
+          - target: targets/i686-win98-windows-msvc.json
+            out: i686-win98-windows-msvc
+            variant: win98-me-pentium2
             legacy: '--legacy'
+            build_std: '-Zbuild-std=core,alloc'
           - target: x86_64-pc-windows-msvc
+            out: x86_64-pc-windows-msvc
             variant: win64
             legacy: ''
+            build_std: ''
     steps:
       - uses: actions/checkout@v7
       - name: Install pinned Rust
         shell: pwsh
         run: |
-          rustup toolchain install 1.91.1 --profile minimal --component rustfmt,clippy --target ${{ matrix.target }}
+          rustup toolchain install 1.91.1 --profile minimal --component rustfmt,clippy,rust-src --target x86_64-pc-windows-msvc
       - name: Format and test portable core
         shell: pwsh
         run: |
@@ -72,14 +79,16 @@ jobs:
       - name: Lint and build native executable
         shell: pwsh
         run: |
-          cargo clippy --locked --release --target ${{ matrix.target }} -- -D warnings
+          $buildStd = @()
+          if ('${{ matrix.build_std }}') { $env:RUSTC_BOOTSTRAP = '1'; $buildStd = @('${{ matrix.build_std }}') }
+          cargo clippy --locked --release --target ${{ matrix.target }} @buildStd -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo build --locked --release --target ${{ matrix.target }}
+          cargo build --locked --release --target ${{ matrix.target }} @buildStd
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Audit executable and run shared editor smoke test
         shell: pwsh
         run: |
-          $exe = 'target/${{ matrix.target }}/release/fa-hangar.exe'
+          $exe = 'target/${{ matrix.out }}/release/fa-hangar.exe'
           python tools/check_pe.py $exe ${{ matrix.legacy }}
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $process = Start-Process $exe -ArgumentList '--smoke-test' -PassThru
@@ -91,7 +100,7 @@ jobs:
           $package = "fa-hangar-$env:VERSION-${{ matrix.variant }}"
           $exe = "fa-hangar-$env:VERSION.exe"
           New-Item -ItemType Directory -Force $package | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/fa-hangar.exe "$package/$exe"
+          Copy-Item target/${{ matrix.out }}/release/fa-hangar.exe "$package/$exe"
           Copy-Item README.md,LICENSE,THIRD_PARTY_NOTICES.md $package/
           Copy-Item docs/MANUAL.md,docs/COMPATIBILITY.md,docs/WINDOWS-TEST.md $package/
           # sha256sum format: "<hash>  <file>"

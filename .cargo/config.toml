@@ -1,4 +1,7 @@
-[target.i686-pc-windows-msvc]
+# Windows 98/ME on Pentium II or newer. targets/i686-win98-windows-msvc.json is
+# i686-pc-windows-msvc with cpu pentium2 and the x87 float ABI; core and alloc
+# are rebuilt for it with -Zbuild-std (see README "Windows builds").
+[target.i686-win98-windows-msvc]
 linker = "rust-lld"
 rustflags = ["-C", "link-arg=/ENTRY:mainCRTStartup", "-C", "link-arg=/SUBSYSTEM:WINDOWS,4.0", "-C", "link-arg=/OSVERSION:4.0", "-C", "link-arg=/NODEFAULTLIB", "-C", "link-arg=/SAFESEH:NO", "-C", "link-arg=/DYNAMICBASE:NO", "-C", "link-arg=/NXCOMPAT:NO"]
 

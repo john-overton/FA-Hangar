@@ -2,7 +2,7 @@
 
 Implementation milestone: a native LIB/BRF editor with an SH preview and a
 restricted static writer. Agent decisions below were chosen for the requested
-lightweight portable application. The user's accepted CPU minimum is SSE2.
+lightweight portable application. The user's accepted CPU minimum is Pentium II (no SSE).
 
 ## Layers
 

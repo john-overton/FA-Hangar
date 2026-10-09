@@ -45,11 +45,15 @@ cargo run --locked -- --help             # CLI commands (list/inspect/validate/.
 ```
 
 Windows targets cross-build from Linux with the bundled `rust-lld`; see
-`.cargo/config.toml` and the README "Windows builds" section. After any change
+`.cargo/config.toml` and the README "Windows builds" section. The 32-bit
+build is the custom target `targets/i686-win98-windows-msvc.json` (Pentium
+II, no SSE) and needs `RUSTC_BOOTSTRAP=1` and `-Zbuild-std=core,alloc` for
+both `cargo build` and `cargo clippy`; its output is under
+`target/i686-win98-windows-msvc/`. After any change
 that could add a Win32 import, build both targets and run
 `python3 tools/check_pe.py [--legacy] <exe>`. CI (`.github/workflows/windows.yml`,
 on demand or when a release is published) runs fmt, core tests, clippy, release builds, the PE audit and the smoke test
-on both `i686-pc-windows-msvc` and `x86_64-pc-windows-msvc`.
+on both `i686-win98-windows-msvc` and `x86_64-pc-windows-msvc`.
 
 To cut a release (version bump, tag, CI-attached zips) see `docs/RELEASING.md`.
 
@@ -58,6 +62,8 @@ committing.
 
 ## Hard constraints
 
+- **Pentium II is the minimum CPU.** Do not raise the 32-bit target's CPU,
+  enable SSE/SSE2 or add `#[target_feature]`/inline assembly that needs them.
 - **Windows 98/ME is a target.** The i686 build has no CRT and links against a
   fixed allow-list of ANSI Kernel32/User32/GDI32/WinMM functions in
   `tools/check_pe.py`. Do not add Win32 APIs casually; if one is truly needed,

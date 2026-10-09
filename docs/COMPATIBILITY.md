@@ -1,11 +1,13 @@
 # Compatibility and acceptance
 
-The requested minimum CPU is Pentium 4/SSE2 (John, 2026-10-06). Older Pentium,
-Pentium II/III, K6 and non-SSE2 Athlon machines are outside this target.
+The requested minimum CPU is Pentium II (John, 2026-10-09; it was Pentium
+4/SSE2 until 0.9.0). The 32-bit build uses no SSE or SSE2, so Pentium II/III,
+Celeron, Athlon and later CPUs are in range; Pentium, Pentium MMX and K6
+(no `cmov`) are not.
 
 | Build | Intended OS | Evidence |
 | --- | --- | --- |
-| i686-pc-windows-msvc, custom runtime | Windows 98, 98 SE, ME; also modern x64 Windows through WOW64 | Cross-link and PE/import audit; CI smoke on modern Windows; original OS test pending |
+| i686-win98-windows-msvc (custom target, Pentium II), custom runtime | Windows 98, 98 SE, ME; also modern x64 Windows through WOW64 | Cross-link and PE/import audit; CI smoke on modern Windows; original OS test pending |
 | x86_64-pc-windows-msvc, custom runtime | Modern 64-bit Windows | Cross-link and PE/import audit; Windows CI smoke |
 | x86_64-unknown-linux-gnu | Local Linux with X11/Xwayland | Core tests, shared UI smoke, CLI and snapshots |
 
@@ -23,6 +25,17 @@ Hangar deliberately bypasses their Windows `std` runtime:
 - Stable Rust `raw-dylib` declarations create import libraries, and bundled
   `rust-lld` links them. No proprietary historical SDK is needed to build.
   [Rust linking reference](https://doc.rust-lang.org/reference/items/external-blocks.html#the-link-attribute).
+
+The 32-bit build uses the custom target `targets/i686-win98-windows-msvc.json`,
+a copy of `i686-pc-windows-msvc` with CPU `pentium2` and without its
+`x86-sse2` float ABI. The stock i686 target assumes a Pentium 4, and its
+prebuilt `core`/`alloc` contain SSE2 even when the application is built with
+an older `-C target-cpu`, so they are rebuilt for the custom target with
+`-Zbuild-std` from `rust-src`. Because the target has no prebuilt library, a
+build without `-Zbuild-std` fails rather than mixing in SSE2 code. Hangar uses
+no floating point, so the x87 float ABI is unused in practice. `RUSTC_BOOTSTRAP=1`
+enables `-Zbuild-std` on the pinned stable compiler; a toolchain bump must
+recheck that the custom target and `-Zbuild-std` still build.
 
 The alternative Rust9x standard-library port was considered. Its documented
 MSLU/runtime requirements are unnecessary for this small ANSI application
@@ -68,7 +81,7 @@ No WinMM DLL is bundled; Windows supplies it.
 
 ## Manual legacy acceptance still required
 
-On Windows 98/98 SE and ME, using an SSE2-capable VM/CPU:
+On Windows 98/98 SE and ME, on a Pentium II-class or newer CPU or VM:
 
 1. Run the 32-bit EXE alone in a fresh folder without compatibility shims.
 2. Load Demo, orbit/pan/zoom, transform, undo, and package a synthetic LIB.
