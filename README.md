@@ -3,7 +3,7 @@
 <h1><p align="center">
   <a href="https://github.com/john-overton/FA-Hangar/actions/workflows/windows.yml"><img src="https://img.shields.io/github/actions/workflow/status/john-overton/FA-Hangar/windows.yml?event=release&label=release%20build" alt="Release build status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only"></a>
-  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.1-orange" alt="Version 0.9.1"></a>
+  <a href="docs/CHANGELOG.md"><img src="https://img.shields.io/badge/version-0.9.2-orange" alt="Version 0.9.2"></a>
   <a href="rust-toolchain.toml"><img src="https://img.shields.io/badge/rust-1.91.1-b7410e?logo=rust" alt="Rust 1.91.1"></a>
   <a href="docs/COMPATIBILITY.md"><img src="https://img.shields.io/badge/platforms-Windows%2098%2FME%20%C2%B7%20Win64%20%C2%B7%20Linux%20X11-555" alt="Platforms: Windows 98/ME, Win64, Linux X11"></a>
   <a href="docs/ARCHITECTURE.md"><img src="https://img.shields.io/badge/core-no__std-6c757d" alt="no_std core"></a>

@@ -1278,7 +1278,7 @@ PE audit: 1,955,328 bytes (32-bit) and 2,220,544 bytes (64-bit), the same
 yet run on a Pentium II/III or on Windows 98/ME; steps are in
 [COMPATIBILITY.md](COMPATIBILITY.md) and [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
-## Unreleased: text fields and name drops
+## 0.9.2 text fields and name drops
 
 2026-10-09. `smoke_text_editing` drives the dialog value and the outliner
 filter through real key and pointer events: Home/End, arrows and Ctrl word

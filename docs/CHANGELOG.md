@@ -5,7 +5,7 @@ the root [`Cargo.toml`](../Cargo.toml). What was verified for each version is
 recorded in [VALIDATION.md](VALIDATION.md); manual acceptance steps are in
 [WINDOWS-TEST.md](WINDOWS-TEST.md).
 
-## Unreleased
+## 0.9.2
 
 - **Text fields edit in place.** Dialog values and the outliner filter have
   a movable caret: arrows (Ctrl for words), Home and End, Shift to select,

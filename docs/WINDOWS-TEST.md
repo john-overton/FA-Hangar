@@ -608,7 +608,7 @@ the synthetic demo).
    game: the panels draw where they did, with their textures, and nothing
    flickers or vanishes. Report any difference.
 
-## Text fields and name drops (Unreleased)
+## Text fields and name drops (0.9.2)
 
 1. Select a PT, open Properties and click a string field such as the shape
    name. In the dialog, press Home, Right, End, Shift+Left and Ctrl+Left:
